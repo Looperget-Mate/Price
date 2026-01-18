@@ -14,8 +14,8 @@ from fpdf import FPDF
 # ==========================================
 # 1. 파일 및 유틸리티 설정
 # ==========================================
-DATA_FILE = "looperget_data.json"       # 제품/세트 정보
-HISTORY_FILE = "looperget_history.json" # 견적 저장 기록
+DATA_FILE = "looperget_data.json"       
+HISTORY_FILE = "looperget_history.json" 
 FONT_FILE = "NanumGothic.ttf"
 FONT_URL = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
 
@@ -55,12 +55,15 @@ def process_image(uploaded_file):
 # PDF 클래스
 class PDF(FPDF):
     def header(self):
+        # 헤더 폰트 설정 (Bold 제거 -> 일반 폰트로 통일)
         if os.path.exists(FONT_FILE):
             self.add_font('NanumGothic', '', FONT_FILE, uni=True)
-            self.set_font('NanumGothic', '', 20)
+            self.set_font('NanumGothic', '', 20) 
         else: self.set_font('Helvetica', 'B', 20)
+        
         self.cell(0, 15, '견 적 서 (Quotation)', align='C', new_x="LMARGIN", new_y="NEXT")
         self.ln(5)
+
     def footer(self):
         self.set_y(-15)
         self.set_font('NanumGothic', '', 8) if os.path.exists(FONT_FILE) else self.set_font('Helvetica', 'I', 8)
@@ -70,19 +73,22 @@ def create_pdf(quote_items, service_items, db_products, quote_name=""):
     pdf = PDF()
     pdf.add_page()
     has_font = os.path.exists(FONT_FILE)
+    
+    # 기본 폰트 설정
     if has_font:
         pdf.add_font('NanumGothic', '', FONT_FILE, uni=True)
         pdf.set_font('NanumGothic', '', 10)
     else: pdf.set_font('Helvetica', '', 10)
 
-    # 견적명 출력
+    # 견적명 출력 (Bold 제거 -> 일반 폰트 사용)
     if quote_name:
-        pdf.set_font('NanumGothic', 'B', 12) if has_font else pdf.set_font('Helvetica', 'B', 12)
+        # 폰트 스타일 '' (Regular)로 설정
+        pdf.set_font('NanumGothic', '', 12) if has_font else pdf.set_font('Helvetica', 'B', 12)
         pdf.cell(0, 10, f"현장명 : {quote_name}", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(2)
         pdf.set_font('NanumGothic', '', 10) if has_font else pdf.set_font('Helvetica', '', 10)
 
-    # 헤더
+    # 테이블 헤더
     pdf.set_fill_color(240, 240, 240)
     headers = [("IMG", 25), ("품목명", 60), ("규격", 30), ("수량", 15), ("단가", 30), ("금액", 30)]
     for txt, w in headers: pdf.cell(w, 10, txt, border=1, align='C', fill=True)
@@ -97,7 +103,6 @@ def create_pdf(quote_items, service_items, db_products, quote_name=""):
         amt = price * qty
         total_mat += amt
         
-        # 행 높이 및 좌표
         h = 15
         x, y = pdf.get_x(), pdf.get_y()
         
@@ -120,7 +125,7 @@ def create_pdf(quote_items, service_items, db_products, quote_name=""):
         pdf.cell(30, h, f"{amt:,}", border=1, align='R')
         pdf.ln()
 
-    # 서비스
+    # 서비스 비용
     total_svc = 0
     if service_items:
         pdf.ln(5)
@@ -131,7 +136,7 @@ def create_pdf(quote_items, service_items, db_products, quote_name=""):
             pdf.cell(130, 8, s['항목'], border=1)
             pdf.cell(60, 8, f"{s['금액']:,} 원", border=1, align='R'); pdf.ln()
 
-    # 총계
+    # 총계 (Bold 제거)
     pdf.ln(5)
     pdf.set_font('NanumGothic', '', 12) if has_font else pdf.set_font('Helvetica', 'B', 12)
     pdf.cell(130, 12, "총 합계 (Total)", border=1, align='R')
@@ -144,36 +149,29 @@ def create_pdf(quote_items, service_items, db_products, quote_name=""):
 # 2. 메인 앱 로직
 # ==========================================
 
-# Session State 초기화
 if "db" not in st.session_state: st.session_state.db = load_json(DATA_FILE, DEFAULT_DATA)
 if "history" not in st.session_state: st.session_state.history = load_json(HISTORY_FILE, {})
 if "quote_step" not in st.session_state: st.session_state.quote_step = 1
 if "quote_items" not in st.session_state: st.session_state.quote_items = {}
 if "services" not in st.session_state: st.session_state.services = []
 if "temp_set_recipe" not in st.session_state: st.session_state.temp_set_recipe = {}
-# 현재 작업중인 견적명 (임시저장용)
 if "current_quote_name" not in st.session_state: st.session_state.current_quote_name = ""
 
 st.set_page_config(layout="wide", page_title="루퍼젯 프로 매니저")
-st.title("💧 루퍼젯 프로 매니저 V7.0")
+st.title("💧 루퍼젯 프로 매니저 V7.1")
 
-# 사이드바 구성
+# 사이드바
 with st.sidebar:
     st.header("🗂️ 견적 관리 (History)")
-    
-    # 1. 신규/저장/삭제 기능
-    st.markdown("##### 1. 현재 작업 저장/새로 만들기")
-    q_name_input = st.text_input("현장명/고객명 입력", value=st.session_state.current_quote_name, placeholder="예: 김이천 농가")
+    st.markdown("##### 1. 현재 견적 저장")
+    q_name_input = st.text_input("현장명/고객명", value=st.session_state.current_quote_name)
     
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("💾 저장(Save)"):
-            if not q_name_input:
-                st.error("이름을 입력하세요.")
-            elif not st.session_state.quote_items:
-                st.warning("저장할 견적 내용이 없습니다.")
+        if st.button("💾 저장"):
+            if not q_name_input: st.error("이름 입력 필요")
+            elif not st.session_state.quote_items: st.warning("내용 없음")
             else:
-                # 현재 상태 저장
                 st.session_state.history[q_name_input] = {
                     "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
                     "items": st.session_state.quote_items,
@@ -182,10 +180,9 @@ with st.sidebar:
                 }
                 save_json(HISTORY_FILE, st.session_state.history)
                 st.session_state.current_quote_name = q_name_input
-                st.success(f"'{q_name_input}' 저장 완료!")
-
+                st.success("저장됨")
     with c2:
-        if st.button("✨ 초기화(New)"):
+        if st.button("✨ 초기화"):
             st.session_state.quote_items = {}
             st.session_state.services = []
             st.session_state.quote_step = 1
@@ -193,46 +190,35 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
-
-    # 2. 불러오기 기능
-    st.markdown("##### 2. 견적 불러오기 (Load)")
-    # 역순 정렬 (최신순)
-    history_names = list(st.session_state.history.keys())[::-1]
-    
-    if history_names:
-        selected_history = st.selectbox("저장된 견적 목록", history_names)
-        col_l1, col_l2 = st.columns(2)
-        with col_l1:
-            if st.button("📂 불러오기"):
-                data = st.session_state.history[selected_history]
-                st.session_state.quote_items = data["items"]
-                st.session_state.services = data["services"]
-                st.session_state.quote_step = data.get("step", 2) # 기본값 step 2
-                st.session_state.current_quote_name = selected_history
-                st.success(f"'{selected_history}' 로드됨")
-                st.rerun()
-        with col_l2:
+    st.markdown("##### 2. 불러오기")
+    h_names = list(st.session_state.history.keys())[::-1]
+    if h_names:
+        sel_h = st.selectbox("목록", h_names)
+        cl1, cl2 = st.columns(2)
+        with cl1:
+            if st.button("📂 로드"):
+                d = st.session_state.history[sel_h]
+                st.session_state.quote_items = d["items"]
+                st.session_state.services = d["services"]
+                st.session_state.quote_step = d.get("step", 2)
+                st.session_state.current_quote_name = sel_h
+                st.success("로드됨"); st.rerun()
+        with cl2:
              if st.button("🗑️ 삭제"):
-                 del st.session_state.history[selected_history]
-                 save_json(HISTORY_FILE, st.session_state.history)
-                 st.rerun()
-    else:
-        st.caption("저장된 견적이 없습니다.")
+                 del st.session_state.history[sel_h]
+                 save_json(HISTORY_FILE, st.session_state.history); st.rerun()
     
     st.divider()
-    mode = st.radio("작업 모드", ["견적 작성 모드", "관리자 모드 (데이터)"])
+    mode = st.radio("모드", ["견적 작성", "관리자 모드"])
 
-
-# --- 모드 분기 ---
 COL_MAP = {"품목코드": "code", "카테고리": "category", "제품명": "name", "규격": "spec", "단위": "unit", "1롤길이(m)": "len_per_unit", "매입단가": "price_buy", "총판가1": "price_d1", "총판가2": "price_d2", "대리점가": "price_agy", "소비자가": "price_cons", "이미지데이터": "image"}
 REV_COL_MAP = {v: k for k, v in COL_MAP.items()}
 
-if mode == "관리자 모드 (데이터)":
-    st.header("🛠 데이터 관리 센터")
+if mode == "관리자 모드":
+    st.header("🛠 데이터 관리")
     t1, t2 = st.tabs(["품목 관리", "세트 관리"])
     
-    with t1: # 품목
-        st.info("이미지는 아래에서 등록")
+    with t1:
         c1, c2, c3 = st.columns([2, 2, 1])
         pn = [p["name"] for p in st.session_state.db["products"]]
         with c1: tp = st.selectbox("품목", pn)
@@ -246,7 +232,7 @@ if mode == "관리자 모드 (데이터)":
                 save_json(DATA_FILE, st.session_state.db); st.success("저장됨"); st.rerun()
         
         st.divider()
-        with st.expander("엑셀 I/O"):
+        with st.expander("엑셀 관리"):
             ec1, ec2 = st.columns(2)
             with ec1:
                 df = pd.DataFrame(st.session_state.db["products"]).rename(columns=REV_COL_MAP)
@@ -265,7 +251,6 @@ if mode == "관리자 모드 (데이터)":
                     st.session_state.db["products"] = nrec
                     save_json(DATA_FILE, st.session_state.db); st.success("완료"); st.rerun()
         
-        # Editor
         dfp = pd.DataFrame(st.session_state.db["products"])
         vcols = [c for c in dfp.columns if c != "image"]
         edf = st.data_editor(dfp[vcols].rename(columns=REV_COL_MAP), use_container_width=True, num_rows="dynamic")
@@ -277,7 +262,7 @@ if mode == "관리자 모드 (데이터)":
             st.session_state.db["products"] = upd
             save_json(DATA_FILE, st.session_state.db); st.success("저장"); st.rerun()
 
-    with t2: # 세트
+    with t2:
         mt = st.radio("작업", ["신규", "수정/삭제"], horizontal=True)
         cat = st.selectbox("분류", ["주배관세트", "가지관세트", "기타자재"])
         pl = [p["name"] for p in st.session_state.db["products"]]
@@ -306,7 +291,6 @@ if mode == "관리자 모드 (데이터)":
                 ci = cset[tg].get("image") if isinstance(cset[tg], dict) else None
                 if ci: st.image(ci, width=100)
                 ei = st.file_uploader("이미지변경")
-                
                 for k,v in list(st.session_state.temp_set_recipe.items()):
                     c1, c2, c3 = st.columns([3,1,1])
                     c1.text(k); c2.text(v)
@@ -325,14 +309,10 @@ if mode == "관리자 모드 (데이터)":
                     save_json(DATA_FILE, st.session_state.db); st.rerun()
 
 else: # 견적 모드
-    if st.session_state.current_quote_name:
-        st.markdown(f"### 📝 작성 중: **{st.session_state.current_quote_name}**")
-    else:
-        st.markdown(f"### 📝 작성 중: **(제목 없음)**")
+    st.markdown(f"### 📝 작성 중: **{st.session_state.current_quote_name if st.session_state.current_quote_name else '(제목 없음)'}**")
 
     if st.session_state.quote_step == 1:
         st.subheader("STEP 1. 물량 입력")
-        
         def r_inp(d, k):
             if not d: return {}
             r = {}
@@ -369,7 +349,6 @@ else: # 견적 모드
                         rec = db[k].get("recipe", db[k])
                         for p, q in rec.items(): res[p] = res.get(p, 0) + q*v
             ex(im, sets.get("주배관세트")); ex(ib, sets.get("가지관세트")); ex(ie, sets.get("기타자재"))
-            
             def cr(n, l, pl):
                 if l>0 and n:
                     pi = next((x for x in pl if x["name"]==n), None)
@@ -378,8 +357,7 @@ else: # 견적 모드
             st.session_state.quote_items = res; st.session_state.quote_step = 2; st.rerun()
 
     elif st.session_state.quote_step == 2:
-        st.subheader("STEP 2. 검토 및 비용 추가")
-        
+        st.subheader("STEP 2. 검토 및 비용")
         view = st.radio("단가 보기", ["소비자가", "매입가", "총판1", "총판2", "대리점"], horizontal=True)
         key_map = {"매입가":("price_buy","매입"), "총판1":("price_d1","총판1"), "총판2":("price_d2","총판2"), "대리점":("price_agy","대리점")}
         
@@ -392,27 +370,20 @@ else: # 견적 모드
             if view != "소비자가":
                 k, l = key_map[view]
                 pr = inf.get(k, 0)
-                row[f"{l}단가"] = pr
-                row[f"{l}합계"] = pr*q
+                row[f"{l}단가"] = pr; row[f"{l}합계"] = pr*q
                 row["이익"] = row["합계"] - row[f"{l}합계"]
                 row["율(%)"] = (row["이익"]/row["합계"]*100) if row["합계"] else 0
             rows.append(row)
-
+        
         df = pd.DataFrame(rows)
-        disp_cols = ["IMG", "품목", "규격", "수량"]
-        if view == "소비자가": disp_cols += ["소비자가", "합계"]
+        disp = ["IMG", "품목", "규격", "수량"]
+        if view == "소비자가": disp += ["소비자가", "합계"]
         else: 
             l = key_map[view][1]
-            disp_cols += [f"{l}단가", f"{l}합계", "소비자가", "합계", "이익", "율(%)"]
+            disp += [f"{l}단가", f"{l}합계", "소비자가", "합계", "이익", "율(%)"]
 
-        st.dataframe(df[disp_cols], use_container_width=True, hide_index=True, column_config={
-            "IMG": st.column_config.ImageColumn("이미지", width="small"),
-            "율(%)": st.column_config.NumberColumn(format="%.1f%%"),
-            "소비자가": st.column_config.NumberColumn(format="%d"),
-            "합계": st.column_config.NumberColumn(format="%d")
-        })
+        st.dataframe(df[disp], use_container_width=True, hide_index=True, column_config={"IMG": st.column_config.ImageColumn("이미지", width="small"), "율(%)": st.column_config.NumberColumn(format="%.1f%%"), "소비자가": st.column_config.NumberColumn(format="%d"), "합계": st.column_config.NumberColumn(format="%d")})
         
-        st.divider()
         c1, c2 = st.columns(2)
         with c1:
             ap = st.selectbox("품목추가", list(pdb.keys()))
@@ -426,20 +397,14 @@ else: # 견적 모드
         
         if st.session_state.services: 
             st.table(st.session_state.services)
-            # 비용 삭제 기능
-            if st.button("마지막 비용 삭제"): 
-                st.session_state.services.pop()
-                st.rerun()
+            if st.button("마지막 비용 삭제"): st.session_state.services.pop(); st.rerun()
 
         if st.button("최종 확정 (STEP 3)"): st.session_state.quote_step = 3; st.rerun()
 
     elif st.session_state.quote_step == 3:
         st.header("🏁 최종 견적 완료")
-        
-        if not st.session_state.current_quote_name:
-            st.warning("⚠️ 왼쪽 사이드바에서 '현장명'을 입력하고 [저장]을 눌러 기록을 남기세요!")
+        if not st.session_state.current_quote_name: st.warning("⚠️ 왼쪽 사이드바에서 [저장]을 눌러주세요!")
 
-        # 화면 표시
         pdb = {p["name"]: p for p in st.session_state.db["products"]}
         fdata = []
         tm = 0
@@ -449,15 +414,20 @@ else: # 견적 모드
             amt = pr * q
             tm += amt
             fdata.append({"IMG": inf.get("image"), "품목": n, "수량": q, "단가": pr, "금액": amt})
-            
-        st.dataframe(pd.DataFrame(fdata), column_config={"IMG": st.column_config.ImageColumn("이미지", width="small")}, use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(fdata), column_config={"IMG": st.column_config.ImageColumn("이미지", width="small"), "단가": st.column_config.NumberColumn(format="%d"), "금액": st.column_config.NumberColumn(format="%d")}, use_container_width=True, hide_index=True)
         
         ts = sum(s["금액"] for s in st.session_state.services)
         st.markdown(f"<h2 style='text-align:right'>총 합계: {tm+ts:,} 원</h2>", unsafe_allow_html=True)
         
-        # PDF 다운로드
         pdf_byte = create_pdf(st.session_state.quote_items, st.session_state.services, st.session_state.db["products"], st.session_state.current_quote_name)
         st.download_button("📥 PDF 다운로드", pdf_byte, f"quotation_{st.session_state.current_quote_name}.pdf", "application/pdf")
         
-        if st.button("처음으로 (새 견적)"):
-            st.session_state.quote_step = 1; st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.current_quote_name = ""; st.rerun()
+        # [수정된 부분] 뒤로가기 버튼과 초기화 버튼 분리
+        c_btn1, c_btn2 = st.columns(2)
+        with c_btn1:
+            if st.button("⬅️ 내용 수정하기 (Step 2)"):
+                st.session_state.quote_step = 2
+                st.rerun()
+        with c_btn2:
+            if st.button("🔄 처음으로 (새 견적)"):
+                st.session_state.quote_step = 1; st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.current_quote_name = ""; st.rerun()

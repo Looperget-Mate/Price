@@ -25,7 +25,7 @@ if not os.path.exists(FONT_FILE):
         urllib.request.urlretrieve(FONT_URL, FONT_FILE)
     except: pass 
 
-# 데이터 로드/저장 함수들
+# 데이터 로드/저장
 def load_json(file_path, default_data):
     if not os.path.exists(file_path): return default_data
     with open(file_path, "r", encoding="utf-8") as f: return json.load(f)
@@ -55,12 +55,10 @@ def process_image(uploaded_file):
 # PDF 클래스
 class PDF(FPDF):
     def header(self):
-        # 헤더 폰트 설정 (Bold 제거 -> 일반 폰트로 통일)
         if os.path.exists(FONT_FILE):
             self.add_font('NanumGothic', '', FONT_FILE, uni=True)
             self.set_font('NanumGothic', '', 20) 
         else: self.set_font('Helvetica', 'B', 20)
-        
         self.cell(0, 15, '견 적 서 (Quotation)', align='C', new_x="LMARGIN", new_y="NEXT")
         self.ln(5)
 
@@ -69,20 +67,19 @@ class PDF(FPDF):
         self.set_font('NanumGothic', '', 8) if os.path.exists(FONT_FILE) else self.set_font('Helvetica', 'I', 8)
         self.cell(0, 10, f'Page {self.page_no()}', align='C')
 
-def create_pdf(quote_items, service_items, db_products, quote_name=""):
+# [V7.2 수정] PDF 생성 함수가 'DB'가 아니라 '화면에서 수정된 데이터(final_data_list)'를 받도록 변경
+def create_pdf(final_data_list, service_items, quote_name=""):
     pdf = PDF()
     pdf.add_page()
     has_font = os.path.exists(FONT_FILE)
     
-    # 기본 폰트 설정
     if has_font:
         pdf.add_font('NanumGothic', '', FONT_FILE, uni=True)
         pdf.set_font('NanumGothic', '', 10)
     else: pdf.set_font('Helvetica', '', 10)
 
-    # 견적명 출력 (Bold 제거 -> 일반 폰트 사용)
+    # 견적명
     if quote_name:
-        # 폰트 스타일 '' (Regular)로 설정
         pdf.set_font('NanumGothic', '', 12) if has_font else pdf.set_font('Helvetica', 'B', 12)
         pdf.cell(0, 10, f"현장명 : {quote_name}", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(2)
@@ -95,11 +92,15 @@ def create_pdf(quote_items, service_items, db_products, quote_name=""):
     pdf.ln()
 
     total_mat = 0
-    p_map = {p["name"]: p for p in db_products}
 
-    for name, qty in quote_items.items():
-        info = p_map.get(name, {})
-        price = info.get("price_cons", 0)
+    # [V7.2] 수정된 데이터 리스트 순회
+    for item in final_data_list:
+        name = item.get("품목", "")
+        spec = item.get("규격", "-")
+        qty = int(item.get("수량", 0))
+        price = int(item.get("단가", 0))
+        img_data = item.get("image_data", None) # 이미지 데이터 별도 전달
+        
         amt = price * qty
         total_mat += amt
         
@@ -108,9 +109,9 @@ def create_pdf(quote_items, service_items, db_products, quote_name=""):
         
         # 이미지
         pdf.cell(25, h, "", border=1)
-        if info.get("image"):
+        if img_data:
             try:
-                data = base64.b64decode(info["image"].split(",", 1)[1])
+                data = base64.b64decode(img_data.split(",", 1)[1])
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(data); tmp_path = tmp.name
                 pdf.image(tmp_path, x=x+2, y=y+2, w=21, h=11)
@@ -119,7 +120,7 @@ def create_pdf(quote_items, service_items, db_products, quote_name=""):
         
         pdf.set_xy(x+25, y)
         pdf.cell(60, h, name, border=1)
-        pdf.cell(30, h, info.get("spec", "-"), border=1, align='C')
+        pdf.cell(30, h, spec, border=1, align='C')
         pdf.cell(15, h, str(qty), border=1, align='C')
         pdf.cell(30, h, f"{price:,}", border=1, align='R')
         pdf.cell(30, h, f"{amt:,}", border=1, align='R')
@@ -136,12 +137,13 @@ def create_pdf(quote_items, service_items, db_products, quote_name=""):
             pdf.cell(130, 8, s['항목'], border=1)
             pdf.cell(60, 8, f"{s['금액']:,} 원", border=1, align='R'); pdf.ln()
 
-    # 총계 (Bold 제거)
+    # 총계 (VAT 포함 표기)
+    grand_total = total_mat + total_svc
     pdf.ln(5)
     pdf.set_font('NanumGothic', '', 12) if has_font else pdf.set_font('Helvetica', 'B', 12)
-    pdf.cell(130, 12, "총 합계 (Total)", border=1, align='R')
+    pdf.cell(130, 12, "총 합계 (Total / VAT Incl.)", border=1, align='R')
     pdf.set_text_color(255, 0, 0)
-    pdf.cell(60, 12, f"{total_mat + total_svc:,} 원", border=1, align='R')
+    pdf.cell(60, 12, f"{grand_total:,} 원", border=1, align='R')
     
     return bytes(pdf.output())
 
@@ -158,13 +160,13 @@ if "temp_set_recipe" not in st.session_state: st.session_state.temp_set_recipe =
 if "current_quote_name" not in st.session_state: st.session_state.current_quote_name = ""
 
 st.set_page_config(layout="wide", page_title="루퍼젯 프로 매니저")
-st.title("💧 루퍼젯 프로 매니저 V7.1")
+st.title("💧 루퍼젯 프로 매니저 V7.2")
 
 # 사이드바
 with st.sidebar:
-    st.header("🗂️ 견적 관리 (History)")
-    st.markdown("##### 1. 현재 견적 저장")
-    q_name_input = st.text_input("현장명/고객명", value=st.session_state.current_quote_name)
+    st.header("🗂️ 견적 관리")
+    st.markdown("##### 1. 저장 / 신규")
+    q_name_input = st.text_input("현장명", value=st.session_state.current_quote_name)
     
     c1, c2 = st.columns(2)
     with c1:
@@ -183,11 +185,7 @@ with st.sidebar:
                 st.success("저장됨")
     with c2:
         if st.button("✨ 초기화"):
-            st.session_state.quote_items = {}
-            st.session_state.services = []
-            st.session_state.quote_step = 1
-            st.session_state.current_quote_name = ""
-            st.rerun()
+            st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.quote_step = 1; st.session_state.current_quote_name = ""; st.rerun()
 
     st.divider()
     st.markdown("##### 2. 불러오기")
@@ -402,27 +400,61 @@ else: # 견적 모드
         if st.button("최종 확정 (STEP 3)"): st.session_state.quote_step = 3; st.rerun()
 
     elif st.session_state.quote_step == 3:
-        st.header("🏁 최종 견적 완료")
+        st.header("🏁 최종 견적 완료 (수정 가능)")
+        
         if not st.session_state.current_quote_name: st.warning("⚠️ 왼쪽 사이드바에서 [저장]을 눌러주세요!")
 
+        st.info("💡 아래 표의 '수량'과 '단가'를 클릭하여 수정할 수 있습니다.")
+
+        # [V7.2] DB에서 데이터를 가져오되, DataFrame으로 변환하여 'Editable'하게 만듦
         pdb = {p["name"]: p for p in st.session_state.db["products"]}
         fdata = []
-        tm = 0
         for n, q in st.session_state.quote_items.items():
             inf = pdb.get(n, {})
-            pr = inf.get("price_cons", 0)
-            amt = pr * q
-            tm += amt
-            fdata.append({"IMG": inf.get("image"), "품목": n, "수량": q, "단가": pr, "금액": amt})
-        st.dataframe(pd.DataFrame(fdata), column_config={"IMG": st.column_config.ImageColumn("이미지", width="small"), "단가": st.column_config.NumberColumn(format="%d"), "금액": st.column_config.NumberColumn(format="%d")}, use_container_width=True, hide_index=True)
+            # 이미지 데이터(Base64)는 숨겨서 넘겨야 함 (data_editor에선 이미지 수정 불가하므로)
+            fdata.append({
+                "품목": n, 
+                "규격": inf.get("spec", ""), 
+                "수량": int(q), 
+                "단가": int(inf.get("price_cons", 0)), 
+                "image_data": inf.get("image") # 숨김 데이터
+            })
         
-        ts = sum(s["금액"] for s in st.session_state.services)
-        st.markdown(f"<h2 style='text-align:right'>총 합계: {tm+ts:,} 원</h2>", unsafe_allow_html=True)
+        # [V7.2] Data Editor 표시
+        # 사용자가 수정한 결과가 edited_df에 저장됨
+        edited_df = st.data_editor(
+            pd.DataFrame(fdata),
+            column_config={
+                "품목": st.column_config.TextColumn(disabled=True),
+                "규격": st.column_config.TextColumn(disabled=True),
+                "image_data": None, # 화면에 안 보이게 숨김
+                "수량": st.column_config.NumberColumn(min_value=0, step=1),
+                "단가": st.column_config.NumberColumn(min_value=0, step=100, format="%d 원")
+            },
+            use_container_width=True,
+            hide_index=True,
+            num_rows="fixed" # 행 추가/삭제 불가 (수정만 가능)
+        )
         
-        pdf_byte = create_pdf(st.session_state.quote_items, st.session_state.services, st.session_state.db["products"], st.session_state.current_quote_name)
-        st.download_button("📥 PDF 다운로드", pdf_byte, f"quotation_{st.session_state.current_quote_name}.pdf", "application/pdf")
+        # [V7.2] 합계 재계산 (수정된 edited_df 기준)
+        total_mat = (edited_df["수량"] * edited_df["단가"]).sum()
+        total_svc = sum(s["금액"] for s in st.session_state.services)
+        grand_total = total_mat + total_svc
+
+        st.markdown(f"""
+        <div style="text-align:right; font-size:1.5em; padding:10px; background:#f0f2f6; border-radius:10px;">
+            <b>총 합계 (VAT 포함): <span style="color:#ff4b4b;">{grand_total:,}</span> 원</b>
+        </div>
+        """, unsafe_allow_html=True)
         
-        # [수정된 부분] 뒤로가기 버튼과 초기화 버튼 분리
+        # PDF 다운로드 (수정된 데이터를 넘김)
+        # edited_df를 dict list로 변환
+        final_data_list = edited_df.to_dict('records')
+        
+        pdf_byte = create_pdf(final_data_list, st.session_state.services, st.session_state.current_quote_name)
+        st.download_button("📥 PDF 견적서 다운로드", pdf_byte, f"quotation_{st.session_state.current_quote_name}.pdf", "application/pdf")
+        
+        # 이동 버튼
         c_btn1, c_btn2 = st.columns(2)
         with c_btn1:
             if st.button("⬅️ 내용 수정하기 (Step 2)"):

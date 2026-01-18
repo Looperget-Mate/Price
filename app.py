@@ -33,7 +33,7 @@ DEFAULT_DATA = {
     }
 }
 
-# 엑셀 컬럼 매핑 (한글 <-> 내부변수)
+# 엑셀 컬럼 매핑
 COL_MAP = {
     "품목코드": "code", "카테고리": "category", "제품명": "name", "규격": "spec", "단위": "unit",
     "1롤길이(m)": "len_per_unit", "매입단가": "price_buy", "총판가1": "price_d1",
@@ -54,11 +54,15 @@ def save_data(data):
 if "db" not in st.session_state:
     st.session_state.db = load_data()
 
+# 세트 편집용 임시 저장소
+if "temp_set_recipe" not in st.session_state:
+    st.session_state.temp_set_recipe = {}
+
 # ==========================================
 # 2. UI 구성
 # ==========================================
 st.set_page_config(layout="wide", page_title="루퍼젯 프로 매니저")
-st.title("💧 루퍼젯 프로 매니저 V2.5")
+st.title("💧 루퍼젯 프로 매니저 V3.0")
 
 mode = st.sidebar.radio("모드 선택", ["견적 작성 모드", "관리자 모드 (데이터 관리)"])
 
@@ -73,19 +77,13 @@ if mode == "관리자 모드 (데이터 관리)":
     with tab1:
         st.subheader("📦 품목 데이터 관리")
         
-        # 1) 엑셀 다운로드/업로드 구역
         with st.expander("📂 엑셀로 대량 등록/다운로드 (클릭)", expanded=False):
             c1, c2 = st.columns(2)
-            
-            # 다운로드
             with c1:
-                st.markdown("##### 1. 현재 데이터 다운로드 (백업/수정용)")
+                st.markdown("##### 1. 현재 데이터 다운로드")
                 df_current = pd.DataFrame(st.session_state.db["products"])
-                # 한글 컬럼명으로 변환
                 df_export = df_current.rename(columns=REV_COL_MAP)
-                # 필요한 컬럼만 순서대로
                 cols_order = list(COL_MAP.keys())
-                # 데이터에 없는 컬럼이 있을 수 있으므로 교집합 처리
                 valid_cols = [c for c in cols_order if c in df_export.columns]
                 df_export = df_export[valid_cols]
                 
@@ -93,96 +91,134 @@ if mode == "관리자 모드 (데이터 관리)":
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     df_export.to_excel(writer, index=False, sheet_name='Sheet1')
                 
-                st.download_button(
-                    label="📥 엑셀 파일 다운로드",
-                    data=buffer.getvalue(),
-                    file_name="looperget_products.xlsx",
-                    mime="application/vnd.ms-excel"
-                )
+                st.download_button("📥 엑셀 파일 다운로드", buffer.getvalue(), "looperget_products.xlsx", "application/vnd.ms-excel")
 
-            # 업로드
             with c2:
-                st.markdown("##### 2. 엑셀 업로드 (일괄 등록)")
-                uploaded_file = st.file_uploader("수정한 엑셀 파일을 여기에 드래그하세요", type=['xlsx', 'xls'])
-                if uploaded_file is not None:
+                st.markdown("##### 2. 엑셀 업로드")
+                uploaded_file = st.file_uploader("엑셀 파일 드래그", type=['xlsx', 'xls'])
+                if uploaded_file:
                     try:
                         df_upload = pd.read_excel(uploaded_file)
-                        # 컬럼 확인
-                        required_cols = ["제품명", "소비자가"] # 최소 필수
-                        if not all(col in df_upload.columns for col in required_cols):
-                            st.error(f"엑셀에 필수 컬럼({required_cols})이 없습니다. 다운로드 받은 양식을 사용해주세요.")
+                        if "제품명" not in df_upload.columns:
+                            st.error("필수 컬럼(제품명)이 없습니다.")
                         else:
-                            # 한글 -> 영문 변환
-                            df_upload = df_upload.rename(columns=COL_MAP)
-                            # NaN(빈값) 처리
-                            df_upload = df_upload.fillna(0)
-                            # 리스트로 변환하여 DB 업데이트
-                            new_products = df_upload.to_dict('records')
-                            
-                            if st.button("데이터 덮어쓰기 (기존 데이터 삭제됨)"):
-                                st.session_state.db["products"] = new_products
+                            df_upload = df_upload.rename(columns=COL_MAP).fillna(0)
+                            if st.button("데이터 덮어쓰기"):
+                                st.session_state.db["products"] = df_upload.to_dict('records')
                                 save_data(st.session_state.db)
-                                st.success(f"{len(new_products)}건의 품목이 성공적으로 등록되었습니다!")
+                                st.success("등록 완료!")
                                 st.rerun()
                     except Exception as e:
-                        st.error(f"오류 발생: {e}")
+                        st.error(f"오류: {e}")
 
         st.divider()
-        st.markdown("##### 📝 직접 수정 (에디터)")
-        # DataFrame 에디터 표시
+        st.markdown("##### 📝 직접 수정")
         df_products = pd.DataFrame(st.session_state.db["products"])
-        # 보기 좋게 컬럼명 한글로 표시
-        df_display = df_products.rename(columns=REV_COL_MAP)
-        
-        edited_df = st.data_editor(df_display, num_rows="dynamic", use_container_width=True, key="editor")
+        edited_df = st.data_editor(df_products.rename(columns=REV_COL_MAP), num_rows="dynamic", use_container_width=True, key="editor")
         
         if st.button("변경사항 저장 (에디터)"):
-            # 다시 영문 컬럼으로 변환해서 저장
-            df_to_save = edited_df.rename(columns=COL_MAP)
-            st.session_state.db["products"] = df_to_save.to_dict("records")
+            st.session_state.db["products"] = edited_df.rename(columns=COL_MAP).to_dict("records")
             save_data(st.session_state.db)
             st.success("저장되었습니다!")
 
     with tab2:
         st.subheader("🔗 세트(Set) 레시피 관리")
-        set_category = st.selectbox("세트 카테고리", ["주배관세트", "가지관세트", "기타자재"])
-        current_sets = st.session_state.db["sets"].get(set_category, {})
         
-        # 세트 추가 UI
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            new_set_name = st.text_input("세트 명칭 (예: T분기 C타입)")
+        # 관리 모드 선택 (신규 vs 수정/삭제)
+        manage_type = st.radio("작업 선택", ["신규 세트 등록", "기존 세트 수정/삭제"], horizontal=True)
         
+        set_category = st.selectbox("카테고리 선택", ["주배관세트", "가지관세트", "기타자재"])
         product_list = [p["name"] for p in st.session_state.db["products"]]
         
-        c1, c2, c3 = st.columns([4, 2, 1])
-        with c1:
-            selected_comp = st.selectbox("구성품 선택", product_list)
-        with c2:
-            comp_qty = st.number_input("개수", min_value=1, value=1)
-        with c3:
-            add_comp = st.button("담기")
-
-        if "temp_set_recipe" not in st.session_state:
-            st.session_state.temp_set_recipe = {}
+        # --- A. 신규 등록 모드 ---
+        if manage_type == "신규 세트 등록":
+            st.info("새로운 세트를 만듭니다. 아래에서 이름을 입력하고 부품을 담으세요.")
+            new_set_name = st.text_input("신규 세트 명칭 (예: T분기 C타입)")
             
-        if add_comp:
-            st.session_state.temp_set_recipe[selected_comp] = comp_qty
-        
-        st.info(f"현재 구성: {st.session_state.temp_set_recipe}")
-        
-        if st.button("세트 저장"):
-            if new_set_name and st.session_state.temp_set_recipe:
-                if set_category not in st.session_state.db["sets"]:
-                    st.session_state.db["sets"][set_category] = {}
-                st.session_state.db["sets"][set_category][new_set_name] = st.session_state.temp_set_recipe
-                save_data(st.session_state.db)
-                st.success("저장 완료!")
-                st.session_state.temp_set_recipe = {}
-                st.rerun()
+            # 부품 담기 UI
+            c1, c2, c3 = st.columns([4, 2, 1])
+            with c1: selected_comp = st.selectbox("구성품 선택", product_list, key="new_sel")
+            with c2: comp_qty = st.number_input("개수", min_value=1, value=1, key="new_qty")
+            with c3: 
+                if st.button("담기", key="new_add"):
+                    st.session_state.temp_set_recipe[selected_comp] = comp_qty
+            
+            # 현재 구성 보여주기 및 저장
+            st.write("▼ 현재 구성품")
+            st.json(st.session_state.temp_set_recipe)
+            
+            if st.button("신규 세트 저장"):
+                if new_set_name and st.session_state.temp_set_recipe:
+                    if set_category not in st.session_state.db["sets"]:
+                        st.session_state.db["sets"][set_category] = {}
+                    st.session_state.db["sets"][set_category][new_set_name] = st.session_state.temp_set_recipe
+                    save_data(st.session_state.db)
+                    st.success(f"'{new_set_name}' 저장 완료!")
+                    st.session_state.temp_set_recipe = {}
+                    st.rerun()
+                else:
+                    st.error("이름과 구성품을 입력하세요.")
 
-        st.write("📋 등록된 세트 목록")
-        st.json(current_sets)
+        # --- B. 수정/삭제 모드 ---
+        else:
+            current_sets = st.session_state.db["sets"].get(set_category, {})
+            
+            if not current_sets:
+                st.warning("이 카테고리에는 등록된 세트가 없습니다.")
+            else:
+                target_set_name = st.selectbox("수정/삭제할 세트 선택", list(current_sets.keys()))
+                
+                # 데이터 로드 버튼 (실수로 덮어쓰기 방지)
+                if st.button("선택한 세트 불러오기"):
+                    st.session_state.temp_set_recipe = current_sets[target_set_name].copy()
+                    st.toast(f"'{target_set_name}' 데이터를 불러왔습니다.")
+
+                st.markdown(f"#### 편집 중: **{target_set_name}**")
+                
+                # 1. 구성품 삭제/확인 UI
+                if st.session_state.temp_set_recipe:
+                    st.markdown("▼ 현재 구성품 (삭제하려면 ❌ 버튼 클릭)")
+                    
+                    # 딕셔너리를 리스트로 바꿔서 순회 (삭제 시 에러 방지)
+                    for comp, qty in list(st.session_state.temp_set_recipe.items()):
+                        cc1, cc2, cc3 = st.columns([4, 1, 1])
+                        cc1.text(f"• {comp}")
+                        cc2.text(f"{qty}개")
+                        if cc3.button("❌", key=f"del_{comp}"):
+                            del st.session_state.temp_set_recipe[comp]
+                            st.rerun()
+                else:
+                    st.caption("구성품이 비어있습니다. 아래에서 추가하거나 '불러오기'를 누르세요.")
+
+                # 2. 구성품 추가 UI
+                st.markdown("➕ 부품 추가")
+                ac1, ac2, ac3 = st.columns([4, 2, 1])
+                with ac1: add_sel = st.selectbox("부품", product_list, key="edit_sel")
+                with ac2: add_qty = st.number_input("수량", 1, key="edit_qty")
+                with ac3: 
+                    if st.button("추가", key="edit_add"):
+                        st.session_state.temp_set_recipe[add_sel] = add_qty
+                        st.rerun()
+
+                st.markdown("---")
+                
+                # 3. 저장 및 삭제 버튼
+                bc1, bc2 = st.columns(2)
+                with bc1:
+                    if st.button("💾 수정사항 저장"):
+                        st.session_state.db["sets"][set_category][target_set_name] = st.session_state.temp_set_recipe
+                        save_data(st.session_state.db)
+                        st.success("수정되었습니다.")
+                        st.session_state.temp_set_recipe = {} # 초기화
+                        st.rerun()
+                
+                with bc2:
+                    if st.button("🗑️ 이 세트 영구 삭제", type="primary"):
+                        del st.session_state.db["sets"][set_category][target_set_name]
+                        save_data(st.session_state.db)
+                        st.session_state.temp_set_recipe = {} # 초기화
+                        st.success("삭제되었습니다.")
+                        st.rerun()
 
 # ------------------------------------------
 # [PAGE 2] 견적 작성 모드
@@ -198,16 +234,19 @@ else:
     # === STEP 1: 입력 ===
     st.subheader("STEP 1. 물량 입력")
     
+    # 세트 데이터가 비어있을 경우 에러 방지
+    db_sets = st.session_state.db.get("sets", {})
+    
     with st.expander("1️⃣ 주배관 세트", expanded=True):
-        main_sets = st.session_state.db["sets"]["주배관세트"]
+        main_sets = db_sets.get("주배관세트", {})
         input_main = {name: st.number_input(name, min_value=0, key=f"m_{name}") for name in main_sets}
 
     with st.expander("2️⃣ 가지관 세트"):
-        br_sets = st.session_state.db["sets"]["가지관세트"]
+        br_sets = db_sets.get("가지관세트", {})
         input_br = {name: st.number_input(name, min_value=0, key=f"b_{name}") for name in br_sets}
         
     with st.expander("3️⃣ 기타 자재"):
-        etc_sets = st.session_state.db["sets"]["기타자재"]
+        etc_sets = db_sets.get("기타자재", {})
         input_etc = {name: st.number_input(name, min_value=0, key=f"e_{name}") for name in etc_sets}
         
     with st.expander("4️⃣ 배관 길이"):
@@ -216,14 +255,13 @@ else:
         
         c1, c2 = st.columns(2)
         with c1:
-            sel_mp = st.selectbox("주배관", [p["name"] for p in main_pipes])
+            sel_mp = st.selectbox("주배관", [p["name"] for p in main_pipes]) if main_pipes else None
             len_mp = st.number_input("주배관 길이(m)", min_value=0)
         with c2:
-            sel_bp = st.selectbox("가지관", [p["name"] for p in br_pipes])
+            sel_bp = st.selectbox("가지관", [p["name"] for p in br_pipes]) if br_pipes else None
             len_bp = st.number_input("가지관 길이(m)", min_value=0)
 
     if st.button("계산하기 (STEP 2)"):
-        # 계산 로직
         items = {}
         def explode(inputs, recipe_db):
             for k, v in inputs.items():
@@ -234,9 +272,8 @@ else:
         explode(input_br, br_sets)
         explode(input_etc, etc_sets)
         
-        # 배관 롤수
         def calc_rolls(p_name, length, p_list):
-            if length > 0:
+            if length > 0 and p_name:
                 p_info = next((p for p in p_list if p["name"] == p_name), None)
                 if p_info and p_info.get("len_per_unit", 0) > 0:
                     rolls = math.ceil(length / p_info["len_per_unit"])
@@ -251,16 +288,14 @@ else:
     # === STEP 2: 검토 ===
     if st.session_state.quote_step >= 2:
         st.divider()
-        st.subheader("STEP 2. 견적 상세 검토 및 이익률 분석")
+        st.subheader("STEP 2. 견적 상세 검토")
         
-        # 보기 옵션 (Radio Button으로 중복 선택 방지)
         view_option = st.radio(
-            "💰 단가 보기 모드 선택",
+            "💰 단가 보기 모드",
             ["기본 (소비자가만 노출)", "매입가 분석", "총판가1 분석", "총판가2 분석", "대리점가 분석"],
             horizontal=True
         )
         
-        # Mapping for cost selection
         cost_key_map = {
             "매입가 분석": ("price_buy", "매입"),
             "총판가1 분석": ("price_d1", "총판1"),
@@ -268,7 +303,6 @@ else:
             "대리점가 분석": ("price_agy", "대리점")
         }
         
-        # 데이터프레임 구성
         rows = []
         p_db = {p["name"]: p for p in st.session_state.db["products"]}
         
@@ -286,7 +320,6 @@ else:
                 "합계(소비자가)": cons_total
             }
             
-            # 원가 분석 모드일 경우 추가 데이터 계산
             if view_option != "기본 (소비자가만 노출)":
                 key, label = cost_key_map[view_option]
                 cost_price = info.get(key, 0)
@@ -294,7 +327,6 @@ else:
                 profit = cons_total - cost_total
                 profit_rate = (profit / cons_total * 100) if cons_total > 0 else 0
                 
-                # 컬럼 순서 조정을 위해 딕셔너리에 추가
                 row[f"{label}단가"] = cost_price
                 row[f"{label}합계"] = cost_total
                 row["이익금"] = profit
@@ -304,34 +336,15 @@ else:
             
         df = pd.DataFrame(rows)
         
-        # 컬럼 순서 정렬
         base_cols = ["제품명", "규격", "단위", "수량"]
         if view_option == "기본 (소비자가만 노출)":
             final_cols = base_cols + ["소비자가", "합계(소비자가)"]
         else:
             key, label = cost_key_map[view_option]
-            # 요청하신 순서: 제품/규격/단위/수량/매입가/매입금/소비자가/소비자금/이익금/이익률
-            final_cols = base_cols + [
-                f"{label}단가", f"{label}합계", 
-                "소비자가", "합계(소비자가)", 
-                "이익금", "이익률(%)"
-            ]
+            final_cols = base_cols + [f"{label}단가", f"{label}합계", "소비자가", "합계(소비자가)", "이익금", "이익률(%)"]
             
-        # 숫자 포맷팅 (천단위 콤마) - 보여주기용 데이터프레임
-        df_display = df[final_cols].copy()
+        st.dataframe(df[final_cols], use_container_width=True, hide_index=True, column_config={"이익률(%)": st.column_config.NumberColumn(format="%.1f%%")})
         
-        st.dataframe(
-            df_display, 
-            use_container_width=True, 
-            hide_index=True,
-            column_config={
-                "이익률(%)": st.column_config.NumberColumn(format="%.1f%%"),
-                # 금액 컬럼들에 콤마 적용은 Streamlit 최신버전 자동 적용되거나 
-                # 필요시 format="%.0f" 등으로 지정 가능
-            }
-        )
-        
-        # 추가 입력 (이전과 동일)
         st.markdown("---")
         c1, c2 = st.columns(2)
         with c1:
@@ -359,7 +372,6 @@ else:
         st.divider()
         st.header("🏁 최종 견적서")
         
-        # 최종 산출 (소비자가 기준)
         p_db = {p["name"]: p for p in st.session_state.db["products"]}
         total_mat = 0
         final_data = []

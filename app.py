@@ -6,7 +6,7 @@ import json
 import io
 import base64
 import tempfile
-import urllib.request  # 폰트 다운로드용
+import urllib.request
 from PIL import Image
 from fpdf import FPDF
 
@@ -15,14 +15,15 @@ from fpdf import FPDF
 # ==========================================
 DATA_FILE = "looperget_data.json"
 FONT_FILE = "NanumGothic.ttf"
+# 네이버 나눔고딕 폰트 URL
 FONT_URL = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
 
-# 폰트 파일이 없으면 다운로드
+# 폰트 파일이 없으면 자동 다운로드 (에러 방지)
 if not os.path.exists(FONT_FILE):
     try:
         urllib.request.urlretrieve(FONT_URL, FONT_FILE)
     except Exception:
-        pass # 다운로드 실패 시 영문 기본 폰트 사용
+        pass 
 
 def process_image(uploaded_file):
     try:
@@ -66,7 +67,7 @@ def create_pdf(quote_items, service_items, db_products):
         pdf.set_font('NanumGothic', '', 10)
     else:
         pdf.set_font('Helvetica', '', 10)
-        st.warning("⚠️ 한글 폰트가 없어 PDF 글자가 깨질 수 있습니다.")
+        st.warning("⚠️ 한글 폰트가 다운로드되지 않아 글자가 깨질 수 있습니다.")
 
     # 헤더
     pdf.set_fill_color(240, 240, 240)
@@ -133,7 +134,8 @@ def create_pdf(quote_items, service_items, db_products):
     pdf.set_text_color(255, 0, 0)
     pdf.cell(60, 12, f"{grand_total:,} 원", border=1, align='R', new_x="LMARGIN", new_y="NEXT")
     
-    return pdf.output(dest='S').encode('latin-1')
+    # [수정된 부분] fpdf2 최신 버전 대응: bytearray를 바로 bytes로 변환하여 리턴
+    return bytes(pdf.output())
 
 # ==========================================
 # 2. 데이터 관리 및 메인 로직
@@ -164,7 +166,7 @@ if "temp_set_recipe" not in st.session_state: st.session_state.temp_set_recipe =
 
 # UI 시작
 st.set_page_config(layout="wide", page_title="루퍼젯 프로 매니저")
-st.title("💧 루퍼젯 프로 매니저 V6.1")
+st.title("💧 루퍼젯 프로 매니저 V6.2")
 mode = st.sidebar.radio("모드", ["견적 모드", "관리자 모드"])
 
 if mode == "관리자 모드":
@@ -314,13 +316,71 @@ else: # 견적 모드
 
     elif st.session_state.quote_step == 2:
         st.subheader("STEP 2. 검토")
-        # 데이터프레임 표시 (생략 - V5.0 동일)
+        
+        view_option = st.radio(
+            "단가 보기 모드",
+            ["기본 (소비자가만 노출)", "매입가 분석", "총판가1 분석", "총판가2 분석", "대리점가 분석"],
+            horizontal=True
+        )
+        
+        cost_key_map = {
+            "매입가 분석": ("price_buy", "매입"),
+            "총판가1 분석": ("price_d1", "총판1"),
+            "총판가2 분석": ("price_d2", "총판2"),
+            "대리점가 분석": ("price_agy", "대리점")
+        }
+
         rows = []
         pdb = {p["name"]: p for p in st.session_state.db["products"]}
         for n, q in st.session_state.quote_items.items():
             inf = pdb.get(n, {})
-            rows.append({"품목": n, "수량": q, "단가": inf.get("price_cons", 0), "합계": inf.get("price_cons", 0)*q})
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+            cons_price = inf.get("price_cons", 0)
+            cons_total = cons_price * q
+            
+            row = {
+                "제품사진": inf.get("image"),
+                "제품명": n,
+                "규격": inf.get("spec", ""),
+                "단위": inf.get("unit", ""),
+                "수량": q,
+                "소비자가": cons_price,
+                "합계(소비자가)": cons_total
+            }
+
+            if view_option != "기본 (소비자가만 노출)":
+                key, label = cost_key_map[view_option]
+                cost_price = inf.get(key, 0)
+                cost_total = cost_price * q
+                profit = cons_total - cost_total
+                profit_rate = (profit / cons_total * 100) if cons_total > 0 else 0
+                
+                row[f"{label}단가"] = cost_price
+                row[f"{label}합계"] = cost_total
+                row["이익금"] = profit
+                row["이익률(%)"] = profit_rate
+
+            rows.append(row)
+
+        df = pd.DataFrame(rows)
+        
+        base_cols = ["제품사진", "제품명", "규격", "단위", "수량"]
+        if view_option == "기본 (소비자가만 노출)":
+            final_cols = base_cols + ["소비자가", "합계(소비자가)"]
+        else:
+            key, label = cost_key_map[view_option]
+            final_cols = base_cols + [f"{label}단가", f"{label}합계", "소비자가", "합계(소비자가)", "이익금", "이익률(%)"]
+
+        st.dataframe(
+            df[final_cols], 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "제품사진": st.column_config.ImageColumn("이미지", width="small"),
+                "이익률(%)": st.column_config.NumberColumn(format="%.1f%%"),
+                "소비자가": st.column_config.NumberColumn(format="%d"),
+                "합계(소비자가)": st.column_config.NumberColumn(format="%d"),
+            }
+        )
         
         c1, c2 = st.columns(2)
         with c1:

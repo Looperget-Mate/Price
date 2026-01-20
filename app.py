@@ -17,10 +17,10 @@ from fpdf import FPDF
 DATA_FILE = "looperget_data.json"       
 HISTORY_FILE = "looperget_history.json" 
 FONT_FILE = "NanumGothic.ttf"
-FONT_BOLD_FILE = "NanumGothicBold.ttf" # 볼드체 파일명
+FONT_BOLD_FILE = "NanumGothicBold.ttf"
 FONT_URL = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
 
-# 폰트 다운로드 (Regular만 자동, Bold는 사용자가 올린 것 사용)
+# 폰트 다운로드
 if not os.path.exists(FONT_FILE):
     try: urllib.request.urlretrieve(FONT_URL, FONT_FILE)
     except: pass 
@@ -53,23 +53,19 @@ def process_image(uploaded_file):
         return f"data:image/jpeg;base64,{base64.b64encode(buffer.getvalue()).decode()}"
     except: return None
 
-# PDF 생성 엔진 (V9.2: Bold 적용 & Red 제거)
+# PDF 생성 엔진
 class PDF(FPDF):
     def header(self):
-        # 폰트 등록 (Regular & Bold)
         if os.path.exists(FONT_FILE):
             self.add_font('NanumGothic', '', FONT_FILE, uni=True)
             if os.path.exists(FONT_BOLD_FILE):
                 self.add_font('NanumGothic', 'B', FONT_BOLD_FILE, uni=True)
-            
-            # 타이틀은 Bold 사용 (파일 없으면 Regular로 대체됨)
             self.set_font('NanumGothic', 'B' if os.path.exists(FONT_BOLD_FILE) else '', 20) 
         else: 
             self.set_font('Helvetica', 'B', 20)
         
         self.cell(0, 15, '견 적 서 (Quotation)', align='C', new_x="LMARGIN", new_y="NEXT")
         
-        # 약관 (일반 폰트)
         self.set_font('NanumGothic', '', 9) if os.path.exists(FONT_FILE) else self.set_font('Helvetica', '', 9)
         self.ln(2)
         self.cell(0, 5, "1. 견적 유효기간: 견적일로부터 15일 이내", ln=True, align='R')
@@ -78,7 +74,6 @@ class PDF(FPDF):
 
     def footer(self):
         self.set_y(-20)
-        # 하단 회사명 (Bold)
         if os.path.exists(FONT_FILE):
             self.set_font('NanumGothic', 'B' if os.path.exists(FONT_BOLD_FILE) else '', 12)
             self.cell(0, 8, "주식회사 신진켐텍", align='C', ln=True)
@@ -102,7 +97,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     
     pdf.set_font(font_name, '', 10)
 
-    # 견적명 (Bold)
+    # 견적명
     pdf.set_font(font_name, 'B' if has_bold else '', 12)
     pdf.cell(120, 10, f"현장명 : {quote_name}", border=0)
     pdf.cell(70, 10, f"견적일 : {quote_date}", border=0, align='R', new_x="LMARGIN", new_y="NEXT")
@@ -112,7 +107,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     pdf.set_fill_color(240, 240, 240)
     h_height = 10
     pdf.cell(15, h_height, "IMG", border=1, align='C', fill=True)
-    pdf.cell(45, h_height, "품목정보 (Item)", border=1, align='C', fill=True)
+    pdf.cell(45, h_height, "품목정보", border=1, align='C', fill=True)
     pdf.cell(10, h_height, "단위", border=1, align='C', fill=True)
     pdf.cell(12, h_height, "수량", border=1, align='C', fill=True)
 
@@ -131,23 +126,32 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         pdf.cell(13, h_height, "율(%)", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
         pdf.set_font(font_name, '', 9)
 
-    grand_totals = {"t1": 0, "t2": 0}
+    # 데이터 집계 변수
+    sum_qty = 0
+    sum_a1 = 0
+    sum_a2 = 0
+    sum_profit = 0
 
+    # 데이터 루프
     for item in final_data_list:
         name = item.get("품목", "")
         spec = item.get("규격", "-")
         qty = int(item.get("수량", 0))
         img_data = item.get("image_data", None)
+        
+        sum_qty += qty
+        
         p1 = int(item.get("price_1", 0))
         a1 = p1 * qty
-        grand_totals["t1"] += a1
+        sum_a1 += a1
         
         p2 = 0; a2 = 0; profit = 0; rate = 0
         if form_type == "profit":
             p2 = int(item.get("price_2", 0))
             a2 = p2 * qty
-            grand_totals["t2"] += a2
+            sum_a2 += a2
             profit = a2 - a1
+            sum_profit += profit
             rate = (profit / a2 * 100) if a2 else 0
 
         h = 15
@@ -188,15 +192,37 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
             pdf.cell(22, h, f"{a1:,}", border=1, align='R')
             pdf.cell(18, h, f"{p2:,}", border=1, align='R')
             pdf.cell(22, h, f"{a2:,}", border=1, align='R')
-            
-            # [수정] 파란색 대신 검정 Bold 사용 (요청사항 반영 시)
-            # 여기서는 '이익' 강조를 위해 Bold 적용
             pdf.set_font(font_name, 'B' if has_bold else '', 8)
             pdf.cell(15, h, f"{profit:,}", border=1, align='R')
             pdf.cell(13, h, f"{rate:.1f}%", border=1, align='C')
-            pdf.set_font(font_name, '', 9) # 복귀
+            pdf.set_font(font_name, '', 9)
             pdf.ln()
 
+    # [V9.3] 표 내부 합계 행 추가
+    pdf.set_fill_color(230, 230, 230)
+    pdf.set_font(font_name, 'B' if has_bold else '', 9)
+    
+    pdf.cell(15+45+10, 10, "소 계 (Sub Total)", border=1, align='C', fill=True)
+    pdf.cell(12, 10, f"{sum_qty:,}", border=1, align='C', fill=True)
+    
+    if form_type == "basic":
+        pdf.cell(35, 10, "", border=1, fill=True) # 단가 합계 X
+        pdf.cell(35, 10, f"{sum_a1:,}", border=1, align='R', fill=True)
+        pdf.cell(38, 10, "", border=1, fill=True)
+        pdf.ln()
+    else:
+        # 이익 분석형 합계 (평균 이익률 포함)
+        avg_rate = (sum_profit / sum_a2 * 100) if sum_a2 else 0
+        pdf.set_font(font_name, 'B' if has_bold else '', 8)
+        pdf.cell(18, 10, "", border=1, fill=True)
+        pdf.cell(22, 10, f"{sum_a1:,}", border=1, align='R', fill=True)
+        pdf.cell(18, 10, "", border=1, fill=True)
+        pdf.cell(22, 10, f"{sum_a2:,}", border=1, align='R', fill=True)
+        pdf.cell(15, 10, f"{sum_profit:,}", border=1, align='R', fill=True)
+        pdf.cell(13, 10, f"{avg_rate:.1f}%", border=1, align='C', fill=True)
+        pdf.ln()
+
+    # 서비스 비용
     svc_total = 0
     if service_items:
         pdf.ln(2)
@@ -207,28 +233,29 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
             pdf.cell(155, 6, s['항목'], border=1)
             pdf.cell(35, 6, f"{s['금액']:,} 원", border=1, align='R', new_x="LMARGIN", new_y="NEXT")
 
+    # 최종 총계
     pdf.ln(5)
-    # 총계 부분 Bold 적용 & 검정색 통일
     pdf.set_font(font_name, 'B' if has_bold else '', 12)
     
     if form_type == "basic":
-        final_total = grand_totals["t1"] + svc_total
+        final_total = sum_a1 + svc_total
         pdf.cell(120, 10, "", border=0)
         pdf.cell(35, 10, "총 합계", border=1, align='C', fill=True)
         pdf.cell(35, 10, f"{final_total:,} 원", border=1, align='R')
     else:
-        t1_final = grand_totals["t1"] + svc_total
-        t2_final = grand_totals["t2"] + svc_total
+        t1_final = sum_a1 + svc_total
+        t2_final = sum_a2 + svc_total
         total_profit = t2_final - t1_final
+        total_rate = (total_profit / t2_final * 100) if t2_final else 0
+        
         pdf.set_font(font_name, '', 10)
         pdf.cell(82, 10, "총 합계 (VAT 포함)", border=1, align='C', fill=True)
         
         pdf.cell(40, 10, f"{t1_final:,}", border=1, align='R')
         
-        # High Total & Profit (Bold)
         pdf.set_font(font_name, 'B' if has_bold else '', 10)
         pdf.cell(40, 10, f"{t2_final:,}", border=1, align='R')
-        pdf.cell(28, 10, f"(이익 {total_profit:,})", border=1, align='R')
+        pdf.cell(28, 10, f"({total_profit:,})", border=1, align='R')
         
     return bytes(pdf.output())
 
@@ -245,20 +272,18 @@ if "current_quote_name" not in st.session_state: st.session_state.current_quote_
 if "auth_admin" not in st.session_state: st.session_state.auth_admin = False
 if "auth_price" not in st.session_state: st.session_state.auth_price = False
 
-# Config Init
 if "config" not in st.session_state.db: st.session_state.db["config"] = {"password": "1234"}
 
 st.set_page_config(layout="wide", page_title="루퍼젯 프로 매니저")
-st.title("💧 루퍼젯 프로 매니저 V9.2")
+st.title("💧 루퍼젯 프로 매니저 V9.3")
 
-# --- 사이드바 ---
 with st.sidebar:
     st.header("🗂️ 견적 보관함")
     q_name = st.text_input("현장명", value=st.session_state.current_quote_name)
     c1, c2 = st.columns(2)
     with c1:
         if st.button("💾 저장"):
-            if not q_name or not st.session_state.quote_items: st.error("이름/내용 확인")
+            if not q_name or not st.session_state.quote_items: st.error("확인 필요")
             else:
                 st.session_state.history[q_name] = {
                     "date": datetime.datetime.now().strftime("%Y-%m-%d"),
@@ -295,19 +320,16 @@ if mode == "관리자 모드":
         
         with t1:
             st.markdown("##### 🔍 제품 검색/수정")
-            # [복구] 엑셀 기능 최상단 배치
-            with st.expander("📂 엑셀 데이터 등록/다운로드 (클릭)", expanded=True):
+            with st.expander("📂 엑셀 데이터 등록/다운로드", expanded=False):
                 ec1, ec2 = st.columns(2)
                 with ec1:
-                    st.write("▼ 데이터 다운로드")
                     df = pd.DataFrame(st.session_state.db["products"]).rename(columns=REV_COL_MAP)
                     if "이미지데이터" in df.columns: df["이미지데이터"] = "APP"
                     buf = io.BytesIO()
                     with pd.ExcelWriter(buf, engine='xlsxwriter') as w: df.to_excel(w, index=False)
                     st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")
                 with ec2:
-                    st.write("▼ 엑셀 업로드")
-                    uf = st.file_uploader("업로드", ["xlsx"])
+                    uf = st.file_uploader("엑셀 업로드", ["xlsx"])
                     if uf and st.button("데이터 덮어쓰기"):
                         try:
                             ndf = pd.read_excel(uf).rename(columns=COL_MAP).fillna(0)
@@ -319,8 +341,6 @@ if mode == "관리자 모드":
                             save_json(DATA_FILE, st.session_state.db); st.success("완료"); st.rerun()
                         except Exception as e: st.error(e)
 
-            st.divider()
-            
             search_txt = st.text_input("제품명 검색", placeholder="예: 밸브")
             dfp = pd.DataFrame(st.session_state.db["products"])
             if search_txt: dfp = dfp[dfp["name"].str.contains(search_txt, na=False)]
@@ -357,12 +377,10 @@ if mode == "관리자 모드":
 
             st.divider()
             mt = st.radio("작업", ["신규", "수정"], horizontal=True)
-            # 하위 분류
             sub_cat = None
             if cat == "주배관세트": sub_cat = st.selectbox("주배관 하위 분류", ["50mm", "40mm", "기타"], key="sub_c")
             
-            # [V9.2 수정] 부품 리스트 객체 그대로 사용 (Selectbox format_func 사용을 위해)
-            # pl = [p["name"] for p in st.session_state.db["products"]] -> 삭제
+            # [V9.3] 제품 리스트 객체 (규격 표시용)
             products_obj = st.session_state.db["products"]
 
             if mt == "신규":
@@ -370,7 +388,6 @@ if mode == "관리자 모드":
                  ni = st.file_uploader("이미지", key="nsi")
                  c1, c2, c3 = st.columns([3,2,1])
                  with c1: 
-                     # [V9.2] format_func로 이름+규격 표시
                      sp_obj = st.selectbox("부품", products_obj, format_func=lambda x: f"{x['name']} ({x.get('spec','-')})", key="nsp")
                  with c2: sq = st.number_input("수량", 1, key="nsq")
                  with c3: 
@@ -385,21 +402,27 @@ if mode == "관리자 모드":
                  if "target_set_edit" in st.session_state and st.session_state.target_set_edit:
                      tg = st.session_state.target_set_edit
                      st.info(f"편집 중: {tg}")
+                     
+                     # [V9.3] 세트 수정 - 삭제 버튼 추가
                      for k,v in list(st.session_state.temp_set_recipe.items()):
-                         c1, c2 = st.columns([4,1])
-                         c1.text(f"{k}: {v}")
-                         if c2.button("X", key=f"d{k}"): del st.session_state.temp_set_recipe[k]; st.rerun()
+                         c1, c2, c3 = st.columns([4,1,1])
+                         c1.text(f"{k} (수량:{v})")
+                         # 삭제 버튼
+                         if c3.button("🗑️ 삭제", key=f"del_comp_{k}"): 
+                             del st.session_state.temp_set_recipe[k]; st.rerun()
+                     
+                     st.markdown("➕ 부품 추가")
                      c1, c2, c3 = st.columns([3,2,1])
                      with c1: 
-                         # [V9.2] 수정 모드에서도 이름+규격 표시
                          ap_obj = st.selectbox("추가", products_obj, format_func=lambda x: f"{x['name']} ({x.get('spec','-')})", key="esp")
                      with c2: aq = st.number_input("수량", 1, key="esq")
                      with c3: 
                          if st.button("담기", key="esa"): st.session_state.temp_set_recipe[ap_obj['name']] = aq; st.rerun()
+                     
                      if st.button("수정 저장"):
                          st.session_state.db["sets"][cat][tg]["recipe"] = st.session_state.temp_set_recipe
                          save_json(DATA_FILE, st.session_state.db); st.success("수정됨")
-                     if st.button("삭제", type="primary"):
+                     if st.button("세트 전체 삭제", type="primary"):
                          del st.session_state.db["sets"][cat][tg]; save_json(DATA_FILE, st.session_state.db); st.rerun()
 
         with t3:
@@ -442,14 +465,19 @@ else:
         with st.expander("2. 가지관"): inp_b = render_inputs(sets.get("가지관세트", {}), "b")
         with st.expander("3. 기타"): inp_e = render_inputs(sets.get("기타자재", {}), "e")
         
-        mpl = [p for p in st.session_state.db["products"] if p["category"] == "주배관"]
-        bpl = [p for p in st.session_state.db["products"] if p["category"] == "가지관"]
+        st.markdown("#### 4. 배관 길이")
+        # [V9.3] 배관 선택 시 규격 표시 (이름만 나오지 않게)
+        # 제품 리스트 전체
+        all_products = st.session_state.db["products"]
+        mpl = [p for p in all_products if p["category"] == "주배관"]
+        bpl = [p for p in all_products if p["category"] == "가지관"]
+        
         c1, c2 = st.columns(2)
         with c1: 
-            sm = st.selectbox("주배관", [p["name"] for p in mpl]) if mpl else None
+            sm_obj = st.selectbox("주배관", mpl, format_func=lambda x: f"{x['name']} ({x.get('spec','-')})") if mpl else None
             lm = st.number_input("길이m", 0, key="lm")
         with c2: 
-            sb = st.selectbox("가지관", [p["name"] for p in bpl]) if bpl else None
+            sb_obj = st.selectbox("가지관", bpl, format_func=lambda x: f"{x['name']} ({x.get('spec','-')})") if bpl else None
             lb = st.number_input("길이m", 0, key="lb")
 
         if st.button("계산하기 (STEP 2)"):
@@ -461,11 +489,13 @@ else:
                         rec = db[k].get("recipe", db[k])
                         for p, q in rec.items(): res[p] = res.get(p, 0) + q*v
             ex(all_m, sets.get("주배관세트", {})); ex(inp_b, sets.get("가지관세트", {})); ex(inp_e, sets.get("기타자재", {}))
-            def cr(n, l, pl):
-                if l>0 and n:
-                    pi = next((x for x in pl if x["name"]==n), None)
-                    if pi and pi["len_per_unit"]: res[n] = res.get(n, 0) + math.ceil(l/pi["len_per_unit"])
-            cr(sm, lm, mpl); cr(sb, lb, bpl)
+            
+            # 롤수 계산
+            def cr(p_obj, l):
+                if l>0 and p_obj:
+                    res[p_obj['name']] = res.get(p_obj['name'], 0) + math.ceil(l/p_obj["len_per_unit"])
+            cr(sm_obj, lm); cr(sb_obj, lb)
+            
             st.session_state.quote_items = res; st.session_state.quote_step = 2; st.rerun()
 
     # STEP 2
@@ -473,10 +503,11 @@ else:
         st.subheader("STEP 2. 내용 검토")
         view_opts = ["소비자가"]
         if st.session_state.auth_price: view_opts += ["매입가", "총판1", "총판2", "대리점"]
+        
         c_lock, c_view = st.columns([1, 2])
         with c_lock:
             if not st.session_state.auth_price:
-                pw = st.text_input("원가 조회 비밀번호", type="password")
+                pw = st.text_input("원가 조회 비번", type="password")
                 if st.button("해제"):
                     if pw == st.session_state.db["config"]["password"]: st.session_state.auth_price = True; st.rerun()
                     else: st.error("오류")
@@ -486,10 +517,13 @@ else:
         key_map = {"매입가":("price_buy","매입"), "총판1":("price_d1","총판1"), "총판2":("price_d2","총판2"), "대리점":("price_agy","대리점")}
         rows = []
         pdb = {p["name"]: p for p in st.session_state.db["products"]}
+        
         for n, q in st.session_state.quote_items.items():
             inf = pdb.get(n, {})
             cpr = inf.get("price_cons", 0)
+            # [V9.3] 규격 포함하여 표시
             row = {"품목": n, "규격": inf.get("spec", ""), "수량": q, "소비자가": cpr, "합계": cpr*q}
+            
             if view != "소비자가":
                 k, l = key_map[view]
                 pr = inf.get(k, 0)
@@ -499,18 +533,21 @@ else:
             rows.append(row)
         
         df = pd.DataFrame(rows)
-        disp = ["품목", "규격", "수량"]
+        disp = ["품목", "규격", "수량"] # 규격 포함
         if view == "소비자가": disp += ["소비자가", "합계"]
         else: 
             l = key_map[view][1]
             disp += [f"{l}단가", f"{l}합계", "소비자가", "합계", "이익", "율(%)"]
+        
         st.dataframe(df[disp], use_container_width=True, hide_index=True)
         
         c1, c2 = st.columns(2)
         with c1:
-            ap = st.selectbox("추가", list(pdb.keys()))
+            # [V9.3] 부품 추가 시 이름+규격 검색 가능
+            all_products = st.session_state.db["products"]
+            ap_obj = st.selectbox("품목 추가", all_products, format_func=lambda x: f"{x['name']} ({x.get('spec','-')})")
             aq = st.number_input("수량", 1)
-            if st.button("추가"): st.session_state.quote_items[ap] = st.session_state.quote_items.get(ap, 0) + aq; st.rerun()
+            if st.button("추가"): st.session_state.quote_items[ap_obj['name']] = st.session_state.quote_items.get(ap_obj['name'], 0) + aq; st.rerun()
         with c2:
             stype = st.selectbox("비용", ["배송비", "용역비", "기타"])
             sn = st.text_input("내용") if stype=="기타" else stype
@@ -530,27 +567,16 @@ else:
         with c_opt2:
             opts = ["소비자가"]
             if st.session_state.auth_price: opts = ["매입단가", "총판가1", "총판가2", "대리점가", "소비자가"]
-            
-            # [V9.2] 이익분석 모드인데 잠겨있으면 강제 로그인 유도
             if "이익" in form_type and not st.session_state.auth_price:
-                st.error("🔒 이익 분석을 보려면 비밀번호 해제가 필요합니다.")
-                pw = st.text_input("비밀번호", type="password", key="final_pw")
-                if st.button("확인"):
-                    if pw == st.session_state.db["config"]["password"]: st.session_state.auth_price = True; st.rerun()
-                    else: st.error("오류")
-                st.stop() # 더 진행 못하게 막음
+                st.error("비밀번호 해제 필요"); st.stop()
 
             if "기본" in form_type: sel = st.multiselect("출력 단가", opts, default=["소비자가"], max_selections=1)
             else: sel = st.multiselect("비교 단가 (2개)", opts, max_selections=2)
 
-        # 지능형 정렬
+        if "이익" in form_type and len(sel) < 2: st.warning("2개 선택 필요"); st.stop()
+
         price_rank = {"매입단가": 0, "총판가1": 1, "총판가2": 2, "대리점가": 3, "소비자가": 4}
         if sel: sel = sorted(sel, key=lambda x: price_rank.get(x, 5))
-
-        # [V9.2] 셀렉션 2개 체크 (이익분석 오류 방지)
-        if "이익" in form_type and len(sel) < 2:
-            st.warning("⚠️ 비교할 단가 2개를 선택해주세요.")
-            st.stop()
 
         pkey = {"매입단가":"price_buy", "총판가1":"price_d1", "총판가2":"price_d2", "대리점가":"price_agy", "소비자가":"price_cons"}
         pdb = {p["name"]: p for p in st.session_state.db["products"]}
@@ -565,7 +591,7 @@ else:
             fdata.append(d)
         
         st.markdown("---")
-        cc = {"품목": st.column_config.TextColumn(disabled=True), "image_data": None, "수량": st.column_config.NumberColumn(step=1), "price_1": st.column_config.NumberColumn(label=sel[0] if sel else "단가", format="%d")}
+        cc = {"품목": st.column_config.TextColumn(disabled=True), "규격": st.column_config.TextColumn(disabled=True), "image_data": None, "수량": st.column_config.NumberColumn(step=1), "price_1": st.column_config.NumberColumn(label=sel[0] if sel else "단가", format="%d")}
         if len(pk)>1: cc["price_2"] = st.column_config.NumberColumn(label=sel[1], format="%d")
         edited = st.data_editor(pd.DataFrame(fdata), column_config=cc, use_container_width=True, hide_index=True)
         

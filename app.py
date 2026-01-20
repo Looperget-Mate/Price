@@ -17,9 +17,10 @@ from fpdf import FPDF
 DATA_FILE = "looperget_data.json"       
 HISTORY_FILE = "looperget_history.json" 
 FONT_FILE = "NanumGothic.ttf"
+FONT_BOLD_FILE = "NanumGothicBold.ttf" # 볼드체 파일명
 FONT_URL = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
 
-# 폰트 다운로드 (없으면 자동 다운)
+# 폰트 다운로드 (Regular만 자동, Bold는 사용자가 올린 것 사용)
 if not os.path.exists(FONT_FILE):
     try: urllib.request.urlretrieve(FONT_URL, FONT_FILE)
     except: pass 
@@ -52,18 +53,23 @@ def process_image(uploaded_file):
         return f"data:image/jpeg;base64,{base64.b64encode(buffer.getvalue()).decode()}"
     except: return None
 
-# PDF 생성 엔진
+# PDF 생성 엔진 (V9.2: Bold 적용 & Red 제거)
 class PDF(FPDF):
     def header(self):
-        # [수정] 폰트 스타일 '' (Regular)로 통일하여 에러 방지
+        # 폰트 등록 (Regular & Bold)
         if os.path.exists(FONT_FILE):
             self.add_font('NanumGothic', '', FONT_FILE, uni=True)
-            self.set_font('NanumGothic', '', 20) 
-        else: self.set_font('Helvetica', 'B', 20)
+            if os.path.exists(FONT_BOLD_FILE):
+                self.add_font('NanumGothic', 'B', FONT_BOLD_FILE, uni=True)
+            
+            # 타이틀은 Bold 사용 (파일 없으면 Regular로 대체됨)
+            self.set_font('NanumGothic', 'B' if os.path.exists(FONT_BOLD_FILE) else '', 20) 
+        else: 
+            self.set_font('Helvetica', 'B', 20)
         
         self.cell(0, 15, '견 적 서 (Quotation)', align='C', new_x="LMARGIN", new_y="NEXT")
         
-        # 상단 약관
+        # 약관 (일반 폰트)
         self.set_font('NanumGothic', '', 9) if os.path.exists(FONT_FILE) else self.set_font('Helvetica', '', 9)
         self.ln(2)
         self.cell(0, 5, "1. 견적 유효기간: 견적일로부터 15일 이내", ln=True, align='R')
@@ -72,9 +78,9 @@ class PDF(FPDF):
 
     def footer(self):
         self.set_y(-20)
-        # 하단 회사명
+        # 하단 회사명 (Bold)
         if os.path.exists(FONT_FILE):
-            self.set_font('NanumGothic', '', 12) # Bold 제거
+            self.set_font('NanumGothic', 'B' if os.path.exists(FONT_BOLD_FILE) else '', 12)
             self.cell(0, 8, "주식회사 신진켐텍", align='C', ln=True)
             self.set_font('NanumGothic', '', 8)
         else:
@@ -87,12 +93,17 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     pdf = PDF()
     pdf.add_page()
     has_font = os.path.exists(FONT_FILE)
+    has_bold = os.path.exists(FONT_BOLD_FILE)
     font_name = 'NanumGothic' if has_font else 'Helvetica'
-    if has_font: pdf.add_font(font_name, '', FONT_FILE, uni=True)
+    
+    if has_font: 
+        pdf.add_font(font_name, '', FONT_FILE, uni=True)
+        if has_bold: pdf.add_font(font_name, 'B', FONT_BOLD_FILE, uni=True)
+    
     pdf.set_font(font_name, '', 10)
 
-    # 견적명 및 날짜 (Bold 제거)
-    pdf.set_font(font_name, '', 12)
+    # 견적명 (Bold)
+    pdf.set_font(font_name, 'B' if has_bold else '', 12)
     pdf.cell(120, 10, f"현장명 : {quote_name}", border=0)
     pdf.cell(70, 10, f"견적일 : {quote_date}", border=0, align='R', new_x="LMARGIN", new_y="NEXT")
     pdf.set_font(font_name, '', 10)
@@ -177,10 +188,13 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
             pdf.cell(22, h, f"{a1:,}", border=1, align='R')
             pdf.cell(18, h, f"{p2:,}", border=1, align='R')
             pdf.cell(22, h, f"{a2:,}", border=1, align='R')
-            pdf.set_text_color(0, 0, 255)
+            
+            # [수정] 파란색 대신 검정 Bold 사용 (요청사항 반영 시)
+            # 여기서는 '이익' 강조를 위해 Bold 적용
+            pdf.set_font(font_name, 'B' if has_bold else '', 8)
             pdf.cell(15, h, f"{profit:,}", border=1, align='R')
             pdf.cell(13, h, f"{rate:.1f}%", border=1, align='C')
-            pdf.set_text_color(0, 0, 0)
+            pdf.set_font(font_name, '', 9) # 복귀
             pdf.ln()
 
     svc_total = 0
@@ -194,13 +208,13 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
             pdf.cell(35, 6, f"{s['금액']:,} 원", border=1, align='R', new_x="LMARGIN", new_y="NEXT")
 
     pdf.ln(5)
-    pdf.set_font(font_name, '', 12)
+    # 총계 부분 Bold 적용 & 검정색 통일
+    pdf.set_font(font_name, 'B' if has_bold else '', 12)
     
     if form_type == "basic":
         final_total = grand_totals["t1"] + svc_total
         pdf.cell(120, 10, "", border=0)
         pdf.cell(35, 10, "총 합계", border=1, align='C', fill=True)
-        pdf.set_text_color(255, 0, 0)
         pdf.cell(35, 10, f"{final_total:,} 원", border=1, align='R')
     else:
         t1_final = grand_totals["t1"] + svc_total
@@ -208,10 +222,12 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         total_profit = t2_final - t1_final
         pdf.set_font(font_name, '', 10)
         pdf.cell(82, 10, "총 합계 (VAT 포함)", border=1, align='C', fill=True)
+        
         pdf.cell(40, 10, f"{t1_final:,}", border=1, align='R')
-        pdf.set_text_color(255, 0, 0)
+        
+        # High Total & Profit (Bold)
+        pdf.set_font(font_name, 'B' if has_bold else '', 10)
         pdf.cell(40, 10, f"{t2_final:,}", border=1, align='R')
-        pdf.set_text_color(0, 0, 255)
         pdf.cell(28, 10, f"(이익 {total_profit:,})", border=1, align='R')
         
     return bytes(pdf.output())
@@ -233,7 +249,7 @@ if "auth_price" not in st.session_state: st.session_state.auth_price = False
 if "config" not in st.session_state.db: st.session_state.db["config"] = {"password": "1234"}
 
 st.set_page_config(layout="wide", page_title="루퍼젯 프로 매니저")
-st.title("💧 루퍼젯 프로 매니저 V9.1")
+st.title("💧 루퍼젯 프로 매니저 V9.2")
 
 # --- 사이드바 ---
 with st.sidebar:
@@ -283,13 +299,15 @@ if mode == "관리자 모드":
             with st.expander("📂 엑셀 데이터 등록/다운로드 (클릭)", expanded=True):
                 ec1, ec2 = st.columns(2)
                 with ec1:
+                    st.write("▼ 데이터 다운로드")
                     df = pd.DataFrame(st.session_state.db["products"]).rename(columns=REV_COL_MAP)
                     if "이미지데이터" in df.columns: df["이미지데이터"] = "APP"
                     buf = io.BytesIO()
                     with pd.ExcelWriter(buf, engine='xlsxwriter') as w: df.to_excel(w, index=False)
-                    st.download_button("📥 엑셀 양식/데이터 다운로드", buf.getvalue(), "products.xlsx", type="primary")
+                    st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")
                 with ec2:
-                    uf = st.file_uploader("엑셀 업로드 (덮어쓰기)", ["xlsx"])
+                    st.write("▼ 엑셀 업로드")
+                    uf = st.file_uploader("업로드", ["xlsx"])
                     if uf and st.button("데이터 덮어쓰기"):
                         try:
                             ndf = pd.read_excel(uf).rename(columns=COL_MAP).fillna(0)
@@ -342,16 +360,21 @@ if mode == "관리자 모드":
             # 하위 분류
             sub_cat = None
             if cat == "주배관세트": sub_cat = st.selectbox("주배관 하위 분류", ["50mm", "40mm", "기타"], key="sub_c")
-            pl = [p["name"] for p in st.session_state.db["products"]]
+            
+            # [V9.2 수정] 부품 리스트 객체 그대로 사용 (Selectbox format_func 사용을 위해)
+            # pl = [p["name"] for p in st.session_state.db["products"]] -> 삭제
+            products_obj = st.session_state.db["products"]
 
             if mt == "신규":
                  nn = st.text_input("세트명")
                  ni = st.file_uploader("이미지", key="nsi")
                  c1, c2, c3 = st.columns([3,2,1])
-                 with c1: sp = st.selectbox("부품", pl, key="nsp")
+                 with c1: 
+                     # [V9.2] format_func로 이름+규격 표시
+                     sp_obj = st.selectbox("부품", products_obj, format_func=lambda x: f"{x['name']} ({x.get('spec','-')})", key="nsp")
                  with c2: sq = st.number_input("수량", 1, key="nsq")
                  with c3: 
-                     if st.button("담기"): st.session_state.temp_set_recipe[sp] = sq
+                     if st.button("담기"): st.session_state.temp_set_recipe[sp_obj['name']] = sq
                  st.write(st.session_state.temp_set_recipe)
                  if st.button("저장"):
                      im = process_image(ni) if ni else None
@@ -367,10 +390,12 @@ if mode == "관리자 모드":
                          c1.text(f"{k}: {v}")
                          if c2.button("X", key=f"d{k}"): del st.session_state.temp_set_recipe[k]; st.rerun()
                      c1, c2, c3 = st.columns([3,2,1])
-                     with c1: ap = st.selectbox("추가", pl, key="esp")
+                     with c1: 
+                         # [V9.2] 수정 모드에서도 이름+규격 표시
+                         ap_obj = st.selectbox("추가", products_obj, format_func=lambda x: f"{x['name']} ({x.get('spec','-')})", key="esp")
                      with c2: aq = st.number_input("수량", 1, key="esq")
                      with c3: 
-                         if st.button("담기", key="esa"): st.session_state.temp_set_recipe[ap] = aq; st.rerun()
+                         if st.button("담기", key="esa"): st.session_state.temp_set_recipe[ap_obj['name']] = aq; st.rerun()
                      if st.button("수정 저장"):
                          st.session_state.db["sets"][cat][tg]["recipe"] = st.session_state.temp_set_recipe
                          save_json(DATA_FILE, st.session_state.db); st.success("수정됨")
@@ -387,6 +412,7 @@ if mode == "관리자 모드":
 else:
     st.markdown(f"### 📝 현장명: **{st.session_state.current_quote_name if st.session_state.current_quote_name else '(제목 없음)'}**")
 
+    # STEP 1
     if st.session_state.quote_step == 1:
         st.subheader("STEP 1. 물량 입력")
         sets = st.session_state.db.get("sets", {})
@@ -442,6 +468,7 @@ else:
             cr(sm, lm, mpl); cr(sb, lb, bpl)
             st.session_state.quote_items = res; st.session_state.quote_step = 2; st.rerun()
 
+    # STEP 2
     elif st.session_state.quote_step == 2:
         st.subheader("STEP 2. 내용 검토")
         view_opts = ["소비자가"]
@@ -492,6 +519,7 @@ else:
         if st.session_state.services: st.table(st.session_state.services)
         if st.button("최종 확정 (STEP 3)"): st.session_state.quote_step = 3; st.rerun()
 
+    # STEP 3
     elif st.session_state.quote_step == 3:
         st.header("🏁 최종 견적")
         if not st.session_state.current_quote_name: st.warning("저장해주세요!")
@@ -502,12 +530,27 @@ else:
         with c_opt2:
             opts = ["소비자가"]
             if st.session_state.auth_price: opts = ["매입단가", "총판가1", "총판가2", "대리점가", "소비자가"]
+            
+            # [V9.2] 이익분석 모드인데 잠겨있으면 강제 로그인 유도
+            if "이익" in form_type and not st.session_state.auth_price:
+                st.error("🔒 이익 분석을 보려면 비밀번호 해제가 필요합니다.")
+                pw = st.text_input("비밀번호", type="password", key="final_pw")
+                if st.button("확인"):
+                    if pw == st.session_state.db["config"]["password"]: st.session_state.auth_price = True; st.rerun()
+                    else: st.error("오류")
+                st.stop() # 더 진행 못하게 막음
+
             if "기본" in form_type: sel = st.multiselect("출력 단가", opts, default=["소비자가"], max_selections=1)
             else: sel = st.multiselect("비교 단가 (2개)", opts, max_selections=2)
 
         # 지능형 정렬
         price_rank = {"매입단가": 0, "총판가1": 1, "총판가2": 2, "대리점가": 3, "소비자가": 4}
         if sel: sel = sorted(sel, key=lambda x: price_rank.get(x, 5))
+
+        # [V9.2] 셀렉션 2개 체크 (이익분석 오류 방지)
+        if "이익" in form_type and len(sel) < 2:
+            st.warning("⚠️ 비교할 단가 2개를 선택해주세요.")
+            st.stop()
 
         pkey = {"매입단가":"price_buy", "총판가1":"price_d1", "총판가2":"price_d2", "대리점가":"price_agy", "소비자가":"price_cons"}
         pdb = {p["name"]: p for p in st.session_state.db["products"]}

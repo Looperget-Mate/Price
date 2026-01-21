@@ -4,3 +4,6 @@ openpyxl
 xlsxwriter
 Pillow
 fpdf2
+gspread
+google-api-python-client
+google-auth

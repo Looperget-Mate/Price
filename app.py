@@ -145,6 +145,12 @@ def init_db():
         except Exception as e:
             st.error(f"시트 생성 실패: {e}")
             return None, None
+
+    # --- [추가] 시트 연결 확인용 코드 ---
+    if sh:
+        st.sidebar.success(f"현재 연결된 시트: {sh.title}")
+        st.sidebar.markdown(f"👉 [구글 시트 바로가기]({sh.url})")
+    # ----------------------------------
     
     # 워크시트 가져오기 (없으면 생성)
     try: ws_prod = sh.worksheet("Products")

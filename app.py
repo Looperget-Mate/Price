@@ -527,7 +527,7 @@ if mode == "관리자 모드":
                     if "이미지데이터" in df.columns: df["이미지데이터"] = df["이미지데이터"].apply(lambda x: x if x else "")
                     buf = io.BytesIO()
                     with pd.ExcelWriter(buf, engine='xlsxwriter') as w: df.to_excel(w, index=False)
-                        st.dataframe(df, use_container_width=True, hide_index=True)
+                    st.dataframe(df, use_container_width=True, hide_index=True)
                     st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")
                 with ec2:
                     uf = st.file_uploader("엑셀 업로드", ["xlsx"])

@@ -22,7 +22,7 @@ from googleapiclient.http import MediaIoBaseUpload
 # ==========================================
 FONT_FILE = "NanumGothic.ttf"
 FONT_BOLD_FILE = "NanumGothicBold.ttf"
-# 폰트 다운로드 URL (필요시)
+# 폰트 다운로드 URL
 FONT_URL = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
 
 if not os.path.exists(FONT_FILE):
@@ -114,8 +114,8 @@ def get_image_from_drive(filename):
         
         file_id = files[0]['id']
         request = drive_service.files().get_media(fileId=file_id)
-        fh = io.BytesIO()
-        downloader = request.execute() # 작은 파일은 바로 다운로드
+        # 작은 파일은 바로 다운로드
+        downloader = request.execute()
         
         img = Image.open(io.BytesIO(downloader))
         img = img.convert('RGB')
@@ -147,11 +147,10 @@ def init_db():
             st.error(f"시트 생성 실패: {e}")
             return None, None
 
-    # --- [추가] 시트 연결 확인용 코드 ---
+    # --- 시트 연결 확인용 코드 ---
     if sh:
         st.sidebar.success(f"현재 연결된 시트: {sh.title}")
         st.sidebar.markdown(f"👉 [구글 시트 바로가기]({sh.url})")
-    # ----------------------------------
     
     # 워크시트 가져오기 (없으면 생성)
     try: ws_prod = sh.worksheet("Products")
@@ -172,15 +171,18 @@ def load_data_from_sheet():
     # 1. Products 로드
     try:
         prod_records = ws_prod.get_all_records()
-        # 한글 키 -> 영문 키 변환
         for rec in prod_records:
             new_rec = {}
             for k, v in rec.items():
                 if k in COL_MAP:
-                    new_rec[COL_MAP[k]] = v
-            # 이미지 파일명으로 Base64 로드 (Lazy Loading 권장하나 여기선 편의상)
+                    # [수정] 품목코드 5자리 강제 변환 (00200 유지)
+                    if k == "품목코드":
+                        new_rec[COL_MAP[k]] = str(v).zfill(5)
+                    else:
+                        new_rec[COL_MAP[k]] = v
+            
+            # 이미지 처리
             if "image" in new_rec and new_rec["image"]:
-                # 실제 데이터에는 파일명만 있음. Base64는 필요할 때 로드하거나 캐시 활용
                 pass 
             data["products"].append(new_rec)
     except Exception as e:
@@ -204,7 +206,7 @@ def load_data_from_sheet():
                 
             data["sets"][cat][name] = {
                 "recipe": recipe,
-                "image": img, # 파일명 저장
+                "image": img,
                 "sub_cat": sub
             }
     except: pass
@@ -218,6 +220,11 @@ def save_products_to_sheet(products_list):
     
     # DataFrame 변환 후 업로드
     df = pd.DataFrame(products_list)
+    
+    # [수정] 품목코드 00 채우기 (저장할 때도 확실하게)
+    if "code" in df.columns:
+        df["code"] = df["code"].astype(str).apply(lambda x: x.zfill(5))
+
     # 영문 키 -> 한글 키 변환
     df_upload = df.rename(columns=REV_COL_MAP)
     
@@ -231,7 +238,6 @@ def save_sets_to_sheet(sets_dict):
     if not ws_sets: return
     
     rows = []
-    # 헤더
     header = ["세트명", "카테고리", "하위분류", "이미지파일명", "레시피JSON"]
     rows.append(header)
     
@@ -241,7 +247,7 @@ def save_sets_to_sheet(sets_dict):
                 name,
                 cat,
                 info.get("sub_cat", ""),
-                info.get("image", ""), # 파일명
+                info.get("image", ""),
                 json.dumps(info.get("recipe", {}), ensure_ascii=False)
             ]
             rows.append(row)
@@ -251,7 +257,7 @@ def save_sets_to_sheet(sets_dict):
 
 
 # ==========================================
-# 2. PDF 생성 엔진 (Drive 이미지 연동)
+# 2. PDF 생성 엔진 (Drive 이미지 연동 & 3줄 출력 수정)
 # ==========================================
 class PDF(FPDF):
     def header(self):
@@ -304,7 +310,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     pdf.set_fill_color(240, 240, 240)
     h_height = 10
     pdf.cell(15, h_height, "IMG", border=1, align='C', fill=True)
-    pdf.cell(45, h_height, "품목정보", border=1, align='C', fill=True)
+    pdf.cell(45, h_height, "품목정보 (명/규격/코드)", border=1, align='C', fill=True) # 헤더 이름 변경
     pdf.cell(10, h_height, "단위", border=1, align='C', fill=True)
     pdf.cell(12, h_height, "수량", border=1, align='C', fill=True)
 
@@ -328,8 +334,10 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     for item in final_data_list:
         name = item.get("품목", "")
         spec = item.get("규격", "-")
+        code = str(item.get("코드", "")).zfill(5) # [수정] 코드 5자리로 확보
+        
         qty = int(item.get("수량", 0))
-        img_filename = item.get("image_data", None) # 여기서는 파일명이 들어옴
+        img_filename = item.get("image_data", None)
         
         # PDF 생성을 위해 드라이브에서 이미지 Fetch
         img_b64 = None
@@ -353,6 +361,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         h = 15
         x, y = pdf.get_x(), pdf.get_y()
         
+        # 1. 이미지
         pdf.cell(15, h, "", border=1)
         if img_b64:
             try:
@@ -363,16 +372,28 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
                 os.unlink(tmp_path)
             except: pass
 
+        # 2. 품목정보 (3줄 출력) [수정됨]
         pdf.set_xy(x+15, y)
-        pdf.cell(45, h, "", border=1)
-        pdf.set_xy(x+15, y+2)
-        pdf.set_font(font_name, '', 9)
+        pdf.cell(45, h, "", border=1) # 테두리 먼저 그리기
+        
+        # 줄 1: 제품명
+        pdf.set_xy(x+15, y+1.5) 
+        pdf.set_font(font_name, '', 8) # 폰트 살짝 작게
         pdf.multi_cell(45, 4, name, align='L')
-        pdf.set_xy(x+15, y+9)
+        
+        # 줄 2: 규격
+        pdf.set_xy(x+15, y+6.0)
+        pdf.set_font(font_name, '', 7) # 더 작게
+        pdf.cell(45, 3, f"Spec: {spec}", align='L')
+        
+        # 줄 3: 코드
+        pdf.set_xy(x+15, y+10.0)
         pdf.set_font(font_name, '', 7)
-        pdf.cell(45, 4, spec, align='L')
+        pdf.cell(45, 3, f"Code: {code}", align='L')
+
+        # 좌표 복귀 및 나머지 컬럼
         pdf.set_xy(x+60, y)
-        pdf.set_font(font_name, '', 9)
+        pdf.set_font(font_name, '', 9) # 폰트 원상복구
 
         pdf.cell(10, h, item.get("단위", "EA"), border=1, align='C')
         pdf.cell(12, h, str(qty), border=1, align='C')
@@ -455,7 +476,7 @@ if "db" not in st.session_state:
     with st.spinner("DB 접속 중..."):
         st.session_state.db = load_data_from_sheet()
 
-if "history" not in st.session_state: st.session_state.history = {} # History는 로컬이나 별도 시트 구현 가능(현재는 임시)
+if "history" not in st.session_state: st.session_state.history = {} 
 if "quote_step" not in st.session_state: st.session_state.quote_step = 1
 if "quote_items" not in st.session_state: st.session_state.quote_items = {}
 if "services" not in st.session_state: st.session_state.services = []
@@ -479,7 +500,6 @@ REV_COL_MAP = {v: k for k, v in COL_MAP.items()}
 # --- 사이드바 ---
 with st.sidebar:
     st.header("🗂️ 견적 보관함")
-    # *참고: History 저장은 현재 세션/로컬에만 유지됩니다. 시트에 저장하려면 별도 구현 필요*
     q_name = st.text_input("현장명", value=st.session_state.current_quote_name)
     c1, c2 = st.columns(2)
     with c1:
@@ -524,22 +544,27 @@ if mode == "관리자 모드":
                 ec1, ec2 = st.columns(2)
                 with ec1:
                     df = pd.DataFrame(st.session_state.db["products"]).rename(columns=REV_COL_MAP)
-                    if "이미지데이터" in df.columns: df["이미지데이터"] = df["이미지데이터"].apply(lambda x: x if x else "")
+                    # 이미지 데이터 처리
+                    if "이미지데이터" in df.columns: 
+                        df["이미지데이터"] = df["이미지데이터"].apply(lambda x: x if x else "")
+                    
+                    # 엑셀 다운로드 준비
                     buf = io.BytesIO()
-                    with pd.ExcelWriter(buf, engine='xlsxwriter') as w: df.to_excel(w, index=False)
+                    with pd.ExcelWriter(buf, engine='xlsxwriter') as w: 
+                        df.to_excel(w, index=False)
+                    
                     st.dataframe(df, use_container_width=True, hide_index=True)
                     st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")
                 with ec2:
                     uf = st.file_uploader("엑셀 업로드", ["xlsx"])
                     if uf and st.button("시트에 덮어쓰기"):
                         try:
-                            ndf = pd.read_excel(uf).rename(columns=COL_MAP).fillna(0)
-                            # 기존 이미지 정보 보존 로직은 시트에서 처리
-                            # 여기서는 단순히 리스트 변환해서 업로드
+                            # [수정] 엑셀 읽을 때 품목코드 문자열로 강제 지정
+                            ndf = pd.read_excel(uf, dtype={'품목코드': str}).rename(columns=COL_MAP).fillna(0)
                             nrec = ndf.to_dict('records')
                             save_products_to_sheet(nrec)
-                            st.session_state.db = load_data_from_sheet() # 리로드
-                            st.success("업로드 및 동기화 완료"); st.rerun()
+                            st.session_state.db = load_data_from_sheet() 
+                            st.success("업로드 및 동기화 완료 (품목코드 00 유지됨)"); st.rerun()
                         except Exception as e: st.error(e)
 
             # 이미지 업로드
@@ -554,11 +579,9 @@ if mode == "관리자 모드":
                 if st.button("드라이브 저장"):
                     if ifile:
                         with st.spinner("드라이브 업로드 중..."):
-                            # 파일명: 제품명.jpg
                             fname = f"{tp}_{ifile.name}"
                             fid = upload_image_to_drive(ifile, fname)
                             if fid:
-                                # 로컬 DB 및 시트 업데이트
                                 for p in st.session_state.db["products"]:
                                     if p["name"] == tp: p["image"] = fid
                                 save_products_to_sheet(st.session_state.db["products"])
@@ -643,7 +666,6 @@ else:
             res = {}
             for i, (n, v) in enumerate(d.items()):
                 with cols[i%4]:
-                    # 이미지 표시 (드라이브에서 로딩)
                     img_name = v.get("image") if isinstance(v, dict) else None
                     if img_name:
                         b64 = get_image_from_drive(img_name)
@@ -777,18 +799,33 @@ else:
         fdata = []
         for n, q in st.session_state.quote_items.items():
             inf = pdb.get(n, {})
-            d = {"품목": n, "규격": inf.get("spec", ""), "단위": inf.get("unit", "EA"), "수량": int(q), "image_data": inf.get("image")}
+            # [수정] PDF 생성을 위해 '코드' 정보 추가
+            d = {
+                "품목": n, 
+                "규격": inf.get("spec", ""), 
+                "코드": inf.get("code", ""), # 코드 정보 추가
+                "단위": inf.get("unit", "EA"), 
+                "수량": int(q), 
+                "image_data": inf.get("image")
+            }
             d["price_1"] = int(inf.get(pk[0], 0))
             if len(pk)>1: d["price_2"] = int(inf.get(pk[1], 0))
             fdata.append(d)
         
         st.markdown("---")
-        cc = {"품목": st.column_config.TextColumn(disabled=True), "규격": st.column_config.TextColumn(disabled=True), "image_data": None, "수량": st.column_config.NumberColumn(step=1), "price_1": st.column_config.NumberColumn(label=sel[0] if sel else "단가", format="%d")}
+        # 화면 표시용 컬럼 설정
+        cc = {"품목": st.column_config.TextColumn(disabled=True), "규격": st.column_config.TextColumn(disabled=True), "코드": st.column_config.TextColumn(disabled=True), "image_data": None, "수량": st.column_config.NumberColumn(step=1), "price_1": st.column_config.NumberColumn(label=sel[0] if sel else "단가", format="%d")}
         if len(pk)>1: cc["price_2"] = st.column_config.NumberColumn(label=sel[1], format="%d")
-        edited = st.data_editor(pd.DataFrame(fdata), column_config=cc, use_container_width=True, hide_index=True)
+        
+        # 화면에는 코드도 보여주면 좋음
+        disp_cols = ["품목", "규격", "코드", "단위", "수량", "price_1"]
+        if len(pk)>1: disp_cols.append("price_2")
+        
+        edited = st.data_editor(pd.DataFrame(fdata)[disp_cols], column_config=cc, use_container_width=True, hide_index=True)
         
         if sel:
             fmode = "basic" if "기본" in form_type else "profit"
+            # 편집된 내용으로 PDF 생성 (편집하면 수량 등이 바뀔 수 있으므로)
             pdf_b = create_advanced_pdf(edited.to_dict('records'), st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel)
             st.download_button("📥 PDF 다운로드", pdf_b, f"quote_{st.session_state.current_quote_name}.pdf", "application/pdf", type="primary")
 

@@ -183,7 +183,8 @@ def load_data_from_sheet():
                 # 실제 데이터에는 파일명만 있음. Base64는 필요할 때 로드하거나 캐시 활용
                 pass 
             data["products"].append(new_rec)
-    except: pass
+    except Exception as e:
+        st.error(f"🚨 데이터 로드 오류 발생: {e}")
 
     # 2. Sets 로드
     try:

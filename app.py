@@ -504,6 +504,10 @@ with st.sidebar:
 # --- [관리자 모드] ---
 if mode == "관리자 모드":
     st.header("🛠 관리자 모드 (Google Cloud 연동)")
+    if st.button("🔄 구글시트 데이터 새로고침"):
+        st.session_state.db = load_data_from_sheet()
+        st.success("최신 데이터로 업데이트 완료!")
+        st.rerun()
     if not st.session_state.auth_admin:
         pw = st.text_input("관리자 비밀번호", type="password")
         if st.button("로그인"):

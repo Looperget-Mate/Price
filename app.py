@@ -1,4 +1,3 @@
-import os
 import streamlit as st
 import pandas as pd
 import math
@@ -8,6 +7,7 @@ import tempfile
 import json
 import datetime
 import time
+import os
 from PIL import Image
 from fpdf import FPDF
 
@@ -129,6 +129,17 @@ def get_image_from_drive(filename):
 # --- 구글 시트 함수 ---
 SHEET_NAME = "Looperget_DB"
 
+# 컬럼 매핑 (한글 <-> 영문)
+COL_MAP = {"품목코드": "code", "카테고리": "category", "제품명": "name", "규격": "spec", "단위": "unit", "1롤길이(m)": "len_per_unit", "매입단가": "price_buy", "총판가1": "price_d1", "총판가2": "price_d2", "대리점가": "price_agy", "소비자가": "price_cons", "이미지파일명": "image"}
+REV_COL_MAP = {v: k for k, v in COL_MAP.items()}
+
+# 기본 데이터 (시트가 없을 때 초기화용)
+DEFAULT_DATA = {
+    "config": {"password": "1234"},
+    "products": [],
+    "sets": {}
+}
+
 def init_db():
     """DB 시트 연결 및 초기화"""
     if not gc: return None, None
@@ -140,18 +151,15 @@ def init_db():
             # 초기 시트 생성
             sh.add_worksheet(title="Products", rows=100, cols=20)
             sh.add_worksheet(title="Sets", rows=100, cols=10)
+            sh.add_worksheet(title="Config", rows=10, cols=5) # 설정용
             # 헤더 추가
             sh.worksheet("Products").append_row(list(COL_MAP.keys()))
             sh.worksheet("Sets").append_row(["세트명", "카테고리", "하위분류", "이미지파일명", "레시피JSON"])
+            sh.worksheet("Config").append_row(["Key", "Value"])
+            sh.worksheet("Config").append_row(["password", "1234"])
         except Exception as e:
             st.error(f"시트 생성 실패: {e}")
             return None, None
-
-    # --- [추가] 시트 연결 확인용 코드 ---
-    if sh:
-        st.sidebar.success(f"현재 연결된 시트: {sh.title}")
-        st.sidebar.markdown(f"👉 [구글 시트 바로가기]({sh.url})")
-    # ----------------------------------
     
     # 워크시트 가져오기 (없으면 생성)
     try: ws_prod = sh.worksheet("Products")
@@ -159,29 +167,28 @@ def init_db():
     
     try: ws_sets = sh.worksheet("Sets")
     except: ws_sets = sh.add_worksheet(title="Sets", rows=100, cols=10)
+
+    try: ws_conf = sh.worksheet("Config")
+    except: ws_conf = sh.add_worksheet(title="Config", rows=10, cols=5)
             
-    return ws_prod, ws_sets
+    return ws_prod, ws_sets, ws_conf
 
 def load_data_from_sheet():
     """시트에서 데이터 읽어오기"""
-    ws_prod, ws_sets = init_db()
-    if not ws_prod or not ws_sets: return DEFAULT_DATA
+    ws_prod, ws_sets, ws_conf = init_db()
+    if not ws_prod: return DEFAULT_DATA
     
     data = {"config": {"password": "1234"}, "products": [], "sets": {}}
     
     # 1. Products 로드
     try:
         prod_records = ws_prod.get_all_records()
-        # 한글 키 -> 영문 키 변환
         for rec in prod_records:
             new_rec = {}
             for k, v in rec.items():
                 if k in COL_MAP:
                     new_rec[COL_MAP[k]] = v
-            # 이미지 파일명으로 Base64 로드 (Lazy Loading 권장하나 여기선 편의상)
-            if "image" in new_rec and new_rec["image"]:
-                # 실제 데이터에는 파일명만 있음. Base64는 필요할 때 로드하거나 캐시 활용
-                pass 
+            # 이미지는 파일명만 가져옴 (나중에 필요할 때 get_image_from_drive 호출)
             data["products"].append(new_rec)
     except: pass
 
@@ -196,57 +203,64 @@ def load_data_from_sheet():
             recipe_str = rec["레시피JSON"]
             
             if cat not in data["sets"]: data["sets"][cat] = {}
-            try:
-                recipe = json.loads(recipe_str)
-            except:
-                recipe = {}
+            try: recipe = json.loads(recipe_str)
+            except: recipe = {}
                 
             data["sets"][cat][name] = {
-                "recipe": recipe,
-                "image": img, # 파일명 저장
-                "sub_cat": sub
+                "recipe": recipe, "image": img, "sub_cat": sub
             }
+    except: pass
+
+    # 3. Config 로드
+    try:
+        conf_records = ws_conf.get_all_records()
+        for rec in conf_records:
+            if rec["Key"] == "password":
+                data["config"]["password"] = str(rec["Value"])
     except: pass
             
     return data
 
 def save_products_to_sheet(products_list):
     """제품 리스트 통째로 덮어쓰기"""
-    ws_prod, _ = init_db()
+    ws_prod, _, _ = init_db()
     if not ws_prod: return
     
-    # DataFrame 변환 후 업로드
     df = pd.DataFrame(products_list)
-    # 영문 키 -> 한글 키 변환
     df_upload = df.rename(columns=REV_COL_MAP)
     
-    # 시트 클리어 후 헤더+데이터 쓰기
     ws_prod.clear()
     ws_prod.update([df_upload.columns.values.tolist()] + df_upload.values.tolist())
 
 def save_sets_to_sheet(sets_dict):
     """세트 데이터를 시트 형식으로 변환 후 저장"""
-    _, ws_sets = init_db()
+    _, ws_sets, _ = init_db()
     if not ws_sets: return
     
     rows = []
-    # 헤더
     header = ["세트명", "카테고리", "하위분류", "이미지파일명", "레시피JSON"]
     rows.append(header)
     
     for cat, items in sets_dict.items():
         for name, info in items.items():
             row = [
-                name,
-                cat,
-                info.get("sub_cat", ""),
-                info.get("image", ""), # 파일명
+                name, cat, info.get("sub_cat", ""),
+                info.get("image", ""),
                 json.dumps(info.get("recipe", {}), ensure_ascii=False)
             ]
             rows.append(row)
     
     ws_sets.clear()
     ws_sets.update(rows)
+
+def save_config_to_sheet(config_dict):
+    """설정(비밀번호) 저장"""
+    _, _, ws_conf = init_db()
+    if not ws_conf: return
+    ws_conf.clear()
+    ws_conf.append_row(["Key", "Value"])
+    for k, v in config_dict.items():
+        ws_conf.append_row([k, v])
 
 
 # ==========================================
@@ -328,12 +342,10 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         name = item.get("품목", "")
         spec = item.get("규격", "-")
         qty = int(item.get("수량", 0))
-        img_filename = item.get("image_data", None) # 여기서는 파일명이 들어옴
+        img_filename = item.get("image_data", None)
         
-        # PDF 생성을 위해 드라이브에서 이미지 Fetch
-        img_b64 = None
-        if img_filename:
-            img_b64 = get_image_from_drive(img_filename)
+        # Drive에서 이미지 가져오기
+        img_b64 = get_image_from_drive(img_filename) if img_filename else None
 
         sum_qty += qty
         p1 = int(item.get("price_1", 0))
@@ -451,10 +463,10 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
 # 3. 메인 로직
 # ==========================================
 if "db" not in st.session_state:
-    with st.spinner("DB 접속 중..."):
+    with st.spinner("DB 접속 및 데이터 로딩 중..."):
         st.session_state.db = load_data_from_sheet()
 
-if "history" not in st.session_state: st.session_state.history = {} # History는 로컬이나 별도 시트 구현 가능(현재는 임시)
+if "history" not in st.session_state: st.session_state.history = {} 
 if "quote_step" not in st.session_state: st.session_state.quote_step = 1
 if "quote_items" not in st.session_state: st.session_state.quote_items = {}
 if "services" not in st.session_state: st.session_state.services = []
@@ -463,22 +475,12 @@ if "current_quote_name" not in st.session_state: st.session_state.current_quote_
 if "auth_admin" not in st.session_state: st.session_state.auth_admin = False
 if "auth_price" not in st.session_state: st.session_state.auth_price = False
 
-# 기본값
-DEFAULT_DATA = {"config": {"password": "1234"}, "products":[], "sets":{}}
-if not st.session_state.db: st.session_state.db = DEFAULT_DATA
-if "config" not in st.session_state.db: st.session_state.db["config"] = {"password": "1234"}
-
 st.set_page_config(layout="wide", page_title="루퍼젯 프로 매니저 V10.0")
 st.title("💧 루퍼젯 프로 매니저 V10.0 (Cloud)")
 
-# 컬럼 매핑
-COL_MAP = {"품목코드": "code", "카테고리": "category", "제품명": "name", "규격": "spec", "단위": "unit", "1롤길이(m)": "len_per_unit", "매입단가": "price_buy", "총판가1": "price_d1", "총판가2": "price_d2", "대리점가": "price_agy", "소비자가": "price_cons", "이미지데이터": "image"}
-REV_COL_MAP = {v: k for k, v in COL_MAP.items()}
-
 # --- 사이드바 ---
 with st.sidebar:
-    st.header("🗂️ 견적 보관함")
-    # *참고: History 저장은 현재 세션/로컬에만 유지됩니다. 시트에 저장하려면 별도 구현 필요*
+    st.header("🗂️ 견적 보관함 (임시)")
     q_name = st.text_input("현장명", value=st.session_state.current_quote_name)
     c1, c2 = st.columns(2)
     with c1:
@@ -515,7 +517,7 @@ if mode == "관리자 모드":
         
         with t1:
             st.markdown("##### 🔍 제품 및 엑셀 관리")
-            with st.expander("📂 엑셀 데이터 등록/다운로드 (클릭)", expanded=True):
+            with st.expander("📂 엑셀 데이터 등록/다운로드", expanded=True):
                 ec1, ec2 = st.columns(2)
                 with ec1:
                     df = pd.DataFrame(st.session_state.db["products"]).rename(columns=REV_COL_MAP)
@@ -524,19 +526,16 @@ if mode == "관리자 모드":
                     with pd.ExcelWriter(buf, engine='xlsxwriter') as w: df.to_excel(w, index=False)
                     st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")
                 with ec2:
-                    uf = st.file_uploader("엑셀 업로드", ["xlsx"])
+                    uf = st.file_uploader("엑셀 업로드 (덮어쓰기)", ["xlsx"])
                     if uf and st.button("시트에 덮어쓰기"):
                         try:
                             ndf = pd.read_excel(uf).rename(columns=COL_MAP).fillna(0)
-                            # 기존 이미지 정보 보존 로직은 시트에서 처리
-                            # 여기서는 단순히 리스트 변환해서 업로드
                             nrec = ndf.to_dict('records')
                             save_products_to_sheet(nrec)
-                            st.session_state.db = load_data_from_sheet() # 리로드
+                            st.session_state.db = load_data_from_sheet() 
                             st.success("업로드 및 동기화 완료"); st.rerun()
                         except Exception as e: st.error(e)
 
-            # 이미지 업로드
             st.divider()
             st.markdown("##### 🖼️ 이미지 드라이브 업로드")
             c1, c2, c3 = st.columns([2, 2, 1])
@@ -547,12 +546,11 @@ if mode == "관리자 모드":
                 st.write(""); st.write("")
                 if st.button("드라이브 저장"):
                     if ifile:
-                        with st.spinner("드라이브 업로드 중..."):
-                            # 파일명: 제품명.jpg
+                        with st.spinner("업로드 중..."):
                             fname = f"{tp}_{ifile.name}"
-                            fid = upload_image_to_drive(ifile, fname)
+                            fid = upload_image_to_drive(ifile, fname) # 파일명만 리턴
                             if fid:
-                                # 로컬 DB 및 시트 업데이트
+                                # 로컬 및 시트 업데이트
                                 for p in st.session_state.db["products"]:
                                     if p["name"] == tp: p["image"] = fid
                                 save_products_to_sheet(st.session_state.db["products"])
@@ -564,14 +562,12 @@ if mode == "관리자 모드":
             cat = st.selectbox("분류", ["주배관세트", "가지관세트", "기타자재"])
             cset = st.session_state.db["sets"].get(cat, {})
             
-            # 현황표
             if cset:
                 set_list = [{"세트명": k, "부품수": len(v.get("recipe", {}))} for k,v in cset.items()]
                 st.dataframe(pd.DataFrame(set_list), use_container_width=True, on_select="rerun", selection_mode="single-row", key="set_table")
                 sel_rows = st.session_state.set_table.get("selection", {}).get("rows", [])
                 if sel_rows:
-                    sel_idx = sel_rows[0]
-                    target_set = set_list[sel_idx]["세트명"]
+                    target_set = set_list[sel_rows[0]]["세트명"]
                     if st.button(f"'{target_set}' 수정하기"):
                         st.session_state.temp_set_recipe = cset[target_set].get("recipe", {}).copy()
                         st.session_state.target_set_edit = target_set
@@ -581,7 +577,6 @@ if mode == "관리자 모드":
             mt = st.radio("작업", ["신규", "수정"], horizontal=True)
             sub_cat = None
             if cat == "주배관세트": sub_cat = st.selectbox("하위분류", ["50mm", "40mm", "기타"], key="sub_c")
-            
             products_obj = st.session_state.db["products"]
 
             if mt == "신규":
@@ -620,7 +615,10 @@ if mode == "관리자 모드":
                          save_sets_to_sheet(st.session_state.db["sets"]); st.rerun()
 
         with t3:
-            st.write("설정 기능 (비밀번호 등은 시트 Config 시트 등을 활용해 확장 가능)")
+            new_pw = st.text_input("새 관리자 비밀번호", type="password")
+            if st.button("변경"):
+                st.session_state.db["config"]["password"] = new_pw
+                save_config_to_sheet(st.session_state.db["config"]); st.success("변경됨")
 
 # --- [견적 모드] ---
 else:
@@ -631,13 +629,11 @@ else:
         st.subheader("STEP 1. 물량 입력")
         sets = st.session_state.db.get("sets", {})
         
-        # 헬퍼
         def render_inputs(d, pf):
             cols = st.columns(4)
             res = {}
             for i, (n, v) in enumerate(d.items()):
                 with cols[i%4]:
-                    # 이미지 표시 (드라이브에서 로딩)
                     img_name = v.get("image") if isinstance(v, dict) else None
                     if img_name:
                         b64 = get_image_from_drive(img_name)
@@ -791,3 +787,4 @@ else:
             if st.button("⬅️ 수정"): st.session_state.quote_step = 2; st.rerun()
         with c2:
             if st.button("🔄 처음으로"): st.session_state.quote_step = 1; st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.current_quote_name = ""; st.rerun()
+                

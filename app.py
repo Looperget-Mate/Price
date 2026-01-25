@@ -131,7 +131,7 @@ def get_image_from_drive(filename):
         img.save(buffer, format="JPEG")
         return f"data:image/jpeg;base64,{base64.b64encode(buffer.getvalue()).decode()}"
     except Exception as e:
-        print(f"이미지 다운로드 실패 ({filename}): {e}")
+        # print(f"이미지 다운로드 실패 ({filename}): {e}")
         return None
 
 def list_files_in_drive_folder():
@@ -163,6 +163,10 @@ def list_files_in_drive_folder():
 # --- 구글 시트 함수 ---
 SHEET_NAME = "Looperget_DB"
 
+# [수정] 컬럼 매핑에 단가(현장) 확실하게 포함
+COL_MAP = {"품목코드": "code", "카테고리": "category", "제품명": "name", "규격": "spec", "단위": "unit", "1롤길이(m)": "len_per_unit", "매입단가": "price_buy", "총판가1": "price_d1", "총판가2": "price_d2", "대리점가": "price_agy", "소비자가": "price_cons", "단가(현장)": "price_site", "이미지데이터": "image"}
+REV_COL_MAP = {v: k for k, v in COL_MAP.items()}
+
 def init_db():
     """DB 시트 연결 및 초기화"""
     if not gc: return None, None
@@ -173,7 +177,6 @@ def init_db():
             sh = gc.create(SHEET_NAME)
             sh.add_worksheet(title="Products", rows=100, cols=20)
             sh.add_worksheet(title="Sets", rows=100, cols=10)
-            # [수정] 단가(현장) 컬럼 추가
             sh.worksheet("Products").append_row(list(COL_MAP.keys()))
             sh.worksheet("Sets").append_row(["세트명", "카테고리", "하위분류", "이미지파일명", "레시피JSON"])
         except Exception as e:
@@ -210,9 +213,11 @@ def load_data_from_sheet():
                         new_rec[COL_MAP[k]] = str(v).zfill(5)
                     else:
                         new_rec[COL_MAP[k]] = v
-            # 이미지
-            if "image" in new_rec and new_rec["image"]:
-                pass 
+            
+            # [안전장치] 만약 시트에 '단가(현장)'이 없어서 누락되었다면 0으로 채움
+            if "price_site" not in new_rec:
+                new_rec["price_site"] = 0
+
             data["products"].append(new_rec)
     except Exception as e:
         st.error(f"🚨 데이터 로드 오류 발생: {e}")
@@ -279,11 +284,10 @@ def save_sets_to_sheet(sets_dict):
 
 
 # ==========================================
-# 2. PDF 생성 엔진 (개선된 양식 적용)
+# 2. PDF 생성 엔진
 # ==========================================
 class PDF(FPDF):
     def header(self):
-        # 폰트 로드
         if os.path.exists(FONT_FILE):
             self.add_font('NanumGothic', '', FONT_FILE, uni=True)
             if os.path.exists(FONT_BOLD_FILE):
@@ -291,7 +295,6 @@ class PDF(FPDF):
             self.set_font('NanumGothic', 'B' if os.path.exists(FONT_BOLD_FILE) else '', 20) 
         else: self.set_font('Helvetica', 'B', 20)
         
-        # 타이틀
         self.cell(0, 15, '견 적 서 (Quotation)', align='C', new_x="LMARGIN", new_y="NEXT")
         self.set_font('NanumGothic', '', 9) if os.path.exists(FONT_FILE) else self.set_font('Helvetica', '', 9)
         self.ln(2)
@@ -302,7 +305,6 @@ class PDF(FPDF):
             self.set_font('NanumGothic', '', 8)
         else:
             self.set_font('Helvetica', 'I', 8)
-        # 페이지 번호만 표시
         self.cell(0, 5, f'Page {self.page_no()}', align='C')
 
 def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, recipient_info):
@@ -318,11 +320,8 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     
     pdf.set_font(font_name, '', 10)
 
-    # --- [1. 사업자 정보 표 (첫 페이지 상단에만)] ---
-    # 왼쪽: 수신자 정보 / 오른쪽: 공급자 정보
+    # --- [1. 사업자 정보 표] ---
     pdf.set_fill_color(255, 255, 255)
-    
-    # 공급자 정보 (고정)
     supplier_info = {
         "상호": "(주)신진켐텍",
         "대표자": "박형석 (인)",
@@ -331,7 +330,6 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         "웹사이트": "www.sjct.kr / support@sjct.kr"
     }
 
-    # 좌표 저장
     top_y = pdf.get_y()
     
     # 왼쪽 (수신자)
@@ -348,7 +346,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     pdf.cell(25, 6, "주소:", border=0)
     pdf.cell(65, 6, f"{recipient_info.get('addr', '')}", border="B", ln=1)
     
-    # 오른쪽 (공급자) - 박스 형태로
+    # 오른쪽 (공급자)
     pdf.set_xy(105, top_y)
     pdf.set_font(font_name, 'B' if has_bold else '', 10)
     pdf.cell(90, 8, " [ 공급자 정보 ]", border=0, ln=1)
@@ -359,7 +357,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     pdf.set_xy(box_x, box_y)
     pdf.set_font(font_name, '', 9)
     pdf.cell(20, 6, "등록번호", border=1, align='C')
-    pdf.cell(75, 6, "123-45-67890", border=1, align='C', ln=1) # 사업자번호 예시
+    pdf.cell(75, 6, "123-45-67890", border=1, align='C', ln=1) 
     
     pdf.set_x(box_x)
     pdf.cell(20, 6, "상호", border=1, align='C')
@@ -368,12 +366,12 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     pdf.cell(25, 6, supplier_info["대표자"], border=1, align='C', ln=1)
     
     pdf.set_x(box_x)
-    pdf.cell(20, 12, "주소", border=1, align='C') # 높이 2배
+    pdf.cell(20, 12, "주소", border=1, align='C')
     pdf.multi_cell(75, 6, supplier_info["주소"], border=1, align='L')
     
     pdf.set_xy(box_x, pdf.get_y())
     pdf.cell(20, 6, "업태/종목", border=1, align='C')
-    pdf.cell(35, 6, "도소매 / 농자재", border=1, align='C') # 예시
+    pdf.cell(35, 6, "도소매 / 농자재", border=1, align='C') 
     pdf.cell(15, 6, "전화", border=1, align='C')
     pdf.cell(25, 6, "031-638-1809", border=1, align='C', ln=1)
     
@@ -382,8 +380,6 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     pdf.cell(75, 6, "support@sjct.kr / www.sjct.kr", border=1, align='C', ln=1)
 
     pdf.ln(5)
-    
-    # 견적일 및 유효기간
     pdf.set_font(font_name, '', 9)
     pdf.cell(0, 5, f"견적일자: {quote_date}   (유효기간: 견적일로부터 15일)", align='R', ln=1)
     pdf.ln(2)
@@ -397,12 +393,12 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     pdf.cell(12, h_height, "수량", border=1, align='C', fill=True)
 
     if form_type == "basic":
-        # 기본 양식 (소비자가 또는 현장단가)
-        pdf.cell(35, h_height, f"단가 ({price_labels[0]})", border=1, align='C', fill=True)
+        # 기본 양식: 단가 라벨 표시
+        label_text = price_labels[0] if price_labels else "단가"
+        pdf.cell(35, h_height, f"단가 ({label_text})", border=1, align='C', fill=True)
         pdf.cell(35, h_height, "금액", border=1, align='C', fill=True)
         pdf.cell(38, h_height, "비고", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
     else:
-        # 이익 분석 양식
         l1, l2 = price_labels[0], price_labels[1]
         pdf.set_font(font_name, '', 8)
         pdf.cell(18, h_height, f"{l1}단가", border=1, align='C', fill=True)
@@ -446,7 +442,6 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         # 페이지 넘김 체크
         if pdf.get_y() > 250:
             pdf.add_page()
-            # 새 페이지에서는 헤더 다시 그리기 (표 헤더만)
             pdf.set_fill_color(240, 240, 240)
             pdf.cell(15, h_height, "IMG", border=1, align='C', fill=True)
             pdf.cell(45, h_height, "품목정보", border=1, align='C', fill=True) 
@@ -566,7 +561,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         pdf.cell(40, 10, f"{t2_final:,}", border=1, align='R')
         pdf.cell(28, 10, f"({total_profit:,})", border=1, align='R')
     
-    # [수정] 마지막 페이지 하단 회사명
+    # 마지막 회사명
     pdf.ln(10)
     pdf.set_font(font_name, 'B' if has_bold else '', 16)
     pdf.cell(0, 10, "주식회사 신진켐텍", align='C', ln=1)
@@ -597,10 +592,6 @@ if "config" not in st.session_state.db: st.session_state.db["config"] = {"passwo
 
 st.set_page_config(layout="wide", page_title="루퍼젯 프로 매니저 V10.0")
 st.title("💧 루퍼젯 프로 매니저 V10.0 (Cloud)")
-
-# [수정] 컬럼 매핑에 단가(현장) 추가
-COL_MAP = {"품목코드": "code", "카테고리": "category", "제품명": "name", "규격": "spec", "단위": "unit", "1롤길이(m)": "len_per_unit", "매입단가": "price_buy", "총판가1": "price_d1", "총판가2": "price_d2", "대리점가": "price_agy", "소비자가": "price_cons", "단가(현장)": "price_site", "이미지데이터": "image"}
-REV_COL_MAP = {v: k for k, v in COL_MAP.items()}
 
 # --- 사이드바 ---
 with st.sidebar:
@@ -649,35 +640,21 @@ if mode == "관리자 모드":
             st.markdown("##### 🔍 제품 및 엑셀 관리")
             with st.expander("📂 엑셀 데이터 등록/다운로드 (클릭)", expanded=True):
                 # 1. 상단: 데이터 테이블 (전체 너비)
-                # [수정] 데이터 프레임 준비 (이미지 포함)
-                raw_df = pd.DataFrame(st.session_state.db["products"])
+                df = pd.DataFrame(st.session_state.db["products"]).rename(columns=REV_COL_MAP)
+                # 이미지 데이터 처리
+                if "이미지데이터" in df.columns: 
+                    df["이미지데이터"] = df["이미지데이터"].apply(lambda x: x if x else "")
                 
-                # 이미지 URL 변환 (드라이브 파일을 바로 보여줄 수 없으므로 파일명만 표시하거나, 썸네일 URL을 써야함)
-                # 여기서는 'image_preview'용으로 파일명을 보여주고, 데이터프레임 설정으로 이미지를 보여줄 준비만 함.
-                # 실제 이미지를 보여주려면 URL이 필요하나, 현재 Base64 방식이라 DataFrame에 직접 넣기 무거움.
-                # 차선책: 이미지 유무를 아이콘으로 표시하거나, Base64를 제한적으로 로드.
-                # 사용자 요청: "이미지가 연결되어있다면 여기서 바로 확인할 수 있겠지"
-                # -> Base64를 ImageColumn에 넣으면 보임.
-                
-                display_df = raw_df.copy()
-                
-                # Base64 이미지 로드 (주의: 데이터 많으면 느려질 수 있음)
-                # 성능을 위해 상위 50개만 보여주거나, 아니면 파일명만 보여주는게 안전하지만, 요청대로 시도.
-                # 여기서는 안전하게 '이미지데이터' 컬럼에 파일명이 있으면 '🖼️' 표시, 없으면 '' 표시로 대체하는게 현실적임.
-                # 하지만 요청은 "이미지를 볼 수 있게" 이므로, column_config.ImageColumn을 활용.
-                # 다만 로컬 파일 경로가 아니므로, 실제로는 '미리보기'는 어렵고 '연결됨' 확인용으로 파일명 표시가 최선.
-                # (웹 앱에서 로컬 경로 이미지는 보안상 안 보임)
-                
-                # 컬럼 순서 재배치 및 한글 변환
-                # 품목코드/이미지/카테고리/제품명/규격/단위/1m롤길이(m)/총판가1/총판가2/대리점가/소비자가/단가(현장)
+                total_items = len(df)
+                linked_items = len(df[df["이미지데이터"] != ""])
+                st.info(f"📊 현재 이미지 연결 상태: 총 {total_items}개 중 {linked_items}개 연결됨 ({linked_items/total_items*100:.1f}%)")
                 
                 ordered_cols = ["code", "image", "category", "name", "spec", "unit", "len_per_unit", "price_d1", "price_d2", "price_agy", "price_cons", "price_site"]
                 
-                # 없는 컬럼 추가 (price_site 등)
                 for c in ordered_cols:
-                    if c not in display_df.columns: display_df[c] = ""
+                    if c not in df.columns: df[c] = ""
                 
-                final_df = display_df[ordered_cols].rename(columns=REV_COL_MAP)
+                final_df = df[ordered_cols].rename(columns=REV_COL_MAP)
                 
                 st.dataframe(
                     final_df, 
@@ -914,7 +891,7 @@ else:
             row = {"품목": n, "규격": inf.get("spec", ""), "수량": q, "소비자가": cpr, "합계": cpr*q}
             if view != "소비자가":
                 k, l = key_map[view]
-                pr = inf.get(k, 0)
+                pr = int(inf.get(k, 0)) if inf.get(k) else 0
                 row[f"{l}단가"] = pr; row[f"{l}합계"] = pr*q
                 row["이익"] = row["합계"] - row[f"{l}합계"]
                 row["율(%)"] = (row["이익"]/row["합계"]*100) if row["합계"] else 0
@@ -948,7 +925,6 @@ else:
         if not st.session_state.current_quote_name: st.warning("저장해주세요!")
         st.markdown("##### 🖨️ 수신자 정보 입력")
         
-        # [수정] 수신자 정보 입력 UI
         with st.container(border=True):
             rc1, rc2 = st.columns(2)
             with rc1:
@@ -958,7 +934,6 @@ else:
                 r_phone = st.text_input("전화번호", value=st.session_state.recipient_info.get("phone", ""))
                 r_addr = st.text_input("주소", value=st.session_state.recipient_info.get("addr", ""))
             
-            # 입력값 저장
             st.session_state.recipient_info = {"name": r_name, "contact": r_contact, "phone": r_phone, "addr": r_addr}
 
         st.markdown("##### 🖨️ 출력 옵션")
@@ -966,16 +941,15 @@ else:
         with c_date: q_date = st.date_input("견적일", datetime.datetime.now())
         with c_opt1: form_type = st.radio("양식", ["기본 양식", "이익 분석 양식"])
         with c_opt2:
-            # [수정] 단가(현장) 선택 가능하도록 수정
+            # [수정] 기본 양식에서도 현장 단가 선택 가능하게 변경
             if form_type == "기본 양식":
-                opts = ["소비자가", "단가(현장)"] # 기본 양식 선택지 변경
+                opts = ["소비자가", "단가(현장)"]
                 sel = st.multiselect("출력 단가 (1개 선택)", opts, default=["소비자가"], max_selections=1)
             else:
                 opts = ["소비자가"]
                 if st.session_state.auth_price: opts = ["매입단가", "총판가1", "총판가2", "대리점가", "단가(현장)", "소비자가"]
                 sel = st.multiselect("비교 단가 (2개)", opts, max_selections=2)
             
-            # 이익 분석 선택 시 비밀번호
             if "이익" in form_type and not st.session_state.auth_price:
                 st.warning("🔒 원가 정보를 보려면 비밀번호를 입력하세요.")
                 c_pw, c_btn = st.columns([2,1])
@@ -1008,7 +982,6 @@ else:
                 "수량": int(q), 
                 "image_data": inf.get("image")
             }
-            # 숫자 변환 (빈 문자열 처리)
             try: p1_val = int(inf.get(pk[0], 0))
             except: p1_val = 0
             d["price_1"] = p1_val

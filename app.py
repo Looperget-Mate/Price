@@ -168,7 +168,7 @@ def load_data_from_sheet():
                     if k == "품목코드": new_rec[COL_MAP[k]] = str(v).zfill(5)
                     else: new_rec[COL_MAP[k]] = v
             
-            # [안전장치] 빈 값 처리 (특히 단가 부분)
+            # [안전장치] 빈 값 처리
             for p_col in ["price_site", "price_cons", "price_buy", "price_d1", "price_d2", "price_agy"]:
                 if p_col not in new_rec or new_rec[p_col] == "":
                     new_rec[p_col] = 0
@@ -346,7 +346,6 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
             pdf.cell(15, h, f"{profit:,}", border=1, align='R'); pdf.cell(13, h, f"{rate:.1f}%", border=1, align='C')
             pdf.set_font(font_name, '', 9); pdf.ln()
 
-    # 소계 및 총계 (기존 로직과 동일하므로 생략하지 않고 포함)
     pdf.set_fill_color(230, 230, 230); pdf.set_font(font_name, 'B' if has_bold else '', 9)
     pdf.cell(70, 10, "소 계 (Sub Total)", border=1, align='C', fill=True)
     pdf.cell(12, 10, f"{sum_qty:,}", border=1, align='C', fill=True)
@@ -434,7 +433,6 @@ with st.sidebar:
 if mode == "관리자 모드":
     st.header("🛠 관리자 모드 (Google Cloud 연동)")
     
-    # [수정] 버튼 위치를 비밀번호 입력 전에도 보이게 함
     if st.button("🔄 구글시트 데이터 새로고침 (오류 시 클릭)", type="primary"):
         st.session_state.db = load_data_from_sheet()
         st.success("데이터를 다시 불러왔습니다!")
@@ -455,7 +453,6 @@ if mode == "관리자 모드":
                 df = pd.DataFrame(st.session_state.db["products"]).rename(columns=REV_COL_MAP)
                 if "이미지데이터" in df.columns: df["이미지데이터"] = df["이미지데이터"].apply(lambda x: x if x else "")
                 
-                # [수정] 단가(현장) 등 숫자 컬럼 강제 변환 (NaN 방지)
                 numeric_cols = ["price_buy", "price_d1", "price_d2", "price_agy", "price_cons", "price_site"]
                 for col_key in numeric_cols:
                     k_name = REV_COL_MAP.get(col_key, "")
@@ -683,7 +680,9 @@ else:
         with c_opt1: form_type = st.radio("양식", ["기본 양식", "이익 분석 양식"])
         with c_opt2:
             if form_type == "기본 양식":
-                opts = ["소비자가", "단가(현장)"]; sel = st.multiselect("출력 단가 (1개 선택)", opts, default=["소비자가"], max_selections=1)
+                # [수정] 라디오 버튼으로 변경하여 직관적 선택 가능 (단일 선택)
+                target_price = st.radio("출력 단가 선택", ["소비자가", "단가(현장)"], horizontal=True)
+                sel = [target_price] # 리스트 형태로 맞춤
             else:
                 opts = ["소비자가"]; 
                 if st.session_state.auth_price: opts = ["매입단가", "총판가1", "총판가2", "대리점가", "단가(현장)", "소비자가"]

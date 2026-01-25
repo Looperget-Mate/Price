@@ -126,6 +126,35 @@ def get_image_from_drive(filename):
     except Exception:
         return None
 
+def list_files_in_drive_folder():
+    """폴더 내의 모든 파일 목록 가져오기 (파일명 -> ID 매핑)"""
+    folder_id = get_or_create_drive_folder()
+    if not folder_id: return {}
+    
+    try:
+        query = f"'{folder_id}' in parents and trashed=false"
+        # 페이지네이션 처리 (파일이 많을 경우 대비)
+        files = []
+        page_token = None
+        while True:
+            response = drive_service.files().list(q=query, spaces='drive', fields='nextPageToken, files(id, name)', pageToken=page_token).execute()
+            files.extend(response.get('files', []))
+            page_token = response.get('nextPageToken', None)
+            if page_token is None:
+                break
+        
+        # 파일명(확장자 제외) -> 파일명(전체) 매핑 생성
+        # 예: '00200.jpg' -> key: '00200', value: '00200.jpg'
+        file_map = {}
+        for f in files:
+            name_stem = os.path.splitext(f['name'])[0] # 확장자 제거
+            file_map[name_stem] = f['name'] # 실제 파일명 저장
+            
+        return file_map
+    except Exception as e:
+        st.error(f"파일 목록 조회 실패: {e}")
+        return {}
+
 # --- 구글 시트 함수 ---
 SHEET_NAME = "Looperget_DB"
 
@@ -137,22 +166,18 @@ def init_db():
     except gspread.exceptions.SpreadsheetNotFound:
         try:
             sh = gc.create(SHEET_NAME)
-            # 초기 시트 생성
             sh.add_worksheet(title="Products", rows=100, cols=20)
             sh.add_worksheet(title="Sets", rows=100, cols=10)
-            # 헤더 추가
             sh.worksheet("Products").append_row(list(COL_MAP.keys()))
             sh.worksheet("Sets").append_row(["세트명", "카테고리", "하위분류", "이미지파일명", "레시피JSON"])
         except Exception as e:
             st.error(f"시트 생성 실패: {e}")
             return None, None
 
-    # --- 시트 연결 확인용 코드 ---
     if sh:
         st.sidebar.success(f"현재 연결된 시트: {sh.title}")
         st.sidebar.markdown(f"👉 [구글 시트 바로가기]({sh.url})")
     
-    # 워크시트 가져오기 (없으면 생성)
     try: ws_prod = sh.worksheet("Products")
     except: ws_prod = sh.add_worksheet(title="Products", rows=100, cols=20)
     
@@ -175,13 +200,10 @@ def load_data_from_sheet():
             new_rec = {}
             for k, v in rec.items():
                 if k in COL_MAP:
-                    # [수정] 품목코드 5자리 강제 변환 (00200 유지)
                     if k == "품목코드":
                         new_rec[COL_MAP[k]] = str(v).zfill(5)
                     else:
                         new_rec[COL_MAP[k]] = v
-            
-            # 이미지 처리
             if "image" in new_rec and new_rec["image"]:
                 pass 
             data["products"].append(new_rec)
@@ -218,17 +240,10 @@ def save_products_to_sheet(products_list):
     ws_prod, _ = init_db()
     if not ws_prod: return
     
-    # DataFrame 변환 후 업로드
     df = pd.DataFrame(products_list)
-    
-    # [수정] 품목코드 00 채우기 (저장할 때도 확실하게)
     if "code" in df.columns:
         df["code"] = df["code"].astype(str).apply(lambda x: x.zfill(5))
-
-    # 영문 키 -> 한글 키 변환
     df_upload = df.rename(columns=REV_COL_MAP)
-    
-    # 시트 클리어 후 헤더+데이터 쓰기
     ws_prod.clear()
     ws_prod.update([df_upload.columns.values.tolist()] + df_upload.values.tolist())
 
@@ -257,7 +272,7 @@ def save_sets_to_sheet(sets_dict):
 
 
 # ==========================================
-# 2. PDF 생성 엔진 (Drive 이미지 연동 & 3줄 출력 & 텍스트 삭제)
+# 2. PDF 생성 엔진
 # ==========================================
 class PDF(FPDF):
     def header(self):
@@ -339,7 +354,6 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         qty = int(item.get("수량", 0))
         img_filename = item.get("image_data", None)
         
-        # PDF 생성을 위해 드라이브에서 이미지 Fetch
         img_b64 = None
         if img_filename:
             img_b64 = get_image_from_drive(img_filename)
@@ -361,7 +375,6 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         h = 15
         x, y = pdf.get_x(), pdf.get_y()
         
-        # 1. 이미지
         pdf.cell(15, h, "", border=1)
         if img_b64:
             try:
@@ -372,26 +385,21 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
                 os.unlink(tmp_path)
             except: pass
 
-        # 2. 품목정보 (3줄 출력) [수정: Spec/Code 텍스트 삭제]
         pdf.set_xy(x+15, y)
         pdf.cell(45, h, "", border=1) 
         
-        # 줄 1: 제품명
         pdf.set_xy(x+15, y+1.5) 
         pdf.set_font(font_name, '', 8) 
         pdf.multi_cell(45, 4, name, align='L')
         
-        # 줄 2: 규격 (텍스트 삭제)
         pdf.set_xy(x+15, y+6.0)
         pdf.set_font(font_name, '', 7) 
         pdf.cell(45, 3, f"{spec}", align='L') 
         
-        # 줄 3: 코드 (텍스트 삭제)
         pdf.set_xy(x+15, y+10.0)
         pdf.set_font(font_name, '', 7)
         pdf.cell(45, 3, f"{code}", align='L') 
 
-        # 좌표 복귀 및 나머지 컬럼
         pdf.set_xy(x+60, y)
         pdf.set_font(font_name, '', 9) 
 
@@ -573,9 +581,36 @@ if mode == "관리자 모드":
                             st.success("업로드 및 동기화 완료 (품목코드 00 유지됨)"); st.rerun()
                         except Exception as e: st.error(e)
 
-            # 이미지 업로드
+            # 이미지 일괄 동기화 (새 기능 추가됨!)
             st.divider()
-            st.markdown("##### 🖼️ 이미지 드라이브 업로드")
+            st.markdown("##### 🔄 드라이브 이미지 일괄 동기화")
+            with st.expander("구글 드라이브 폴더의 이미지와 자동 연결하기", expanded=False):
+                st.info("💡 사용법: 이미지 파일명을 '품목코드.jpg' (예: 00200.jpg)로 저장해서 구글 드라이브 'Looperget_Images' 폴더에 먼저 업로드하세요.")
+                if st.button("🔄 드라이브 이미지 자동 연결 실행"):
+                    with st.spinner("드라이브 폴더를 검색하는 중..."):
+                        file_map = list_files_in_drive_folder() # 모든 파일 가져오기
+                        if not file_map:
+                            st.warning("폴더가 비어있거나 찾을 수 없습니다.")
+                        else:
+                            updated_count = 0
+                            products = st.session_state.db["products"]
+                            for p in products:
+                                code = str(p.get("code", "")).strip()
+                                # 코드가 파일명 목록에 있으면 연결
+                                if code and code in file_map:
+                                    p["image"] = file_map[code] # 파일명(확장자 포함) 저장
+                                    updated_count += 1
+                            
+                            if updated_count > 0:
+                                save_products_to_sheet(products)
+                                st.success(f"✅ 총 {updated_count}개의 제품 이미지를 연결했습니다!")
+                                st.session_state.db = load_data_from_sheet() # 리로드
+                            else:
+                                st.warning("매칭되는 이미지가 없습니다. (파일명이 품목코드와 같은지 확인하세요)")
+
+            # 개별 이미지 업로드 (기존 유지)
+            st.divider()
+            st.markdown("##### 🖼️ 개별 이미지 업로드")
             c1, c2, c3 = st.columns([2, 2, 1])
             pn = [p["name"] for p in st.session_state.db["products"]]
             with c1: tp = st.selectbox("대상 품목", pn)

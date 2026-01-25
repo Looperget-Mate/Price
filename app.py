@@ -15,7 +15,8 @@ from fpdf import FPDF
 import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+# [수정] 다운로드 기능 강화를 위한 라이브러리 추가
+from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 
 # ==========================================
 # 1. 설정 및 구글 연동 유틸리티
@@ -114,16 +115,25 @@ def get_image_from_drive(filename):
         
         file_id = files[0]['id']
         request = drive_service.files().get_media(fileId=file_id)
-        # 작은 파일은 바로 다운로드
-        downloader = request.execute()
         
-        img = Image.open(io.BytesIO(downloader))
+        # [수정] 더 안정적인 다운로드 방식 (MediaIoBaseDownload) 사용
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while done is False:
+            status, done = downloader.next_chunk()
+        
+        fh.seek(0) # 파일 포인터를 처음으로 이동
+        
+        img = Image.open(fh)
         img = img.convert('RGB')
         img.thumbnail((300, 225))
         buffer = io.BytesIO()
         img.save(buffer, format="JPEG")
         return f"data:image/jpeg;base64,{base64.b64encode(buffer.getvalue()).decode()}"
-    except Exception:
+    except Exception as e:
+        # 에러 발생 시 로그 출력 (디버깅용)
+        print(f"이미지 다운로드 실패 ({filename}): {e}")
         return None
 
 def list_files_in_drive_folder():
@@ -133,7 +143,6 @@ def list_files_in_drive_folder():
     
     try:
         query = f"'{folder_id}' in parents and trashed=false"
-        # 페이지네이션 처리 (파일이 많을 경우 대비)
         files = []
         page_token = None
         while True:
@@ -143,12 +152,11 @@ def list_files_in_drive_folder():
             if page_token is None:
                 break
         
-        # 파일명(확장자 제외) -> 파일명(전체) 매핑 생성
-        # 예: '00200.jpg' -> key: '00200', value: '00200.jpg'
+        # 파일명(확장자 제외) -> 파일명(전체) 매핑
         file_map = {}
         for f in files:
-            name_stem = os.path.splitext(f['name'])[0] # 확장자 제거
-            file_map[name_stem] = f['name'] # 실제 파일명 저장
+            name_stem = os.path.splitext(f['name'])[0] 
+            file_map[name_stem] = f['name'] 
             
         return file_map
     except Exception as e:
@@ -204,6 +212,7 @@ def load_data_from_sheet():
                         new_rec[COL_MAP[k]] = str(v).zfill(5)
                     else:
                         new_rec[COL_MAP[k]] = v
+            # 이미지 데이터가 있으면 가져옴
             if "image" in new_rec and new_rec["image"]:
                 pass 
             data["products"].append(new_rec)
@@ -555,6 +564,11 @@ if mode == "관리자 모드":
                 if "이미지데이터" in df.columns: 
                     df["이미지데이터"] = df["이미지데이터"].apply(lambda x: x if x else "")
                 
+                # [수정] 이미지 연결 현황을 항상 보여줌 (메시지 사라짐 방지)
+                total_items = len(df)
+                linked_items = len(df[df["이미지데이터"] != ""])
+                st.info(f"📊 현재 이미지 연결 상태: 총 {total_items}개 중 {linked_items}개 연결됨 ({linked_items/total_items*100:.1f}%)")
+                
                 st.dataframe(df, use_container_width=True, hide_index=True)
                 
                 st.divider()
@@ -863,10 +877,18 @@ else:
             fdata.append(d)
         
         st.markdown("---")
-        cc = {"품목": st.column_config.TextColumn(disabled=True), "규격": st.column_config.TextColumn(disabled=True), "코드": st.column_config.TextColumn(disabled=True), "image_data": None, "수량": st.column_config.NumberColumn(step=1), "price_1": st.column_config.NumberColumn(label=sel[0] if sel else "단가", format="%d")}
+        # [수정] 화면에서 이미지 연결 여부 확인 가능하도록 컬럼 추가
+        cc = {
+            "품목": st.column_config.TextColumn(disabled=True), 
+            "규격": st.column_config.TextColumn(disabled=True), 
+            "코드": st.column_config.TextColumn(disabled=True), 
+            "image_data": st.column_config.TextColumn("이미지", disabled=True),
+            "수량": st.column_config.NumberColumn(step=1), 
+            "price_1": st.column_config.NumberColumn(label=sel[0] if sel else "단가", format="%d")
+        }
         if len(pk)>1: cc["price_2"] = st.column_config.NumberColumn(label=sel[1], format="%d")
         
-        disp_cols = ["품목", "규격", "코드", "단위", "수량", "price_1"]
+        disp_cols = ["품목", "규격", "코드", "image_data", "단위", "수량", "price_1"]
         if len(pk)>1: disp_cols.append("price_2")
         
         edited = st.data_editor(pd.DataFrame(fdata)[disp_cols], column_config=cc, use_container_width=True, hide_index=True)

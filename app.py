@@ -257,7 +257,7 @@ def save_sets_to_sheet(sets_dict):
 
 
 # ==========================================
-# 2. PDF 생성 엔진 (Drive 이미지 연동 & 3줄 출력 수정)
+# 2. PDF 생성 엔진 (Drive 이미지 연동 & 3줄 출력 & 텍스트 삭제)
 # ==========================================
 class PDF(FPDF):
     def header(self):
@@ -310,7 +310,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     pdf.set_fill_color(240, 240, 240)
     h_height = 10
     pdf.cell(15, h_height, "IMG", border=1, align='C', fill=True)
-    pdf.cell(45, h_height, "품목정보 (명/규격/코드)", border=1, align='C', fill=True) # 헤더 이름 변경
+    pdf.cell(45, h_height, "품목정보 (명/규격/코드)", border=1, align='C', fill=True) 
     pdf.cell(10, h_height, "단위", border=1, align='C', fill=True)
     pdf.cell(12, h_height, "수량", border=1, align='C', fill=True)
 
@@ -334,7 +334,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     for item in final_data_list:
         name = item.get("품목", "")
         spec = item.get("규격", "-")
-        code = str(item.get("코드", "")).zfill(5) # [수정] 코드 5자리로 확보
+        code = str(item.get("코드", "")).zfill(5) 
         
         qty = int(item.get("수량", 0))
         img_filename = item.get("image_data", None)
@@ -372,28 +372,28 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
                 os.unlink(tmp_path)
             except: pass
 
-        # 2. 품목정보 (3줄 출력) [수정됨]
+        # 2. 품목정보 (3줄 출력) [수정: Spec/Code 텍스트 삭제]
         pdf.set_xy(x+15, y)
-        pdf.cell(45, h, "", border=1) # 테두리 먼저 그리기
+        pdf.cell(45, h, "", border=1) 
         
         # 줄 1: 제품명
         pdf.set_xy(x+15, y+1.5) 
-        pdf.set_font(font_name, '', 8) # 폰트 살짝 작게
+        pdf.set_font(font_name, '', 8) 
         pdf.multi_cell(45, 4, name, align='L')
         
-        # 줄 2: 규격
+        # 줄 2: 규격 (텍스트 삭제)
         pdf.set_xy(x+15, y+6.0)
-        pdf.set_font(font_name, '', 7) # 더 작게
-        pdf.cell(45, 3, f"Spec: {spec}", align='L')
+        pdf.set_font(font_name, '', 7) 
+        pdf.cell(45, 3, f"{spec}", align='L') # Spec: 삭제
         
-        # 줄 3: 코드
+        # 줄 3: 코드 (텍스트 삭제)
         pdf.set_xy(x+15, y+10.0)
         pdf.set_font(font_name, '', 7)
-        pdf.cell(45, 3, f"Code: {code}", align='L')
+        pdf.cell(45, 3, f"{code}", align='L') # Code: 삭제
 
         # 좌표 복귀 및 나머지 컬럼
         pdf.set_xy(x+60, y)
-        pdf.set_font(font_name, '', 9) # 폰트 원상복구
+        pdf.set_font(font_name, '', 9) 
 
         pdf.cell(10, h, item.get("단위", "EA"), border=1, align='C')
         pdf.cell(12, h, str(qty), border=1, align='C')
@@ -781,8 +781,18 @@ else:
         with c_opt2:
             opts = ["소비자가"]
             if st.session_state.auth_price: opts = ["매입단가", "총판가1", "총판가2", "대리점가", "소비자가"]
+            
+            # [수정] 이익 분석 선택 시 비밀번호 입력창 바로 표시
             if "이익" in form_type and not st.session_state.auth_price:
-                st.error("비밀번호 해제 필요"); st.stop()
+                st.warning("🔒 원가 정보를 보려면 비밀번호를 입력하세요.")
+                c_pw, c_btn = st.columns([2,1])
+                with c_pw: input_pw = st.text_input("비밀번호", type="password", key="step3_pw")
+                with c_btn: 
+                    if st.button("해제", key="step3_btn"):
+                        if input_pw == st.session_state.db["config"]["password"]: 
+                            st.session_state.auth_price = True; st.rerun()
+                        else: st.error("불일치")
+                st.stop()
 
             if "기본" in form_type: sel = st.multiselect("출력 단가", opts, default=["소비자가"], max_selections=1)
             else: sel = st.multiselect("비교 단가 (2개)", opts, max_selections=2)
@@ -799,11 +809,10 @@ else:
         fdata = []
         for n, q in st.session_state.quote_items.items():
             inf = pdb.get(n, {})
-            # [수정] PDF 생성을 위해 '코드' 정보 추가
             d = {
                 "품목": n, 
                 "규격": inf.get("spec", ""), 
-                "코드": inf.get("code", ""), # 코드 정보 추가
+                "코드": inf.get("code", ""),
                 "단위": inf.get("unit", "EA"), 
                 "수량": int(q), 
                 "image_data": inf.get("image")
@@ -813,11 +822,9 @@ else:
             fdata.append(d)
         
         st.markdown("---")
-        # 화면 표시용 컬럼 설정
         cc = {"품목": st.column_config.TextColumn(disabled=True), "규격": st.column_config.TextColumn(disabled=True), "코드": st.column_config.TextColumn(disabled=True), "image_data": None, "수량": st.column_config.NumberColumn(step=1), "price_1": st.column_config.NumberColumn(label=sel[0] if sel else "단가", format="%d")}
         if len(pk)>1: cc["price_2"] = st.column_config.NumberColumn(label=sel[1], format="%d")
         
-        # 화면에는 코드도 보여주면 좋음
         disp_cols = ["품목", "규격", "코드", "단위", "수량", "price_1"]
         if len(pk)>1: disp_cols.append("price_2")
         
@@ -825,7 +832,6 @@ else:
         
         if sel:
             fmode = "basic" if "기본" in form_type else "profit"
-            # 편집된 내용으로 PDF 생성 (편집하면 수량 등이 바뀔 수 있으므로)
             pdf_b = create_advanced_pdf(edited.to_dict('records'), st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel)
             st.download_button("📥 PDF 다운로드", pdf_b, f"quote_{st.session_state.current_quote_name}.pdf", "application/pdf", type="primary")
 

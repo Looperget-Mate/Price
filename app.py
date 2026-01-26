@@ -24,7 +24,7 @@ FONT_FILE = "NanumGothic.ttf"
 FONT_BOLD_FILE = "NanumGothicBold.ttf"
 FONT_URL = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
 
-# 폰트 파일 검증 및 다운로드
+# 폰트 파일 검증 및 다운로드 (파일이 없거나 깨졌을 경우 다시 받음)
 if not os.path.exists(FONT_FILE) or os.path.getsize(FONT_FILE) < 100:
     import urllib.request
     try: 
@@ -227,7 +227,6 @@ def save_sets_to_sheet(sets_dict):
 # ==========================================
 class PDF(FPDF):
     def header(self):
-        # 폰트 로드 (실패시 Arial)
         if os.path.exists(FONT_FILE):
             try:
                 self.add_font('NanumGothic', '', FONT_FILE, uni=True)
@@ -263,7 +262,6 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         
         has_font = os.path.exists(FONT_FILE)
         font_name = 'NanumGothic' if has_font else 'Arial'
-        
         if has_font:
             try: pdf.add_font(font_name, '', FONT_FILE, uni=True)
             except: font_name = 'Arial'
@@ -406,7 +404,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         pdf.ln(10); pdf.set_font(font_name, '', 16)
         pdf.cell(0, 10, "주식회사 신진켐텍", align='C', ln=1)
         
-        # [수정] PDF 출력 방식 변경 (가장 안전한 방식)
+        # [수정] PDF 출력 인코딩 변경 (가장 안전한 방식)
         return pdf.output(dest='S').encode('latin-1')
         
     except Exception as e:

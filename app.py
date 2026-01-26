@@ -24,7 +24,7 @@ FONT_FILE = "NanumGothic.ttf"
 FONT_BOLD_FILE = "NanumGothicBold.ttf"
 FONT_URL = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
 
-# [수정] 폰트 파일 검증 및 다운로드 강화
+# 폰트 파일 검증 및 다운로드
 if not os.path.exists(FONT_FILE) or os.path.getsize(FONT_FILE) < 100:
     import urllib.request
     try: 
@@ -227,7 +227,6 @@ def save_sets_to_sheet(sets_dict):
 # ==========================================
 class PDF(FPDF):
     def header(self):
-        # 폰트가 있는지 확인하고 없으면 대체
         if os.path.exists(FONT_FILE):
             try:
                 self.add_font('NanumGothic', '', FONT_FILE, uni=True)
@@ -239,7 +238,6 @@ class PDF(FPDF):
             
         self.cell(0, 15, '견 적 서 (Quotation)', align='C', new_x="LMARGIN", new_y="NEXT")
         
-        # 본문 폰트 설정
         if os.path.exists(FONT_FILE):
             try:
                 self.set_font('NanumGothic', '', 9)
@@ -264,7 +262,6 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         pdf = PDF()
         pdf.add_page()
         
-        # 폰트 로드 재시도
         has_font = os.path.exists(FONT_FILE)
         font_name = 'NanumGothic' if has_font else 'Arial'
         
@@ -280,7 +277,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         top_y = pdf.get_y()
         
         pdf.set_xy(10, top_y)
-        pdf.set_font(font_name, '', 10) # Bold 제거 (안전성 위해)
+        pdf.set_font(font_name, '', 10)
         pdf.cell(90, 8, " [ 수신자 정보 ]", border=0, ln=1)
         pdf.set_font(font_name, '', 9)
         pdf.cell(25, 6, "현장/업체명:", border=0); pdf.cell(65, 6, f"{recipient_info.get('name', '')}", border="B", ln=1)
@@ -343,7 +340,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
                 rate = (profit / a2 * 100) if a2 else 0
 
             h = 15
-            if pdf.get_y() > 250: pdf.add_page() # 페이지 넘김
+            if pdf.get_y() > 250: pdf.add_page()
 
             x, y = pdf.get_x(), pdf.get_y()
             pdf.cell(15, h, "", border=1)
@@ -518,7 +515,7 @@ if mode == "관리자 모드":
                 ec1, ec2 = st.columns([1, 1])
                 with ec1:
                     buf = io.BytesIO()
-                    # [수정 완료] 안전한 문법으로 변경
+                    # [수정완료] 문법 오류 해결 (줄바꿈)
                     with pd.ExcelWriter(buf, engine='xlsxwriter') as w: 
                         df_disp[final_cols].to_excel(w, index=False)
                     st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")
@@ -613,7 +610,6 @@ if mode == "관리자 모드":
 else:
     st.markdown(f"### 📝 현장명: **{st.session_state.current_quote_name if st.session_state.current_quote_name else '(제목 없음)'}**")
     
-    # 이름 매핑
     products_db = st.session_state.db["products"]
     name_to_code = {p['name']: p['code'] for p in products_db}
 
@@ -818,14 +814,12 @@ else:
         if sel: sel = sorted(sel, key=lambda x: price_rank.get(x, 6))
 
         pkey = {"매입단가":"price_buy", "총판가1":"price_d1", "총판가2":"price_d2", "대리점가":"price_agy", "소비자가":"price_cons", "단가(현장)":"price_site"}
-        pdb_by_code = {p["code"]: p for p in st.session_state.db["products"]}
-        pk = [pkey[l] for l in sel] if sel else ["price_cons"]
+        pdb_by_code = {p["code"]: p for p in st.session_state.db["products"]}; pk = [pkey[l] for l in sel] if sel else ["price_cons"]
         
         fdata = []
         for code, q in st.session_state.quote_items.items():
             inf = pdb_by_code.get(code, {})
             if not inf: continue
-            
             n = inf['name']
             d = {"품목": n, "규격": inf.get("spec", ""), "코드": code, "단위": inf.get("unit", "EA"), "수량": int(q), "image_data": inf.get("image"), "order_no": inf.get("order_no", 9999)}
             try: p1_val = int(inf.get(pk[0], 0))

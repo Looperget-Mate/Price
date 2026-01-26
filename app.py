@@ -18,7 +18,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 
 # ==========================================
-# [설정] 페이지 기본 설정 (맨 위에 위치해야 함)
+# [설정] 페이지 기본 설정 (맨 위에 위치)
 # ==========================================
 st.set_page_config(layout="wide", page_title="루퍼젯 프로 매니저 V10.0")
 
@@ -29,8 +29,8 @@ FONT_FILE = "NanumGothic.ttf"
 FONT_BOLD_FILE = "NanumGothicBold.ttf"
 FONT_URL = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
 
-# 폰트 다운로드 (안전 장치)
-if not os.path.exists(FONT_FILE) or os.path.getsize(FONT_FILE) < 1000:
+# 폰트 다운로드
+if not os.path.exists(FONT_FILE) or os.path.getsize(FONT_FILE) < 100:
     import urllib.request
     try: urllib.request.urlretrieve(FONT_URL, FONT_FILE)
     except: pass
@@ -93,6 +93,7 @@ def get_image_from_drive(filename):
         
         file_id = files[0]['id']
         request = drive_service.files().get_media(fileId=file_id)
+        
         fh = io.BytesIO()
         downloader = MediaIoBaseDownload(fh, request)
         done = False
@@ -101,6 +102,7 @@ def get_image_from_drive(filename):
         fh.seek(0)
         img = Image.open(fh).convert('RGB')
         img.thumbnail((300, 225))
+        
         buffer = io.BytesIO()
         img.save(buffer, format="JPEG")
         return f"data:image/jpeg;base64,{base64.b64encode(buffer.getvalue()).decode()}"
@@ -149,7 +151,6 @@ def load_data_from_sheet():
                     if k == "품목코드": new_rec[COL_MAP[k]] = str(v).zfill(5)
                     else: new_rec[COL_MAP[k]] = v
             
-            # 숫자형 변환 및 기본값 처리
             if "order_no" not in new_rec or new_rec["order_no"] == "": new_rec["order_no"] = 9999
             else: 
                 try: new_rec["order_no"] = int(new_rec["order_no"])
@@ -167,16 +168,15 @@ def load_data_from_sheet():
     except Exception: pass 
 
     try:
-        ws_sets = sh.worksheet("Sets")
-        s_recs = ws_sets.get_all_records()
-        for r in s_recs:
-            c = r.get("카테고리")
-            n = r.get("세트명")
-            if c and n:
-                if c not in data["sets"]: data["sets"][c] = {}
-                try: js = json.loads(r.get("레시피JSON", "{}"))
+        set_records = ws_sets.get_all_records()
+        for rec in set_records:
+            cat = rec.get("카테고리", "")
+            name = rec.get("세트명", "")
+            if cat and name:
+                if cat not in data["sets"]: data["sets"][cat] = {}
+                try: js = json.loads(rec.get("레시피JSON", "{}"))
                 except: js = {}
-                data["sets"][c][n] = {"recipe": js, "image": r.get("이미지파일명", ""), "sub_cat": r.get("하위분류", "")}
+                data["sets"][cat][name] = {"recipe": js, "image": rec.get("이미지파일명", ""), "sub_cat": rec.get("하위분류", "")}
     except: pass
     
     return data
@@ -203,7 +203,7 @@ def save_sets_to_sheet(sets_dict):
     ws.update(rows)
 
 # ==========================================
-# 2. PDF 생성 (안전한 Latin-1 인코딩)
+# 2. PDF 생성 엔진
 # ==========================================
 class PDF(FPDF):
     def header(self):
@@ -239,128 +239,170 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         pdf = PDF()
         pdf.add_page()
         
-        font_ok = False
-        if os.path.exists(FONT_FILE):
-            try:
-                pdf.add_font('NanumGothic', '', FONT_FILE, uni=True)
-                font_ok = True
-            except: pass
+        has_font = os.path.exists(FONT_FILE) and os.path.getsize(FONT_FILE) > 1000
+        font_name = 'NanumGothic' if has_font else 'Arial'
+        if has_font:
+            try: pdf.add_font(font_name, '', FONT_FILE, uni=True)
+            except: font_name = 'Arial'
         
-        font_name = 'NanumGothic' if font_ok else 'Arial'
         pdf.set_font(font_name, '', 10)
 
+        # 사업자 정보
         pdf.set_fill_color(255, 255, 255)
+        supplier_info = {"상호": "(주)신진켐텍", "대표자": "박형석 (인)", "주소": "경기도 이천시 부발읍 황무로 1859-157", "전화": "031-638-1809", "웹사이트": "www.sjct.kr / support@sjct.kr"}
+        top_y = pdf.get_y()
         
-        # Supply Info
-        pdf.set_xy(105, pdf.get_y())
-        pdf.cell(90, 8, " [ Supplier ]", border=0, ln=1)
-        x = 105; y = pdf.get_y()
-        pdf.set_xy(x, y); pdf.cell(20, 6, "Reg.No", 1, 0, 'C'); pdf.cell(75, 6, "123-45-67890", 1, 1, 'C')
-        pdf.set_x(x); pdf.cell(20, 6, "Company", 1, 0, 'C'); pdf.cell(35, 6, "(Jur)ShinJin", 1, 0, 'C'); pdf.cell(15, 6, "Rep", 1, 0, 'C'); pdf.cell(25, 6, "Park", 1, 1, 'C')
-        pdf.set_x(x); pdf.cell(20, 12, "Addr", 1, 0, 'C'); pdf.multi_cell(75, 6, "1859-157, Hwangmu-ro, Bubal-eup, Icheon-si", 1, 'L')
-        pdf.set_xy(x, pdf.get_y()); pdf.cell(20, 6, "Tel", 1, 0, 'C'); pdf.cell(75, 6, "031-638-1809", 1, 1, 'C')
-
-        # Customer Info
-        pdf.set_xy(10, y)
-        pdf.cell(90, 8, " [ Customer ]", border=0, ln=1)
-        pdf.cell(25, 6, "Name:", 0); pdf.cell(65, 6, f"{recipient_info.get('name','')}", "B", 1)
-        pdf.cell(25, 6, "Contact:", 0); pdf.cell(65, 6, f"{recipient_info.get('contact','')}", "B", 1)
-        pdf.cell(25, 6, "Tel:", 0); pdf.cell(65, 6, f"{recipient_info.get('phone','')}", "B", 1)
+        pdf.set_xy(10, top_y); pdf.set_font(font_name, '', 10); pdf.cell(90, 8, " [ Customer ]", border=0, ln=1)
+        pdf.set_font(font_name, '', 9)
+        pdf.cell(25, 6, "Customer:", border=0); pdf.cell(65, 6, f"{recipient_info.get('name', '')}", border="B", ln=1)
+        pdf.cell(25, 6, "Contact:", border=0); pdf.cell(65, 6, f"{recipient_info.get('contact', '')}", border="B", ln=1)
+        pdf.cell(25, 6, "Phone:", border=0); pdf.cell(65, 6, f"{recipient_info.get('phone', '')}", border="B", ln=1)
+        pdf.cell(25, 6, "Address:", border=0); pdf.cell(65, 6, f"{recipient_info.get('addr', '')}", border="B", ln=1)
         
-        pdf.ln(20)
-        pdf.cell(0, 5, f"Date: {quote_date}", 0, 1, 'R')
-        pdf.ln(2)
+        pdf.set_xy(105, top_y); pdf.set_font(font_name, '', 10); pdf.cell(90, 8, " [ Supplier ]", border=0, ln=1)
+        box_x = 105; box_y = pdf.get_y()
+        pdf.set_xy(box_x, box_y); pdf.set_font(font_name, '', 9)
+        pdf.cell(20, 6, "Reg. No", border=1, align='C'); pdf.cell(75, 6, "123-45-67890", border=1, align='C', ln=1) 
+        pdf.set_x(box_x); pdf.cell(20, 6, "Company", border=1, align='C'); pdf.cell(35, 6, supplier_info["상호"], border=1, align='C'); pdf.cell(15, 6, "Rep", border=1, align='C'); pdf.cell(25, 6, supplier_info["대표자"], border=1, align='C', ln=1)
+        pdf.set_x(box_x); pdf.cell(20, 12, "Address", border=1, align='C'); pdf.multi_cell(75, 6, supplier_info["주소"], border=1, align='L')
+        pdf.set_xy(box_x, pdf.get_y()); pdf.cell(20, 6, "Biz Type", border=1, align='C'); pdf.cell(35, 6, "Wholesale", border=1, align='C'); pdf.cell(15, 6, "Tel", border=1, align='C'); pdf.cell(25, 6, "031-638-1809", border=1, align='C', ln=1)
+        pdf.set_x(box_x); pdf.cell(20, 6, "E-mail", border=1, align='C'); pdf.cell(75, 6, "support@sjct.kr / www.sjct.kr", border=1, align='C', ln=1)
 
-        # Table Header
-        pdf.set_fill_color(240, 240, 240)
-        pdf.cell(15, 10, "IMG", 1, 0, 'C', True)
-        pdf.cell(45, 10, "Item/Spec", 1, 0, 'C', True)
-        pdf.cell(10, 10, "Unit", 1, 0, 'C', True)
-        pdf.cell(12, 10, "Qty", 1, 0, 'C', True)
-        if "기본" in form_type:
-            pdf.cell(35, 10, "Price", 1, 0, 'C', True)
-            pdf.cell(35, 10, "Amount", 1, 0, 'C', True)
-            pdf.cell(38, 10, "Note", 1, 1, 'C', True)
+        pdf.ln(5); pdf.set_font(font_name, '', 9)
+        pdf.cell(0, 5, f"Date: {quote_date}   (Valid: 15 Days)", align='R', ln=1); pdf.ln(2)
+
+        # 표 헤더
+        pdf.set_fill_color(240, 240, 240); h_height = 10
+        pdf.cell(15, h_height, "IMG", border=1, align='C', fill=True)
+        pdf.cell(45, h_height, "Item/Spec", border=1, align='C', fill=True) 
+        pdf.cell(10, h_height, "Unit", border=1, align='C', fill=True)
+        pdf.cell(12, h_height, "Qty", border=1, align='C', fill=True)
+
+        if form_type == "basic":
+            label_text = price_labels[0] if price_labels else "Price"
+            pdf.cell(35, h_height, f"Price ({label_text})", border=1, align='C', fill=True)
+            pdf.cell(35, h_height, "Amount", border=1, align='C', fill=True)
+            pdf.cell(38, h_height, "Note", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
         else:
-            pdf.cell(18, 10, "P1", 1, 0, 'C', True); pdf.cell(22, 10, "A1", 1, 0, 'C', True)
-            pdf.cell(18, 10, "P2", 1, 0, 'C', True); pdf.cell(22, 10, "A2", 1, 0, 'C', True)
-            pdf.cell(15, 10, "Gap", 1, 0, 'C', True); pdf.cell(13, 10, "%", 1, 1, 'C', True)
+            l1, l2 = price_labels[0], price_labels[1]
+            pdf.set_font(font_name, '', 8)
+            pdf.cell(18, h_height, f"{l1}", border=1, align='C', fill=True)
+            pdf.cell(22, h_height, "Amt", border=1, align='C', fill=True)
+            pdf.cell(18, h_height, f"{l2}", border=1, align='C', fill=True)
+            pdf.cell(22, h_height, "Amt", border=1, align='C', fill=True)
+            pdf.cell(15, h_height, "Profit", border=1, align='C', fill=True)
+            pdf.cell(13, h_height, "%", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font(font_name, '', 9)
 
         sum_qty = 0; sum_a1 = 0; sum_a2 = 0; sum_profit = 0
-        for item in final_data_list:
-            if pdf.get_y() > 250: pdf.add_page()
-            
-            name = item.get("품목",""); spec = item.get("규격","-"); code = item.get("코드","")
-            qty = int(item.get("수량",0))
-            p1 = int(item.get("price_1",0)); a1 = p1*qty
-            p2 = int(item.get("price_2",0)); a2 = p2*qty
-            profit = a2 - a1
-            
-            sum_qty += qty; sum_a1 += a1; sum_a2 += a2; sum_profit += profit
 
-            img_b64 = None
-            if item.get("image_data"):
-                 img_b64 = get_image_from_drive(item.get("image_data"))
+        for item in final_data_list:
+            name = item.get("품목", ""); spec = item.get("규격", "-"); code = str(item.get("코드", "")).zfill(5) 
+            qty = int(item.get("수량", 0)); img_filename = item.get("image_data", None)
             
-            x = pdf.get_x(); y = pdf.get_y()
-            pdf.cell(15, 15, "", 1)
+            img_b64 = None
+            if img_filename:
+                img_b64 = get_image_from_drive(img_filename)
+
+            sum_qty += qty
+            p1 = int(item.get("price_1", 0)); a1 = p1 * qty; sum_a1 += a1
+            
+            p2 = 0; a2 = 0; profit = 0; rate = 0
+            if form_type == "profit":
+                p2 = int(item.get("price_2", 0)); a2 = p2 * qty; sum_a2 += a2
+                profit = a2 - a1; sum_profit += profit
+                rate = (profit / a2 * 100) if a2 else 0
+
+            h = 15
+            if pdf.get_y() > 250: pdf.add_page()
+
+            x, y = pdf.get_x(), pdf.get_y()
+            pdf.cell(15, h, "", border=1)
+            
             if img_b64:
                 try:
-                    raw = base64.b64decode(img_b64.split(",")[1])
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
-                        tf.write(raw); tname = tf.name
-                    pdf.image(tname, x+1, y+1, 13, 13)
-                    os.unlink(tname)
+                    # Base64 -> Temp File -> PDF Image
+                    img_raw = base64.b64decode(img_b64.split(",")[1])
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_img:
+                        tmp_img.write(img_raw)
+                        tmp_img_path = tmp_img.name
+                    
+                    pdf.image(tmp_img_path, x=x+2, y=y+2, w=11, h=11)
+                    os.unlink(tmp_img_path)
                 except: pass
 
-            pdf.set_xy(x+15, y)
-            pdf.cell(45, 15, "", 1)
-            pdf.set_xy(x+15, y+2); pdf.set_font(font_name, '', 8); pdf.multi_cell(45, 4, f"{name}\n{spec}\n[{code}]", align='L')
-            pdf.set_xy(x+60, y); pdf.set_font(font_name, '', 10)
+            pdf.set_xy(x+15, y); pdf.cell(45, h, "", border=1) 
+            pdf.set_xy(x+15, y+1.5); pdf.set_font(font_name, '', 8); pdf.multi_cell(45, 4, f"{name}\n{spec}\n[{code}]", align='L')
+            pdf.set_xy(x+15, y+10.0); pdf.set_font(font_name, '', 7) 
 
-            pdf.cell(10, 15, item.get("단위",""), 1, 0, 'C')
-            pdf.cell(12, 15, str(qty), 1, 0, 'C')
+            pdf.set_xy(x+60, y); pdf.set_font(font_name, '', 10) 
+            pdf.cell(10, h, item.get("단위", "EA"), border=1, align='C')
+            pdf.cell(12, h, str(qty), border=1, align='C')
 
-            if "기본" in form_type:
-                pdf.cell(35, 15, f"{p1:,}", 1, 0, 'R')
-                pdf.cell(35, 15, f"{a1:,}", 1, 0, 'R')
-                pdf.cell(38, 15, "", 1, 1, 'C')
+            if form_type == "basic":
+                pdf.cell(35, h, f"{p1:,}", border=1, align='R')
+                pdf.cell(35, h, f"{a1:,}", border=1, align='R')
+                pdf.cell(38, h, "", border=1, align='C'); pdf.ln()
             else:
                 pdf.set_font(font_name, '', 8)
-                pdf.cell(18, 15, f"{p1:,}", 1, 0, 'R'); pdf.cell(22, 15, f"{a1:,}", 1, 0, 'R')
-                pdf.cell(18, 15, f"{p2:,}", 1, 0, 'R'); pdf.cell(22, 15, f"{a2:,}", 1, 0, 'R')
-                pdf.cell(15, 15, f"{profit:,}", 1, 0, 'R'); 
-                rate = (profit/a2*100) if a2 else 0
-                pdf.cell(13, 15, f"{rate:.1f}%", 1, 1, 'C')
-                pdf.set_font(font_name, '', 10)
+                pdf.cell(18, h, f"{p1:,}", border=1, align='R'); pdf.cell(22, h, f"{a1:,}", border=1, align='R')
+                pdf.cell(18, h, f"{p2:,}", border=1, align='R'); pdf.cell(22, h, f"{a2:,}", border=1, align='R')
+                pdf.set_font(font_name, '', 8)
+                pdf.cell(15, h, f"{profit:,}", border=1, align='R'); pdf.cell(13, h, f"{rate:.1f}%", border=1, align='C')
+                pdf.set_font(font_name, '', 9); pdf.ln()
 
-        # 합계
-        pdf.set_fill_color(230, 230, 230); pdf.set_font(font_name, 'B' if font_ok else '', 10)
-        pdf.cell(70, 10, "Total", 1, 0, 'C', True)
-        pdf.cell(12, 10, f"{sum_qty:,}", 1, 0, 'C', True)
-        
-        if "기본" in form_type:
-            pdf.cell(35, 10, "", 1, 0, 'C', True)
-            pdf.cell(35, 10, f"{sum_a1:,}", 1, 0, 'R', True)
-            pdf.cell(38, 10, "", 1, 1, 'C', True)
+        pdf.set_fill_color(230, 230, 230); pdf.set_font(font_name, 'B' if font_ok else '', 9)
+        pdf.cell(70, 10, "Sub Total", border=1, align='C', fill=True)
+        pdf.cell(12, 10, f"{sum_qty:,}", border=1, align='C', fill=True)
+        if form_type == "basic":
+            pdf.cell(35, 10, "", border=1, fill=True); pdf.cell(35, 10, f"{sum_a1:,}", border=1, align='R', fill=True); pdf.cell(38, 10, "", border=1, fill=True); pdf.ln()
         else:
-            pdf.cell(40, 10, f"{sum_a1:,}", 1, 0, 'R', True)
-            pdf.cell(40, 10, f"{sum_a2:,}", 1, 0, 'R', True)
-            pdf.cell(28, 10, f"{sum_profit:,}", 1, 1, 'R', True)
+            avg_rate = (sum_profit / sum_a2 * 100) if sum_a2 else 0
+            pdf.set_font(font_name, '', 8)
+            pdf.cell(18, 10, "", border=1, fill=True); pdf.cell(22, 10, f"{sum_a1:,}", border=1, align='R', fill=True)
+            pdf.cell(18, 10, "", border=1, fill=True); pdf.cell(22, 10, f"{sum_a2:,}", border=1, align='R', fill=True)
+            pdf.cell(15, 10, f"{sum_profit:,}", border=1, align='R', fill=True); pdf.cell(13, 10, f"{avg_rate:.1f}%", border=1, align='C', fill=True); pdf.ln()
 
-        pdf.ln(10)
-        pdf.cell(0, 10, "SHIN JIN CHEMTECH Co., Ltd.", 0, 1, 'C')
+        svc_total = 0
+        if service_items:
+            pdf.ln(2); pdf.set_fill_color(255, 255, 224)
+            pdf.cell(190, 6, " [ Additional Cost ] ", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+            for s in service_items:
+                svc_total += s['금액']
+                pdf.cell(155, 6, s['항목'], border=1); pdf.cell(35, 6, f"{s['금액']:,}", border=1, align='R', new_x="LMARGIN", new_y="NEXT")
 
-        return pdf.output(dest='S').encode('latin-1')
+        pdf.ln(5); pdf.set_font(font_name, 'B' if has_font else '', 12)
+        if form_type == "basic":
+            final_total = sum_a1 + svc_total
+            pdf.cell(120, 10, "", border=0); pdf.cell(35, 10, "Total", border=1, align='C', fill=True); pdf.cell(35, 10, f"{final_total:,}", border=1, align='R')
+        else:
+            t1_final = sum_a1 + svc_total; t2_final = sum_a2 + svc_total; total_profit = t2_final - t1_final
+            pdf.set_font(font_name, '', 10); pdf.cell(82, 10, "Total (VAT Incl.)", border=1, align='C', fill=True)
+            pdf.cell(40, 10, f"{t1_final:,}", border=1, align='R')
+            pdf.set_font(font_name, 'B' if has_font else '', 10)
+            pdf.cell(40, 10, f"{t2_final:,}", border=1, align='R'); pdf.cell(28, 10, f"({total_profit:,})", border=1, align='R')
+        
+        pdf.ln(10); pdf.set_font(font_name, 'B' if has_font else '', 16)
+        pdf.cell(0, 10, "SHIN JIN CHEMTECH Co., Ltd.", align='C', ln=1)
+        
+        # [핵심] PDF 파일 생성 및 읽기 (임시 파일 사용으로 인코딩 문제 해결)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+            pdf.output(tmp_pdf.name)
+            tmp_pdf_path = tmp_pdf.name
+        
+        with open(tmp_pdf_path, "rb") as f:
+            pdf_bytes = f.read()
+        
+        os.unlink(tmp_pdf_path)
+        return pdf_bytes
+        
     except Exception as e:
-        print(f"Error PDF: {e}")
+        print(f"PDF 생성 에러: {e}")
         return None
 
 # ==========================================
 # 3. 메인 로직
 # ==========================================
-st.title("💧 루퍼젯 프로 매니저 V10.0")
-
 if "db" not in st.session_state:
     st.session_state.db = load_data_from_sheet()
 
@@ -374,7 +416,6 @@ if "auth_admin" not in st.session_state: st.session_state.auth_admin = False
 if "auth_price" not in st.session_state: st.session_state.auth_price = False
 if "recipient_info" not in st.session_state: st.session_state.recipient_info = {}
 
-# [복구] 주배관/가지관 목록
 if "added_main_pipes" not in st.session_state: st.session_state.added_main_pipes = []
 if "added_branch_pipes" not in st.session_state: st.session_state.added_branch_pipes = []
 
@@ -388,17 +429,16 @@ with st.sidebar:
     qn = st.text_input("현장명", value=st.session_state.current_quote_name)
     if st.button("💾 저장"):
         st.session_state.history[qn] = {
-            "items": st.session_state.quote_items, 
-            "step": st.session_state.quote_step,
-            "recipient": st.session_state.recipient_info,
-            "main": st.session_state.added_main_pipes,
-            "branch": st.session_state.added_branch_pipes
+            "items": st.session_state.quote_items, "services": st.session_state.services,
+            "step": st.session_state.quote_step, "recipient": st.session_state.recipient_info,
+            "main": st.session_state.added_main_pipes, "branch": st.session_state.added_branch_pipes
         }
         st.session_state.current_quote_name = qn
         st.success("저장됨")
     
     if st.button("✨ 초기화"):
         st.session_state.quote_items = {}
+        st.session_state.services = []
         st.session_state.quote_step = 1
         st.session_state.added_main_pipes = []
         st.session_state.added_branch_pipes = []
@@ -431,10 +471,9 @@ if mode == "관리자 모드":
             df = df.sort_values(by="order_no")
             df_disp = df.rename(columns=REV_COL_MAP)
             
-            # [수정 1] 중복된 인덱스 숨기기 (hide_index=True)
+            # [수정] 인덱스 숨김
             st.dataframe(df_disp, use_container_width=True, hide_index=True)
             
-            # [수정] 문법 오류 해결된 엑셀 다운로드
             buf = io.BytesIO()
             with pd.ExcelWriter(buf, engine='xlsxwriter') as w:
                 df.to_excel(w, index=False)
@@ -457,7 +496,7 @@ if mode == "관리자 모드":
             c1, c2, c3 = st.columns([2,2,1])
             products = st.session_state.db["products"]
             with c1: 
-                sp = st.selectbox("대상 품목", products, format_func=lambda x: f"[{x['code']}] {x['name']}")
+                sp = st.selectbox("대상 품목", products, format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec','-')})")
             with c2: ifile = st.file_uploader("이미지", ["png","jpg"])
             with c3:
                 if st.button("업로드"):
@@ -488,20 +527,9 @@ else:
 
         with st.expander("1. 주배관 세트", True):
              m_sets = sets.get("주배관세트", {})
-             grouped = {"50mm":{}, "40mm":{}, "기타":{}, "미분류":{}}
-             for k, v in m_sets.items():
-                 sc = v.get("sub_cat", "미분류") if isinstance(v, dict) else "미분류"
-                 if sc not in grouped: grouped[sc] = {}
-                 grouped[sc][k] = v
-             t1, t2, t3, t4 = st.tabs(["50mm", "40mm", "기타", "전체"])
-             with t1: inp_m_50 = render_inputs(grouped["50mm"], "m50")
-             with t2: inp_m_40 = render_inputs(grouped["40mm"], "m40")
-             with t3: inp_m_etc = render_inputs(grouped["기타"], "metc")
-             with t4: inp_m_u = render_inputs(grouped["미분류"], "mu")
+             render_inputs(m_sets, "m_all")
 
-        with st.expander("2. 가지관 세트"): inp_b = render_inputs(sets.get("가지관세트", {}), "b")
-        with st.expander("3. 기타 자재"): inp_e = render_inputs(sets.get("기타자재", {}), "e")
-
+        # [수정] 규격 보이게 수정 & 길이 정수화
         c1, c2 = st.columns(2)
         prods = st.session_state.db["products"]
         mpl = [p for p in prods if p["category"] == "주배관"]
@@ -509,38 +537,27 @@ else:
 
         with c1:
             st.markdown("##### 주배관")
-            sm = st.selectbox("선택", mpl, format_func=lambda x: f"[{x['code']}] {x['name']}", key="sm")
-            lm = st.number_input("길이", key="lm")
+            sm = st.selectbox("선택", mpl, format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec','-')})", key="sm")
+            lm = st.number_input("길이 (m)", step=1, key="lm")
             if st.button("➕ 추가", key="am"):
                 st.session_state.added_main_pipes.append({"obj": sm, "len": lm})
             if st.session_state.added_main_pipes:
-                st.write([f"{i['obj']['name']} {i['len']}m" for i in st.session_state.added_main_pipes])
+                st.write([f"{i['obj']['name']} ({i['obj'].get('spec','-')}) : {i['len']}m" for i in st.session_state.added_main_pipes])
                 if st.button("초기화", key="cm"): st.session_state.added_main_pipes = []; st.rerun()
 
         with c2:
             st.markdown("##### 가지관")
-            sb = st.selectbox("선택", bpl, format_func=lambda x: f"[{x['code']}] {x['name']}", key="sb")
-            lb = st.number_input("길이", key="lb")
+            sb = st.selectbox("선택", bpl, format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec','-')})", key="sb")
+            lb = st.number_input("길이 (m)", step=1, key="lb")
             if st.button("➕ 추가", key="ab"):
                 st.session_state.added_branch_pipes.append({"obj": sb, "len": lb})
             if st.session_state.added_branch_pipes:
-                st.write([f"{i['obj']['name']} {i['len']}m" for i in st.session_state.added_branch_pipes])
+                st.write([f"{i['obj']['name']} ({i['obj'].get('spec','-')}) : {i['len']}m" for i in st.session_state.added_branch_pipes])
                 if st.button("초기화", key="cb"): st.session_state.added_branch_pipes = []; st.rerun()
 
         if st.button("계산하기 (STEP 2)", type="primary"):
-            res = {}
-            all_m = {**inp_m_50, **inp_m_40, **inp_m_etc, **inp_m_u}
-            
-            def ex(ins, db):
-                for k,v in ins.items():
-                    if v>0:
-                        rec = db[k].get("recipe", db[k])
-                        for p_name, q in rec.items(): 
-                            p_code = name_to_code.get(p_name)
-                            if p_code:
-                                res[p_code] = res.get(p_code, 0) + q*v
-            ex(all_m, sets.get("주배관세트", {})); ex(inp_b, sets.get("가지관세트", {})); ex(inp_e, sets.get("기타자재", {}))
-            
+            res = {} 
+            # 파이프 계산
             for item in st.session_state.added_main_pipes:
                 p = item['obj']
                 qty = math.ceil(item['len'] / (p['len_per_unit'] or 50))
@@ -569,16 +586,29 @@ else:
                     "소비자가": p['price_cons'], "단가(현장)": p['price_site']
                 })
         
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
         
+        # [수정] 비용 입력란 복구 & 규격 표시
         c1, c2 = st.columns(2)
         with c1:
             all_prods = st.session_state.db["products"]
-            ap = st.selectbox("추가 품목", all_prods, format_func=lambda x: f"[{x['code']}] {x['name']}")
+            ap = st.selectbox("추가 품목", all_prods, format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec','-')})")
             aq = st.number_input("수량", 1)
             if st.button("추가"):
                 st.session_state.quote_items[ap['code']] = st.session_state.quote_items.get(ap['code'], 0) + aq
                 st.rerun()
+        
+        with c2:
+            stype = st.selectbox("비용 추가", ["배송비", "용역비", "기타"])
+            sn = st.text_input("내용") if stype=="기타" else stype
+            sp = st.number_input("금액", step=1000)
+            if st.button("비용 등록"):
+                st.session_state.services.append({"항목": sn, "금액": sp})
+                st.rerun()
+                
+        if st.session_state.services:
+            st.write("▼ 추가 비용 목록")
+            st.table(st.session_state.services)
         
         if st.button("최종 견적 (STEP 3)"):
             st.session_state.quote_step = 3
@@ -622,8 +652,7 @@ else:
         
         rows = sorted(rows, key=lambda x: x["order_no"])
         
-        # [수정 2] 올바른 변수명(qn) 사용으로 NameError 해결
-        pdf_bytes = create_advanced_pdf(rows, [], qn, datetime.datetime.now().strftime("%Y-%m-%d"), form, sel, st.session_state.recipient_info)
+        pdf_bytes = create_advanced_pdf(rows, st.session_state.services, qn, datetime.datetime.now().strftime("%Y-%m-%d"), form, sel, st.session_state.recipient_info)
         
         if pdf_bytes:
             st.download_button("📄 PDF 다운로드", pdf_bytes, file_name="quote.pdf", mime="application/pdf", type="primary")
@@ -633,6 +662,7 @@ else:
         if st.button("처음으로"):
             st.session_state.quote_step = 1
             st.session_state.quote_items = {}
+            st.session_state.services = []
             st.session_state.added_main_pipes = []
             st.session_state.added_branch_pipes = []
             st.rerun()

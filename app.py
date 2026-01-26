@@ -24,10 +24,11 @@ FONT_FILE = "NanumGothic.ttf"
 FONT_BOLD_FILE = "NanumGothicBold.ttf"
 FONT_URL = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
 
-# 폰트 다운로드 (안전 장치)
+# [안전장치] 폰트 파일 검증 및 다운로드
 if not os.path.exists(FONT_FILE) or os.path.getsize(FONT_FILE) < 1000:
     import urllib.request
-    try: urllib.request.urlretrieve(FONT_URL, FONT_FILE)
+    try: 
+        urllib.request.urlretrieve(FONT_URL, FONT_FILE)
     except: pass
 
 # --- 구글 인증 ---
@@ -144,7 +145,6 @@ def load_data_from_sheet():
                     if k == "품목코드": new_rec[COL_MAP[k]] = str(v).zfill(5)
                     else: new_rec[COL_MAP[k]] = v
             
-            # 숫자형 변환 및 기본값 처리
             if "order_no" not in new_rec or new_rec["order_no"] == "": new_rec["order_no"] = 9999
             else: 
                 try: new_rec["order_no"] = int(new_rec["order_no"])
@@ -157,10 +157,9 @@ def load_data_from_sheet():
             
             data["products"].append(new_rec)
         
-        # 순번 정렬
         data["products"] = sorted(data["products"], key=lambda x: x["order_no"])
 
-    except Exception: pass # 초기 상태일 수 있음
+    except Exception: pass 
 
     try:
         ws_sets = sh.worksheet("Sets")
@@ -203,7 +202,6 @@ def save_sets_to_sheet(sets_dict):
 # ==========================================
 class PDF(FPDF):
     def header(self):
-        # 폰트 로드 시도
         font_ok = False
         if os.path.exists(FONT_FILE):
             try: 
@@ -221,7 +219,6 @@ class PDF(FPDF):
 
     def footer(self):
         self.set_y(-20)
-        # 폰트 재설정 (푸터용)
         font_ok = False
         if os.path.exists(FONT_FILE):
             try:
@@ -236,7 +233,6 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     pdf = PDF()
     pdf.add_page()
     
-    # 폰트 설정
     font_ok = False
     if os.path.exists(FONT_FILE):
         try:
@@ -247,10 +243,9 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     font_name = 'NanumGothic' if font_ok else 'Arial'
     pdf.set_font(font_name, '', 10)
 
-    # 공급자/수신자 정보
     pdf.set_fill_color(255, 255, 255)
     
-    # Supply Info (Right)
+    # Supply Info
     pdf.set_xy(105, pdf.get_y())
     pdf.cell(90, 8, " [ Supplier ]", border=0, ln=1)
     x = 105; y = pdf.get_y()
@@ -259,7 +254,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     pdf.set_x(x); pdf.cell(20, 12, "Addr", 1, 0, 'C'); pdf.multi_cell(75, 6, "1859-157, Hwangmu-ro, Bubal-eup, Icheon-si", 1, 'L')
     pdf.set_xy(x, pdf.get_y()); pdf.cell(20, 6, "Tel", 1, 0, 'C'); pdf.cell(75, 6, "031-638-1809", 1, 1, 'C')
 
-    # Customer Info (Left)
+    # Customer Info
     pdf.set_xy(10, y)
     pdf.cell(90, 8, " [ Customer ]", border=0, ln=1)
     pdf.cell(25, 6, "Name:", 0); pdf.cell(65, 6, f"{recipient_info.get('name','')}", "B", 1)
@@ -270,7 +265,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     pdf.cell(0, 5, f"Date: {quote_date}", 0, 1, 'R')
     pdf.ln(2)
 
-    # 테이블 헤더
+    # Table Header
     pdf.set_fill_color(240, 240, 240)
     pdf.cell(15, 10, "IMG", 1, 0, 'C', True)
     pdf.cell(45, 10, "Item/Spec", 1, 0, 'C', True)
@@ -285,7 +280,6 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         pdf.cell(18, 10, "P2", 1, 0, 'C', True); pdf.cell(22, 10, "A2", 1, 0, 'C', True)
         pdf.cell(15, 10, "Gap", 1, 0, 'C', True); pdf.cell(13, 10, "%", 1, 1, 'C', True)
 
-    # 데이터 출력
     sum_qty = 0; sum_a1 = 0; sum_a2 = 0; sum_profit = 0
     for item in final_data_list:
         if pdf.get_y() > 250: pdf.add_page()
@@ -298,7 +292,6 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         
         sum_qty += qty; sum_a1 += a1; sum_a2 += a2; sum_profit += profit
 
-        # 이미지 처리 (임시파일)
         img_b64 = None
         if item.get("image_data"):
              img_b64 = get_image_from_drive(item.get("image_data"))
@@ -362,7 +355,7 @@ if "db" not in st.session_state:
 
 if "history" not in st.session_state: st.session_state.history = {}
 if "quote_step" not in st.session_state: st.session_state.quote_step = 1
-if "quote_items" not in st.session_state: st.session_state.quote_items = {} # {code: qty}
+if "quote_items" not in st.session_state: st.session_state.quote_items = {} 
 if "services" not in st.session_state: st.session_state.services = []
 if "temp_set_recipe" not in st.session_state: st.session_state.temp_set_recipe = {}
 if "current_quote_name" not in st.session_state: st.session_state.current_quote_name = ""
@@ -370,7 +363,7 @@ if "auth_admin" not in st.session_state: st.session_state.auth_admin = False
 if "auth_price" not in st.session_state: st.session_state.auth_price = False
 if "recipient_info" not in st.session_state: st.session_state.recipient_info = {}
 
-# [복구] 주배관/가지관 목록 (중복 문제 해결 로직)
+# [복구] 주배관/가지관 목록
 if "added_main_pipes" not in st.session_state: st.session_state.added_main_pipes = []
 if "added_branch_pipes" not in st.session_state: st.session_state.added_branch_pipes = []
 
@@ -421,16 +414,18 @@ if mode == "관리자 모드":
         
         t1, t2 = st.tabs(["제품 관리", "세트 관리"])
         with t1:
-            df = pd.DataFrame(st.session_state.db["products"]).rename(columns=REV_COL_MAP)
-            st.dataframe(df, use_container_width=True)
+            df = pd.DataFrame(st.session_state.db["products"])
+            if "order_no" not in df.columns: df["order_no"] = 9999
+            df = df.sort_values(by="order_no")
+            df_disp = df.rename(columns=REV_COL_MAP)
+            st.dataframe(df_disp, use_container_width=True)
             
-            # [수정] 문법 오류 해결된 엑셀 다운로드
+            # [수정] 여기가 중요합니다! 문법 오류를 완벽하게 고친 코드입니다.
             buf = io.BytesIO()
             with pd.ExcelWriter(buf, engine='xlsxwriter') as w:
-                df.to_excel(w, index=False)
+                df_disp.to_excel(w, index=False)
             st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")
             
-            # 이미지 일괄 연결
             if st.button("🔄 드라이브 이미지 연결"):
                 fmap = list_files_in_drive_folder()
                 cnt = 0
@@ -442,65 +437,105 @@ if mode == "관리자 모드":
                 if cnt:
                     save_products_to_sheet(st.session_state.db["products"])
                     st.success(f"{cnt}개 연결 완료")
+                    st.session_state.db = load_data_from_sheet()
                     st.rerun()
+
+            c1, c2, c3 = st.columns([2,2,1])
+            products = st.session_state.db["products"]
+            with c1: 
+                sp = st.selectbox("대상 품목", products, format_func=lambda x: f"[{x['code']}] {x['name']}")
+            with c2: ifile = st.file_uploader("이미지", ["png","jpg"])
+            with c3:
+                if st.button("업로드"):
+                    if ifile and sp:
+                        fn = f"{sp['name']}_{ifile.name}"
+                        fid = upload_image_to_drive(ifile, fn)
+                        if fid:
+                            for p in st.session_state.db["products"]:
+                                if p['name'] == sp['name']: p['image'] = fid
+                            save_products_to_sheet(st.session_state.db["products"])
+                            st.success("완료")
 
 # 견적 모드
 else:
-    # DB 매핑 (이름 -> 코드)
     name_to_code = {p['name']: p['code'] for p in st.session_state.db["products"]}
     code_to_p = {p['code']: p for p in st.session_state.db["products"]}
 
     if st.session_state.quote_step == 1:
         st.subheader("STEP 1. 물량 입력")
-        
-        # ... (세트 입력 UI 생략, 기존 로직 동일) ...
+        sets = st.session_state.db.get("sets", {})
 
-        # [복구] 주배관/가지관 다중 입력 UI
+        def render_inputs(d, pf):
+            cols = st.columns(4); res = {}
+            for i, (n, v) in enumerate(d.items()):
+                with cols[i%4]:
+                    res[n] = st.number_input(n, 0, key=f"{pf}_{n}")
+            return res
+
+        with st.expander("1. 주배관 세트", True):
+             m_sets = sets.get("주배관세트", {})
+             grouped = {"50mm":{}, "40mm":{}, "기타":{}, "미분류":{}}
+             for k, v in m_sets.items():
+                 sc = v.get("sub_cat", "미분류") if isinstance(v, dict) else "미분류"
+                 if sc not in grouped: grouped[sc] = {}
+                 grouped[sc][k] = v
+             t1, t2, t3, t4 = st.tabs(["50mm", "40mm", "기타", "전체"])
+             with t1: inp_m_50 = render_inputs(grouped["50mm"], "m50")
+             with t2: inp_m_40 = render_inputs(grouped["40mm"], "m40")
+             with t3: inp_m_etc = render_inputs(grouped["기타"], "metc")
+             with t4: inp_m_u = render_inputs(grouped["미분류"], "mu")
+
+        with st.expander("2. 가지관 세트"): inp_b = render_inputs(sets.get("가지관세트", {}), "b")
+        with st.expander("3. 기타 자재"): inp_e = render_inputs(sets.get("기타자재", {}), "e")
+
         c1, c2 = st.columns(2)
-        products_db = st.session_state.db["products"]
-        mpl = [p for p in products_db if p["category"] == "주배관"]
-        bpl = [p for p in products_db if p["category"] == "가지관"]
-        
+        prods = st.session_state.db["products"]
+        mpl = [p for p in prods if p["category"] == "주배관"]
+        bpl = [p for p in prods if p["category"] == "가지관"]
+
         with c1:
             st.markdown("##### 주배관")
             sm = st.selectbox("선택", mpl, format_func=lambda x: f"[{x['code']}] {x['name']}", key="sm")
             lm = st.number_input("길이", key="lm")
-            if st.button("➕ 추가", key="add_m"):
+            if st.button("➕ 추가", key="am"):
                 st.session_state.added_main_pipes.append({"obj": sm, "len": lm})
-            
             if st.session_state.added_main_pipes:
                 st.write([f"{i['obj']['name']} {i['len']}m" for i in st.session_state.added_main_pipes])
-                if st.button("초기화", key="clr_m"):
-                    st.session_state.added_main_pipes = []
-                    st.rerun()
+                if st.button("초기화", key="cm"): st.session_state.added_main_pipes = []; st.rerun()
 
         with c2:
             st.markdown("##### 가지관")
             sb = st.selectbox("선택", bpl, format_func=lambda x: f"[{x['code']}] {x['name']}", key="sb")
             lb = st.number_input("길이", key="lb")
-            if st.button("➕ 추가", key="add_b"):
+            if st.button("➕ 추가", key="ab"):
                 st.session_state.added_branch_pipes.append({"obj": sb, "len": lb})
-                
             if st.session_state.added_branch_pipes:
                 st.write([f"{i['obj']['name']} {i['len']}m" for i in st.session_state.added_branch_pipes])
-                if st.button("초기화", key="clr_b"):
-                    st.session_state.added_branch_pipes = []
-                    st.rerun()
+                if st.button("초기화", key="cb"): st.session_state.added_branch_pipes = []; st.rerun()
 
         if st.button("계산하기 (STEP 2)", type="primary"):
-            res = {} # {code: qty}
+            res = {}
+            all_m = {**inp_m_50, **inp_m_40, **inp_m_etc, **inp_m_u}
             
-            # 파이프 계산 로직 (중복 해결 핵심)
+            def ex(ins, db):
+                for k,v in ins.items():
+                    if v>0:
+                        rec = db[k].get("recipe", db[k])
+                        for p_name, q in rec.items(): 
+                            p_code = name_to_code.get(p_name)
+                            if p_code:
+                                res[p_code] = res.get(p_code, 0) + q*v
+            ex(all_m, sets.get("주배관세트", {})); ex(inp_b, sets.get("가지관세트", {})); ex(inp_e, sets.get("기타자재", {}))
+            
             for item in st.session_state.added_main_pipes:
                 p = item['obj']
                 qty = math.ceil(item['len'] / (p['len_per_unit'] or 50))
                 res[p['code']] = res.get(p['code'], 0) + qty
-            
             for item in st.session_state.added_branch_pipes:
                 p = item['obj']
                 qty = math.ceil(item['len'] / (p['len_per_unit'] or 50))
                 res[p['code']] = res.get(p['code'], 0) + qty
-
+            
             st.session_state.quote_items = res
             st.session_state.quote_step = 2
             st.rerun()
@@ -511,21 +546,25 @@ else:
             st.session_state.quote_step = 1
             st.rerun()
             
-        # ... (테이블 표시 로직 등) ...
-        
-        # 데이터 구성 (코드로 조회)
         rows = []
         for code, qty in st.session_state.quote_items.items():
             if code in code_to_p:
                 p = code_to_p[code]
                 rows.append({
-                    "품목": p['name'], "규격": p['spec'], "코드": code,
-                    "수량": qty, "소비자가": p['price_cons'], 
-                    "image_data": p.get('image')
+                    "품목": p['name'], "규격": p['spec'], "코드": code, "수량": qty,
+                    "소비자가": p['price_cons'], "단가(현장)": p['price_site']
                 })
         
-        # 데이터 에디터 및 PDF 생성
-        edited = st.data_editor(pd.DataFrame(rows), use_container_width=True)
+        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            all_prods = st.session_state.db["products"]
+            ap = st.selectbox("추가 품목", all_prods, format_func=lambda x: f"[{x['code']}] {x['name']}")
+            aq = st.number_input("수량", 1)
+            if st.button("추가"):
+                st.session_state.quote_items[ap['code']] = st.session_state.quote_items.get(ap['code'], 0) + aq
+                st.rerun()
         
         if st.button("최종 견적 (STEP 3)"):
             st.session_state.quote_step = 3
@@ -534,7 +573,6 @@ else:
     elif st.session_state.quote_step == 3:
         st.subheader("최종 견적")
         
-        # 수신자 정보 입력
         with st.container(border=True):
             c1, c2 = st.columns(2)
             rn = c1.text_input("현장명", value=st.session_state.recipient_info.get("name",""))
@@ -543,20 +581,37 @@ else:
             ra = c2.text_input("주소", value=st.session_state.recipient_info.get("addr",""))
             st.session_state.recipient_info = {"name":rn, "contact":rc, "phone":rp, "addr":ra}
             
-        # PDF 생성 (단가 선택 등은 생략하고 기본값 사용 예시)
+        col1, col2 = st.columns(2)
+        with col1: form = st.radio("양식", ["기본", "이익분석"])
+        with col2: 
+            if form == "기본":
+                pr = st.radio("단가", ["소비자가", "단가(현장)"])
+                sel = [pr]
+            else:
+                sel = st.multiselect("비교 단가", ["매입단가", "소비자가"], default=["매입단가", "소비자가"])
+
         rows = []
+        pkey = {"매입단가":"price_buy", "소비자가":"price_cons", "단가(현장)":"price_site"}
+        
         for code, qty in st.session_state.quote_items.items():
             if code in code_to_p:
                 p = code_to_p[code]
-                rows.append({
+                item = {
                     "품목": p['name'], "규격": p['spec'], "코드": code, "단위": p['unit'],
-                    "수량": qty, "price_1": p['price_cons'], "image_data": p.get('image')
-                })
-
-        pdf_bytes = create_advanced_pdf(rows, [], q_name, "2026-01-26", "기본", ["소비자가"], st.session_state.recipient_info)
+                    "수량": qty, "image_data": p.get('image'), "order_no": p['order_no']
+                }
+                if sel:
+                    item["price_1"] = p.get(pkey.get(sel[0], "price_cons"), 0)
+                    if len(sel) > 1:
+                        item["price_2"] = p.get(pkey.get(sel[1], "price_cons"), 0)
+                rows.append(item)
+        
+        rows = sorted(rows, key=lambda x: x["order_no"])
+        
+        pdf_bytes = create_advanced_pdf(rows, [], q_name, datetime.datetime.now().strftime("%Y-%m-%d"), form, sel, st.session_state.recipient_info)
         
         if pdf_bytes:
-            st.download_button("📄 PDF 다운로드", pdf_bytes, file_name="quote.pdf", mime="application/pdf")
+            st.download_button("📄 PDF 다운로드", pdf_bytes, file_name="quote.pdf", mime="application/pdf", type="primary")
         else:
             st.error("PDF 생성 실패")
         

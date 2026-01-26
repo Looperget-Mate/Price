@@ -398,6 +398,7 @@ if "db" not in st.session_state:
 
 if "history" not in st.session_state: st.session_state.history = {} 
 if "quote_step" not in st.session_state: st.session_state.quote_step = 1
+# [수정] quote_items는 이제 {code: quantity} 형태가 됩니다.
 if "quote_items" not in st.session_state: st.session_state.quote_items = {}
 if "services" not in st.session_state: st.session_state.services = []
 if "temp_set_recipe" not in st.session_state: st.session_state.temp_set_recipe = {}
@@ -406,7 +407,6 @@ if "auth_admin" not in st.session_state: st.session_state.auth_admin = False
 if "auth_price" not in st.session_state: st.session_state.auth_price = False
 if "recipient_info" not in st.session_state: st.session_state.recipient_info = {}
 
-# [추가] 배관 다중 선택을 위한 임시 저장소
 if "added_main_pipes" not in st.session_state: st.session_state.added_main_pipes = []
 if "added_branch_pipes" not in st.session_state: st.session_state.added_branch_pipes = []
 
@@ -494,10 +494,7 @@ if mode == "관리자 모드":
                 st.divider()
                 ec1, ec2 = st.columns([1, 1])
                 with ec1:
-                    buf = io.BytesIO()
-                    # [수정] 여기가 문법 오류 났던 부분! 두 줄로 나눴습니다.
-                    with pd.ExcelWriter(buf, engine='xlsxwriter') as w: 
-                        df_disp[final_cols].to_excel(w, index=False)
+                    buf = io.BytesIO(); with pd.ExcelWriter(buf, engine='xlsxwriter') as w: df_disp[final_cols].to_excel(w, index=False)
                     st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")
                 with ec2:
                     uf = st.file_uploader("엑셀 파일 선택", ["xlsx"], label_visibility="collapsed")
@@ -589,6 +586,11 @@ if mode == "관리자 모드":
 
 else:
     st.markdown(f"### 📝 현장명: **{st.session_state.current_quote_name if st.session_state.current_quote_name else '(제목 없음)'}**")
+    
+    # [중요] 이름으로 매핑된 레시피를 코드로 변환하기 위한 맵
+    products_db = st.session_state.db["products"]
+    name_to_code = {p['name']: p['code'] for p in products_db}
+
     if st.session_state.quote_step == 1:
         st.subheader("STEP 1. 물량 입력"); sets = st.session_state.db.get("sets", {})
         def render_inputs(d, pf):
@@ -601,6 +603,7 @@ else:
                         if b64: st.image(b64, use_container_width=True)
                         else: st.markdown("No Image")
                     else: st.markdown("<div style='height:80px;background:#eee'></div>", unsafe_allow_html=True)
+                    # 이름으로 입력받지만 나중에 코드로 변환
                     res[n] = st.number_input(n, 0, key=f"{pf}_{n}")
             return res
 
@@ -619,10 +622,8 @@ else:
         with st.expander("2. 가지관"): inp_b = render_inputs(sets.get("가지관세트", {}), "b")
         with st.expander("3. 기타"): inp_e = render_inputs(sets.get("기타자재", {}), "e")
         
-        all_products = st.session_state.db["products"]
-        
-        mpl = [p for p in all_products if p["category"] == "주배관"]
-        bpl = [p for p in all_products if p["category"] == "가지관"]
+        mpl = [p for p in products_db if p["category"] == "주배관"]
+        bpl = [p for p in products_db if p["category"] == "가지관"]
         
         st.markdown("---")
         c1, c2 = st.columns(2)
@@ -663,33 +664,43 @@ else:
 
         st.divider()
         if st.button("계산하기 (STEP 2)", type="primary"):
-            res = {}; all_m = {**inp_m_50, **inp_m_40, **inp_m_etc, **inp_m_u}
+            res = {} # {code: quantity} 형태로 저장
+            all_m = {**inp_m_50, **inp_m_40, **inp_m_etc, **inp_m_u}
+            
+            # 세트 계산 (이름 -> 코드 변환 필요)
             def ex(ins, db):
                 for k,v in ins.items():
                     if v>0:
                         rec = db[k].get("recipe", db[k])
-                        for p, q in rec.items(): res[p] = res.get(p, 0) + q*v
+                        for p_name, q in rec.items(): 
+                            # 이름으로 코드 찾기
+                            p_code = name_to_code.get(p_name)
+                            if p_code:
+                                res[p_code] = res.get(p_code, 0) + q*v
             ex(all_m, sets.get("주배관세트", {})); ex(inp_b, sets.get("가지관세트", {})); ex(inp_e, sets.get("기타자재", {}))
             
+            # [수정] 파이프 계산 (obj에 이미 code가 있음)
             for item in st.session_state.added_main_pipes:
                 p_obj = item['obj']; length = item['len']
                 roll_len = p_obj.get("len_per_unit", 50) 
                 if roll_len == 0: roll_len = 50 
                 qty = math.ceil(length / roll_len)
-                res[p_obj['name']] = res.get(p_obj['name'], 0) + qty
+                # 코드로 저장
+                res[p_obj['code']] = res.get(p_obj['code'], 0) + qty
             
             for item in st.session_state.added_branch_pipes:
                 p_obj = item['obj']; length = item['len']
                 roll_len = p_obj.get("len_per_unit", 50)
                 if roll_len == 0: roll_len = 50
                 qty = math.ceil(length / roll_len)
-                res[p_obj['name']] = res.get(p_obj['name'], 0) + qty
+                # 코드로 저장
+                res[p_obj['code']] = res.get(p_obj['code'], 0) + qty
 
             st.session_state.quote_items = res; st.session_state.quote_step = 2; st.rerun()
 
     elif st.session_state.quote_step == 2:
         st.subheader("STEP 2. 내용 검토")
-        
+        # [수정] 뒤로가기 버튼 추가 (상단 배치)
         if st.button("⬅️ 다시 입력 (STEP 1)"):
             st.session_state.quote_step = 1; st.rerun()
 
@@ -707,9 +718,19 @@ else:
         with c_view: view = st.radio("단가 보기", view_opts, horizontal=True)
 
         key_map = {"매입가":("price_buy","매입"), "총판1":("price_d1","총판1"), "총판2":("price_d2","총판2"), "대리점":("price_agy","대리점"), "단가(현장)":("price_site","현장")}
-        rows = []; pdb = {p["name"]: p for p in st.session_state.db["products"]}
-        for n, q in st.session_state.quote_items.items():
-            inf = pdb.get(n, {}); cpr = inf.get("price_cons", 0)
+        
+        # [수정] 견적 리스트 구성 (코드로 조회)
+        rows = []
+        # 코드로 DB 매핑 생성
+        pdb_by_code = {p["code"]: p for p in st.session_state.db["products"]}
+        
+        for code, q in st.session_state.quote_items.items():
+            inf = pdb_by_code.get(code, {})
+            # 정보가 없으면 패스
+            if not inf: continue
+            
+            n = inf['name']
+            cpr = inf.get("price_cons", 0)
             row = {"품목": n, "규격": inf.get("spec", ""), "수량": q, "소비자가": cpr, "합계": cpr*q}
             row["order_no"] = inf.get("order_no", 9999)
             
@@ -730,7 +751,10 @@ else:
             all_products = st.session_state.db["products"]
             ap_obj = st.selectbox("품목 추가", all_products, format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec','-')})")
             aq = st.number_input("수량", 1)
-            if st.button("추가"): st.session_state.quote_items[ap_obj['name']] = st.session_state.quote_items.get(ap_obj['name'], 0) + aq; st.rerun()
+            if st.button("추가"): 
+                # 코드로 추가
+                st.session_state.quote_items[ap_obj['code']] = st.session_state.quote_items.get(ap_obj['code'], 0) + aq
+                st.rerun()
         with c2:
             stype = st.selectbox("비용", ["배송비", "용역비", "기타"])
             sn = st.text_input("내용") if stype=="기타" else stype
@@ -781,12 +805,18 @@ else:
         if sel: sel = sorted(sel, key=lambda x: price_rank.get(x, 6))
 
         pkey = {"매입단가":"price_buy", "총판가1":"price_d1", "총판가2":"price_d2", "대리점가":"price_agy", "소비자가":"price_cons", "단가(현장)":"price_site"}
-        pdb = {p["name"]: p for p in st.session_state.db["products"]}; pk = [pkey[l] for l in sel] if sel else ["price_cons"]
+        
+        # [수정] PDF 생성 데이터 준비 (코드로 조회)
+        pdb_by_code = {p["code"]: p for p in st.session_state.db["products"]}
+        pk = [pkey[l] for l in sel] if sel else ["price_cons"]
         
         fdata = []
-        for n, q in st.session_state.quote_items.items():
-            inf = pdb.get(n, {})
-            d = {"품목": n, "규격": inf.get("spec", ""), "코드": inf.get("code", ""), "단위": inf.get("unit", "EA"), "수량": int(q), "image_data": inf.get("image"), "order_no": inf.get("order_no", 9999)}
+        for code, q in st.session_state.quote_items.items():
+            inf = pdb_by_code.get(code, {})
+            if not inf: continue
+            
+            n = inf['name']
+            d = {"품목": n, "규격": inf.get("spec", ""), "코드": code, "단위": inf.get("unit", "EA"), "수량": int(q), "image_data": inf.get("image"), "order_no": inf.get("order_no", 9999)}
             try: p1_val = int(inf.get(pk[0], 0))
             except: p1_val = 0
             d["price_1"] = p1_val

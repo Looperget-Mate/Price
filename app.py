@@ -24,8 +24,8 @@ FONT_FILE = "NanumGothic.ttf"
 FONT_BOLD_FILE = "NanumGothicBold.ttf"
 FONT_URL = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
 
-# 폰트 파일 검증 및 다운로드 (파일이 없거나 깨졌을 경우 다시 받음)
-if not os.path.exists(FONT_FILE) or os.path.getsize(FONT_FILE) < 100:
+# [수정] 폰트 파일 검증 및 다운로드 로직 강화
+if not os.path.exists(FONT_FILE) or os.path.getsize(FONT_FILE) < 1000: # 파일이 너무 작으면(깨진 것) 다시 받음
     import urllib.request
     try: 
         urllib.request.urlretrieve(FONT_URL, FONT_FILE)
@@ -227,6 +227,7 @@ def save_sets_to_sheet(sets_dict):
 # ==========================================
 class PDF(FPDF):
     def header(self):
+        # 폰트 로드 (실패시 Arial)
         if os.path.exists(FONT_FILE):
             try:
                 self.add_font('NanumGothic', '', FONT_FILE, uni=True)
@@ -262,6 +263,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         
         has_font = os.path.exists(FONT_FILE)
         font_name = 'NanumGothic' if has_font else 'Arial'
+        
         if has_font:
             try: pdf.add_font(font_name, '', FONT_FILE, uni=True)
             except: font_name = 'Arial'
@@ -404,7 +406,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         pdf.ln(10); pdf.set_font(font_name, '', 16)
         pdf.cell(0, 10, "주식회사 신진켐텍", align='C', ln=1)
         
-        # [수정] PDF 출력 인코딩 변경 (가장 안전한 방식)
+        # [수정] PDF 출력 방식 안전하게 변경 (latin-1 인코딩)
         return pdf.output(dest='S').encode('latin-1')
         
     except Exception as e:
@@ -516,7 +518,7 @@ if mode == "관리자 모드":
                 ec1, ec2 = st.columns([1, 1])
                 with ec1:
                     buf = io.BytesIO()
-                    # [수정완료] 안전한 문법으로 변경
+                    # [수정] 문법 오류 해결 (줄바꿈 처리)
                     with pd.ExcelWriter(buf, engine='xlsxwriter') as w: 
                         df_disp[final_cols].to_excel(w, index=False)
                     st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")

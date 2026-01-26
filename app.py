@@ -184,7 +184,6 @@ def load_data_from_sheet():
 
             data["products"].append(new_rec)
             
-        # 데이터 로드 후 '순번' 기준으로 정렬
         data["products"] = sorted(data["products"], key=lambda x: x["order_no"])
 
     except Exception as e: st.error(f"데이터 로드 오류: {e}")
@@ -408,6 +407,10 @@ if "auth_admin" not in st.session_state: st.session_state.auth_admin = False
 if "auth_price" not in st.session_state: st.session_state.auth_price = False
 if "recipient_info" not in st.session_state: st.session_state.recipient_info = {}
 
+# [추가] 배관 다중 선택을 위한 임시 저장소
+if "added_main_pipes" not in st.session_state: st.session_state.added_main_pipes = []
+if "added_branch_pipes" not in st.session_state: st.session_state.added_branch_pipes = []
+
 DEFAULT_DATA = {"config": {"password": "1234"}, "products":[], "sets":{}}
 if not st.session_state.db: st.session_state.db = DEFAULT_DATA
 if "config" not in st.session_state.db: st.session_state.db["config"] = {"password": "1234"}
@@ -422,12 +425,15 @@ with st.sidebar:
     with c1:
         if st.button("💾 임시저장"):
             st.session_state.history[q_name] = {
-                "items": st.session_state.quote_items, "services": st.session_state.services, "step": st.session_state.quote_step, "recipient": st.session_state.recipient_info
+                "items": st.session_state.quote_items, "services": st.session_state.services, "step": st.session_state.quote_step, "recipient": st.session_state.recipient_info,
+                "added_main": st.session_state.added_main_pipes, "added_branch": st.session_state.added_branch_pipes
             }
             st.session_state.current_quote_name = q_name; st.success("저장됨")
     with c2:
         if st.button("✨ 초기화"):
-            st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.quote_step = 1; st.session_state.current_quote_name = ""; st.session_state.recipient_info={}; st.rerun()
+            st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.quote_step = 1; st.session_state.current_quote_name = ""; st.session_state.recipient_info={}; 
+            st.session_state.added_main_pipes = []; st.session_state.added_branch_pipes = []
+            st.rerun()
     st.divider()
     h_list = list(st.session_state.history.keys())[::-1]
     if h_list:
@@ -436,17 +442,17 @@ with st.sidebar:
             d = st.session_state.history[sel_h]
             st.session_state.quote_items = d["items"]; st.session_state.services = d["services"]; st.session_state.quote_step = d.get("step", 2); st.session_state.current_quote_name = sel_h
             st.session_state.recipient_info = d.get("recipient", {})
+            st.session_state.added_main_pipes = d.get("added_main", [])
+            st.session_state.added_branch_pipes = d.get("added_branch", [])
             st.rerun()
     
     st.divider(); mode = st.radio("모드", ["견적 작성", "관리자 모드"])
 
 if mode == "관리자 모드":
+    # (관리자 모드 코드는 기존과 동일 유지 - 생략 없이 포함)
     st.header("🛠 관리자 모드 (Google Cloud 연동)")
-    
     if st.button("🔄 구글시트 데이터 새로고침 (오류 시 클릭)", type="primary"):
-        st.session_state.db = load_data_from_sheet()
-        st.success("데이터를 다시 불러왔습니다!")
-        st.rerun()
+        st.session_state.db = load_data_from_sheet(); st.success("데이터를 다시 불러왔습니다!"); st.rerun()
 
     if not st.session_state.auth_admin:
         pw = st.text_input("관리자 비밀번호", type="password")
@@ -456,14 +462,12 @@ if mode == "관리자 모드":
     else:
         if st.button("로그아웃"): st.session_state.auth_admin = False; st.rerun()
         t1, t2, t3 = st.tabs(["부품 관리", "세트 관리", "설정"])
-        
         with t1:
             st.markdown("##### 🔍 제품 및 엑셀 관리")
             with st.expander("📂 엑셀 데이터 등록/다운로드 (클릭)", expanded=True):
                 df = pd.DataFrame(st.session_state.db["products"])
                 if "order_no" not in df.columns: df["order_no"] = 9999
                 df = df.sort_values(by="order_no")
-                
                 df_disp = df.rename(columns=REV_COL_MAP)
                 if "이미지데이터" in df_disp.columns: df_disp["이미지데이터"] = df_disp["이미지데이터"].apply(lambda x: x if x else "")
                 
@@ -481,36 +485,25 @@ if mode == "관리자 모드":
                 disp_cols = []
                 for c in ordered_cols:
                     if c in REV_COL_MAP: disp_cols.append(REV_COL_MAP[c])
-                
                 final_cols = [c for c in disp_cols if c in df_disp.columns]
                 
-                st.dataframe(
-                    df_disp[final_cols], 
-                    use_container_width=True, 
-                    hide_index=True,
-                    column_config={
+                st.dataframe(df_disp[final_cols], use_container_width=True, hide_index=True, column_config={
                         "이미지데이터": st.column_config.TextColumn("이미지 파일", help="연결된 이미지 파일명"),
                         "단가(현장)": st.column_config.NumberColumn("단가(현장)", format="%d원"),
                         "매입단가": st.column_config.NumberColumn("매입단가", format="%d원"),
                         "순번": st.column_config.NumberColumn("순번", format="%d")
-                    }
-                )
-                
+                    })
                 st.divider()
                 ec1, ec2 = st.columns([1, 1])
                 with ec1:
-                    buf = io.BytesIO()
-                    with pd.ExcelWriter(buf, engine='xlsxwriter') as w: df_disp[final_cols].to_excel(w, index=False)
+                    buf = io.BytesIO(); with pd.ExcelWriter(buf, engine='xlsxwriter') as w: df_disp[final_cols].to_excel(w, index=False)
                     st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")
                 with ec2:
                     uf = st.file_uploader("엑셀 파일 선택", ["xlsx"], label_visibility="collapsed")
                     if uf and st.button("시트에 덮어쓰기"):
                         try:
                             ndf = pd.read_excel(uf, dtype={'품목코드': str}).rename(columns=COL_MAP).fillna(0)
-                            nrec = ndf.to_dict('records')
-                            save_products_to_sheet(nrec)
-                            st.session_state.db = load_data_from_sheet() 
-                            st.success("업로드 및 동기화 완료"); st.rerun()
+                            nrec = ndf.to_dict('records'); save_products_to_sheet(nrec); st.session_state.db = load_data_from_sheet(); st.success("업로드 및 동기화 완료"); st.rerun()
                         except Exception as e: st.error(e)
 
             st.divider(); st.markdown("##### 🔄 드라이브 이미지 일괄 동기화")
@@ -525,24 +518,15 @@ if mode == "관리자 모드":
                             for p in products:
                                 code = str(p.get("code", "")).strip()
                                 if code and code in file_map: p["image"] = file_map[code]; updated_count += 1
-                            if updated_count > 0:
-                                save_products_to_sheet(products); st.success(f"✅ 총 {updated_count}개의 제품 이미지를 연결했습니다!"); st.session_state.db = load_data_from_sheet() 
+                            if updated_count > 0: save_products_to_sheet(products); st.success(f"✅ 총 {updated_count}개의 제품 이미지를 연결했습니다!"); st.session_state.db = load_data_from_sheet() 
                             else: st.warning("매칭되는 이미지가 없습니다.")
 
             st.divider(); st.markdown("##### 🖼️ 개별 이미지 업로드")
             c1, c2, c3 = st.columns([2, 2, 1])
-            # [수정] 관리자 모드 개별 이미지 업로드에도 스마트 검색 적용
             products = st.session_state.db["products"]
             with c1: 
-                # 여기서 객체를 바로 넘김
-                selected_product_obj = st.selectbox(
-                    "대상 품목", 
-                    products, 
-                    format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec', '-')})"
-                )
-                # 파일 업로드 로직에서 쓸 이름 추출
+                selected_product_obj = st.selectbox("대상 품목", products, format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec', '-')})")
                 tp = selected_product_obj['name']
-
             with c2: ifile = st.file_uploader("이미지 파일", ["png", "jpg"], key="pimg")
             with c3:
                 st.write(""); st.write("")
@@ -555,7 +539,6 @@ if mode == "관리자 모드":
                                     if p["name"] == tp: p["image"] = fid
                                 save_products_to_sheet(st.session_state.db["products"]); st.success("저장 완료!")
                             else: st.error("실패")
-
         with t2:
             st.subheader("세트 관리")
             cat = st.selectbox("분류", ["주배관세트", "가지관세트", "기타자재"])
@@ -576,14 +559,7 @@ if mode == "관리자 모드":
 
             if mt == "신규":
                  nn = st.text_input("세트명"); c1, c2, c3 = st.columns([3,2,1])
-                 # [수정] 세트 관리 신규 부품 추가 - 스마트 검색 적용
-                 with c1: 
-                     sp_obj = st.selectbox(
-                         "부품", 
-                         products_obj, 
-                         format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec','-')})", 
-                         key="nsp"
-                     )
+                 with c1: sp_obj = st.selectbox("부품", products_obj, format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec','-')})", key="nsp")
                  with c2: sq = st.number_input("수량", 1, key="nsq")
                  with c3: 
                      if st.button("담기"): st.session_state.temp_set_recipe[sp_obj['name']] = sq
@@ -599,14 +575,7 @@ if mode == "관리자 모드":
                          c1, c2, c3 = st.columns([4,1,1]); c1.text(f"{k} (수량:{v})")
                          if c3.button("삭제", key=f"d{k}"): del st.session_state.temp_set_recipe[k]; st.rerun()
                      c1, c2, c3 = st.columns([3,2,1])
-                     # [수정] 세트 관리 편집 모드 추가 - 스마트 검색 적용
-                     with c1: 
-                         ap_obj = st.selectbox(
-                             "추가", 
-                             products_obj, 
-                             format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec','-')})", 
-                             key="esp"
-                         )
+                     with c1: ap_obj = st.selectbox("추가", products_obj, format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec','-')})", key="esp")
                      with c2: aq = st.number_input("수량", 1, key="esq")
                      with c3: 
                          if st.button("담기", key="esa"): st.session_state.temp_set_recipe[ap_obj['name']] = aq; st.rerun()
@@ -634,7 +603,7 @@ else:
                     res[n] = st.number_input(n, 0, key=f"{pf}_{n}")
             return res
 
-        with st.expander("1. 주배관", True):
+        with st.expander("1. 세트 입력 (주배관/가지관 세트)", True):
             m_sets = sets.get("주배관세트", {}); grouped = {"50mm":{}, "40mm":{}, "기타":{}, "미분류":{}}
             for k, v in m_sets.items():
                 sc = v.get("sub_cat", "미분류") if isinstance(v, dict) else "미분류"
@@ -646,47 +615,92 @@ else:
             with mt3: inp_m_etc = render_inputs(grouped["기타"], "metc")
             with mt4: inp_m_u = render_inputs(grouped["미분류"], "mu")
         
-        with st.expander("2. 가지관"): inp_b = render_inputs(sets.get("가지관세트", {}), "b")
-        with st.expander("3. 기타"): inp_e = render_inputs(sets.get("기타자재", {}), "e")
+        with st.expander("2. 가지관 세트"): inp_b = render_inputs(sets.get("가지관세트", {}), "b")
+        with st.expander("3. 기타 자재"): inp_e = render_inputs(sets.get("기타자재", {}), "e")
         
+        # [수정] 배관 다중 선택 기능 (장바구니 방식)
         all_products = st.session_state.db["products"]
-        
         mpl = [p for p in all_products if p["category"] == "주배관"]
         bpl = [p for p in all_products if p["category"] == "가지관"]
         
+        st.markdown("---")
         c1, c2 = st.columns(2)
-        with c1: 
-            # [수정] 견적 STEP 1 개별 추가 - 스마트 검색 적용
-            sm_obj = st.selectbox(
-                "주배관 (개별 추가)", 
-                mpl, 
-                format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec','-')})"
-            ) if mpl else None
-            lm = st.number_input("길이m", 0, key="lm")
-        with c2: 
-            # [수정] 견적 STEP 1 개별 추가 - 스마트 검색 적용
-            sb_obj = st.selectbox(
-                "가지관 (개별 추가)", 
-                bpl, 
-                format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec','-')})"
-            ) if bpl else None
-            lb = st.number_input("길이m", 0, key="lb")
+        
+        # 주배관 추가
+        with c1:
+            st.markdown("##### 4. 주배관 길이 산출")
+            sm_obj = st.selectbox("주배관 선택", mpl, format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec','-')})", key="sel_main") if mpl else None
+            lm = st.number_input("길이(m)", 0, key="len_main")
+            if st.button("➕ 주배관 추가"):
+                if sm_obj and lm > 0:
+                    st.session_state.added_main_pipes.append({"obj": sm_obj, "len": lm})
+            
+            # 주배관 목록 표시
+            if st.session_state.added_main_pipes:
+                md_list = []
+                for idx, item in enumerate(st.session_state.added_main_pipes):
+                    p = item['obj']
+                    md_list.append({"품목": p['name'], "규격": p.get('spec','-'), "길이(m)": item['len']})
+                st.dataframe(pd.DataFrame(md_list), hide_index=True, use_container_width=True)
+                if st.button("주배관 목록 초기화", key="clr_main"):
+                    st.session_state.added_main_pipes = []; st.rerun()
 
-        if st.button("계산하기 (STEP 2)"):
+        # 가지관 추가
+        with c2:
+            st.markdown("##### 5. 가지관 길이 산출")
+            sb_obj = st.selectbox("가지관 선택", bpl, format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec','-')})", key="sel_branch") if bpl else None
+            lb = st.number_input("길이(m)", 0, key="len_branch")
+            if st.button("➕ 가지관 추가"):
+                if sb_obj and lb > 0:
+                    st.session_state.added_branch_pipes.append({"obj": sb_obj, "len": lb})
+            
+            # 가지관 목록 표시
+            if st.session_state.added_branch_pipes:
+                bd_list = []
+                for idx, item in enumerate(st.session_state.added_branch_pipes):
+                    p = item['obj']
+                    bd_list.append({"품목": p['name'], "규격": p.get('spec','-'), "길이(m)": item['len']})
+                st.dataframe(pd.DataFrame(bd_list), hide_index=True, use_container_width=True)
+                if st.button("가지관 목록 초기화", key="clr_branch"):
+                    st.session_state.added_branch_pipes = []; st.rerun()
+
+        st.divider()
+        if st.button("계산하기 (STEP 2)", type="primary"):
             res = {}; all_m = {**inp_m_50, **inp_m_40, **inp_m_etc, **inp_m_u}
+            # 세트 계산
             def ex(ins, db):
                 for k,v in ins.items():
                     if v>0:
                         rec = db[k].get("recipe", db[k])
                         for p, q in rec.items(): res[p] = res.get(p, 0) + q*v
             ex(all_m, sets.get("주배관세트", {})); ex(inp_b, sets.get("가지관세트", {})); ex(inp_e, sets.get("기타자재", {}))
-            def cr(p_obj, l):
-                if l>0 and p_obj: res[p_obj['name']] = res.get(p_obj['name'], 0) + math.ceil(l/p_obj["len_per_unit"])
-            cr(sm_obj, lm); cr(sb_obj, lb)
+            
+            # [수정] 주배관/가지관 리스트 계산 로직 (분리 및 다중 처리)
+            # 주배관 계산
+            for item in st.session_state.added_main_pipes:
+                p_obj = item['obj']; length = item['len']
+                roll_len = p_obj.get("len_per_unit", 50) # 기본 50m
+                if roll_len == 0: roll_len = 50 # 0이면 50으로 처리 (나눗셈 에러 방지)
+                qty = math.ceil(length / roll_len)
+                res[p_obj['name']] = res.get(p_obj['name'], 0) + qty
+            
+            # 가지관 계산
+            for item in st.session_state.added_branch_pipes:
+                p_obj = item['obj']; length = item['len']
+                roll_len = p_obj.get("len_per_unit", 50)
+                if roll_len == 0: roll_len = 50
+                qty = math.ceil(length / roll_len)
+                res[p_obj['name']] = res.get(p_obj['name'], 0) + qty
+
             st.session_state.quote_items = res; st.session_state.quote_step = 2; st.rerun()
 
     elif st.session_state.quote_step == 2:
         st.subheader("STEP 2. 내용 검토")
+        
+        # [수정] 뒤로가기 버튼 추가
+        if st.button("⬅️ 다시 입력 (STEP 1)"):
+            st.session_state.quote_step = 1; st.rerun()
+
         view_opts = ["소비자가"]
         if st.session_state.auth_price: view_opts += ["매입가", "총판1", "총판2", "대리점", "단가(현장)"]
         
@@ -722,12 +736,7 @@ else:
         c1, c2 = st.columns(2)
         with c1:
             all_products = st.session_state.db["products"]
-            # [수정] 견적 STEP 2 추가 - 스마트 검색 적용
-            ap_obj = st.selectbox(
-                "품목 추가", 
-                all_products, 
-                format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec','-')})"
-            )
+            ap_obj = st.selectbox("품목 추가", all_products, format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec','-')})")
             aq = st.number_input("수량", 1)
             if st.button("추가"): st.session_state.quote_items[ap_obj['name']] = st.session_state.quote_items.get(ap_obj['name'], 0) + aq; st.rerun()
         with c2:
@@ -739,7 +748,7 @@ else:
         if st.button("최종 확정 (STEP 3)"): st.session_state.quote_step = 3; st.rerun()
 
     elif st.session_state.quote_step == 3:
-        # (이하 기존 유지)
+        # (기존 STEP 3 코드 유지)
         st.header("🏁 최종 견적")
         if not st.session_state.current_quote_name: st.warning("저장해주세요!")
         st.markdown("##### 🖨️ 수신자 정보 입력")
@@ -814,4 +823,6 @@ else:
         with c1: 
             if st.button("⬅️ 수정"): st.session_state.quote_step = 2; st.rerun()
         with c2:
-            if st.button("🔄 처음으로"): st.session_state.quote_step = 1; st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.current_quote_name = ""; st.session_state.recipient_info={}; st.rerun()
+            if st.button("🔄 처음으로"): st.session_state.quote_step = 1; st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.current_quote_name = ""; st.session_state.recipient_info={}; 
+            st.session_state.added_main_pipes = []; st.session_state.added_branch_pipes = []
+            st.rerun()

@@ -168,7 +168,6 @@ def load_data_from_sheet():
                     if k == "품목코드": new_rec[COL_MAP[k]] = str(v).zfill(5)
                     else: new_rec[COL_MAP[k]] = v
             
-            # [안전장치] 빈 값 처리
             if "order_no" not in new_rec or new_rec["order_no"] == "":
                 new_rec["order_no"] = 9999
             else:
@@ -449,7 +448,6 @@ with st.sidebar:
     st.divider(); mode = st.radio("모드", ["견적 작성", "관리자 모드"])
 
 if mode == "관리자 모드":
-    # (관리자 모드 코드는 기존과 동일 유지 - 생략 없이 포함)
     st.header("🛠 관리자 모드 (Google Cloud 연동)")
     if st.button("🔄 구글시트 데이터 새로고침 (오류 시 클릭)", type="primary"):
         st.session_state.db = load_data_from_sheet(); st.success("데이터를 다시 불러왔습니다!"); st.rerun()
@@ -496,7 +494,10 @@ if mode == "관리자 모드":
                 st.divider()
                 ec1, ec2 = st.columns([1, 1])
                 with ec1:
-                    buf = io.BytesIO(); with pd.ExcelWriter(buf, engine='xlsxwriter') as w: df_disp[final_cols].to_excel(w, index=False)
+                    buf = io.BytesIO()
+                    # [수정] 여기가 문법 오류 났던 부분! 두 줄로 나눴습니다.
+                    with pd.ExcelWriter(buf, engine='xlsxwriter') as w: 
+                        df_disp[final_cols].to_excel(w, index=False)
                     st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")
                 with ec2:
                     uf = st.file_uploader("엑셀 파일 선택", ["xlsx"], label_visibility="collapsed")
@@ -603,7 +604,7 @@ else:
                     res[n] = st.number_input(n, 0, key=f"{pf}_{n}")
             return res
 
-        with st.expander("1. 세트 입력 (주배관/가지관 세트)", True):
+        with st.expander("1. 주배관", True):
             m_sets = sets.get("주배관세트", {}); grouped = {"50mm":{}, "40mm":{}, "기타":{}, "미분류":{}}
             for k, v in m_sets.items():
                 sc = v.get("sub_cat", "미분류") if isinstance(v, dict) else "미분류"
@@ -615,18 +616,17 @@ else:
             with mt3: inp_m_etc = render_inputs(grouped["기타"], "metc")
             with mt4: inp_m_u = render_inputs(grouped["미분류"], "mu")
         
-        with st.expander("2. 가지관 세트"): inp_b = render_inputs(sets.get("가지관세트", {}), "b")
-        with st.expander("3. 기타 자재"): inp_e = render_inputs(sets.get("기타자재", {}), "e")
+        with st.expander("2. 가지관"): inp_b = render_inputs(sets.get("가지관세트", {}), "b")
+        with st.expander("3. 기타"): inp_e = render_inputs(sets.get("기타자재", {}), "e")
         
-        # [수정] 배관 다중 선택 기능 (장바구니 방식)
         all_products = st.session_state.db["products"]
+        
         mpl = [p for p in all_products if p["category"] == "주배관"]
         bpl = [p for p in all_products if p["category"] == "가지관"]
         
         st.markdown("---")
         c1, c2 = st.columns(2)
         
-        # 주배관 추가
         with c1:
             st.markdown("##### 4. 주배관 길이 산출")
             sm_obj = st.selectbox("주배관 선택", mpl, format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec','-')})", key="sel_main") if mpl else None
@@ -635,7 +635,6 @@ else:
                 if sm_obj and lm > 0:
                     st.session_state.added_main_pipes.append({"obj": sm_obj, "len": lm})
             
-            # 주배관 목록 표시
             if st.session_state.added_main_pipes:
                 md_list = []
                 for idx, item in enumerate(st.session_state.added_main_pipes):
@@ -645,7 +644,6 @@ else:
                 if st.button("주배관 목록 초기화", key="clr_main"):
                     st.session_state.added_main_pipes = []; st.rerun()
 
-        # 가지관 추가
         with c2:
             st.markdown("##### 5. 가지관 길이 산출")
             sb_obj = st.selectbox("가지관 선택", bpl, format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec','-')})", key="sel_branch") if bpl else None
@@ -654,7 +652,6 @@ else:
                 if sb_obj and lb > 0:
                     st.session_state.added_branch_pipes.append({"obj": sb_obj, "len": lb})
             
-            # 가지관 목록 표시
             if st.session_state.added_branch_pipes:
                 bd_list = []
                 for idx, item in enumerate(st.session_state.added_branch_pipes):
@@ -667,7 +664,6 @@ else:
         st.divider()
         if st.button("계산하기 (STEP 2)", type="primary"):
             res = {}; all_m = {**inp_m_50, **inp_m_40, **inp_m_etc, **inp_m_u}
-            # 세트 계산
             def ex(ins, db):
                 for k,v in ins.items():
                     if v>0:
@@ -675,16 +671,13 @@ else:
                         for p, q in rec.items(): res[p] = res.get(p, 0) + q*v
             ex(all_m, sets.get("주배관세트", {})); ex(inp_b, sets.get("가지관세트", {})); ex(inp_e, sets.get("기타자재", {}))
             
-            # [수정] 주배관/가지관 리스트 계산 로직 (분리 및 다중 처리)
-            # 주배관 계산
             for item in st.session_state.added_main_pipes:
                 p_obj = item['obj']; length = item['len']
-                roll_len = p_obj.get("len_per_unit", 50) # 기본 50m
-                if roll_len == 0: roll_len = 50 # 0이면 50으로 처리 (나눗셈 에러 방지)
+                roll_len = p_obj.get("len_per_unit", 50) 
+                if roll_len == 0: roll_len = 50 
                 qty = math.ceil(length / roll_len)
                 res[p_obj['name']] = res.get(p_obj['name'], 0) + qty
             
-            # 가지관 계산
             for item in st.session_state.added_branch_pipes:
                 p_obj = item['obj']; length = item['len']
                 roll_len = p_obj.get("len_per_unit", 50)
@@ -697,7 +690,6 @@ else:
     elif st.session_state.quote_step == 2:
         st.subheader("STEP 2. 내용 검토")
         
-        # [수정] 뒤로가기 버튼 추가
         if st.button("⬅️ 다시 입력 (STEP 1)"):
             st.session_state.quote_step = 1; st.rerun()
 
@@ -748,7 +740,6 @@ else:
         if st.button("최종 확정 (STEP 3)"): st.session_state.quote_step = 3; st.rerun()
 
     elif st.session_state.quote_step == 3:
-        # (기존 STEP 3 코드 유지)
         st.header("🏁 최종 견적")
         if not st.session_state.current_quote_name: st.warning("저장해주세요!")
         st.markdown("##### 🖨️ 수신자 정보 입력")

@@ -227,6 +227,7 @@ def save_sets_to_sheet(sets_dict):
 # ==========================================
 class PDF(FPDF):
     def header(self):
+        # 폰트 로드 (실패시 Arial)
         if os.path.exists(FONT_FILE):
             try:
                 self.add_font('NanumGothic', '', FONT_FILE, uni=True)
@@ -239,10 +240,8 @@ class PDF(FPDF):
         self.cell(0, 15, '견 적 서 (Quotation)', align='C', new_x="LMARGIN", new_y="NEXT")
         
         if os.path.exists(FONT_FILE):
-            try:
-                self.set_font('NanumGothic', '', 9)
-            except:
-                self.set_font('Arial', '', 9)
+            try: self.set_font('NanumGothic', '', 9)
+            except: self.set_font('Arial', '', 9)
         else:
             self.set_font('Arial', '', 9)
             
@@ -406,8 +405,12 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         
         pdf.ln(10); pdf.set_font(font_name, '', 16)
         pdf.cell(0, 10, "주식회사 신진켐텍", align='C', ln=1)
-        return bytes(pdf.output())
+        
+        # [수정] PDF 출력 방식 변경 (가장 안전한 방식)
+        return pdf.output(dest='S').encode('latin-1')
+        
     except Exception as e:
+        print(f"PDF 생성 에러: {e}")
         return None
 
 # ==========================================
@@ -515,7 +518,7 @@ if mode == "관리자 모드":
                 ec1, ec2 = st.columns([1, 1])
                 with ec1:
                     buf = io.BytesIO()
-                    # [수정완료] 문법 오류 해결 (줄바꿈)
+                    # [수정완료] 안전한 문법으로 변경
                     with pd.ExcelWriter(buf, engine='xlsxwriter') as w: 
                         df_disp[final_cols].to_excel(w, index=False)
                     st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")

@@ -2,12 +2,12 @@ import os
 import streamlit as st
 import pandas as pd
 import math
-import io
 import base64
 import tempfile
 import json
 import datetime
 import time
+# [주의] io 라이브러리 제거 (임시파일 방식으로 대체하여 충돌 원천 차단)
 from PIL import Image
 from fpdf import FPDF
 
@@ -24,7 +24,7 @@ FONT_FILE = "NanumGothic.ttf"
 FONT_BOLD_FILE = "NanumGothicBold.ttf"
 FONT_URL = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
 
-# [수정] 폰트 파일 검증 (파일이 없거나 깨진 경우 다시 다운로드)
+# 폰트 파일 검증 및 다운로드
 if not os.path.exists(FONT_FILE) or os.path.getsize(FONT_FILE) < 1000:
     import urllib.request
     try: 
@@ -94,17 +94,24 @@ def get_image_from_drive(filename):
         
         file_id = files[0]['id']
         request = drive_service.files().get_media(fileId=file_id)
-        fh = io.BytesIO()
-        downloader = MediaIoBaseDownload(fh, request)
-        done = False
-        while done is False: status, done = downloader.next_chunk()
         
-        fh.seek(0)
-        img = Image.open(fh)
+        # [수정] 임시 파일 사용 방식으로 변경 (메모리 버퍼 오류 방지)
+        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+            downloader = MediaIoBaseDownload(tmp_file, request)
+            done = False
+            while done is False: status, done = downloader.next_chunk()
+            tmp_path = tmp_file.name
+        
+        img = Image.open(tmp_path)
         img = img.convert('RGB')
         img.thumbnail((300, 225))
+        
+        # 다시 읽어서 base64 변환
+        import io
         buffer = io.BytesIO()
         img.save(buffer, format="JPEG")
+        os.unlink(tmp_path) # 임시 파일 삭제
+        
         return f"data:image/jpeg;base64,{base64.b64encode(buffer.getvalue()).decode()}"
     except Exception: return None
 
@@ -223,36 +230,29 @@ def save_sets_to_sheet(sets_dict):
     ws_sets.update(rows)
 
 # ==========================================
-# 2. PDF 생성 엔진
+# 2. PDF 생성 엔진 (안전한 파일 생성 방식)
 # ==========================================
 class PDF(FPDF):
     def header(self):
-        if os.path.exists(FONT_FILE) and os.path.getsize(FONT_FILE) > 1000:
+        if os.path.exists(FONT_FILE):
             try:
                 self.add_font('NanumGothic', '', FONT_FILE, uni=True)
                 self.set_font('NanumGothic', '', 20)
-            except:
-                self.set_font('Arial', 'B', 20)
-        else:
-            self.set_font('Arial', 'B', 20)
-            
-        self.cell(0, 15, 'Quotation (Estimate)', align='C', new_x="LMARGIN", new_y="NEXT")
-        
-        if os.path.exists(FONT_FILE) and os.path.getsize(FONT_FILE) > 1000:
+            except: self.set_font('Arial', 'B', 20)
+        else: self.set_font('Arial', 'B', 20)
+        self.cell(0, 15, '견 적 서 (Quotation)', align='C', new_x="LMARGIN", new_y="NEXT")
+        if os.path.exists(FONT_FILE):
             try: self.set_font('NanumGothic', '', 9)
             except: self.set_font('Arial', '', 9)
-        else:
-            self.set_font('Arial', '', 9)
-            
+        else: self.set_font('Arial', '', 9)
         self.ln(2)
 
     def footer(self):
         self.set_y(-20)
-        if os.path.exists(FONT_FILE) and os.path.getsize(FONT_FILE) > 1000:
+        if os.path.exists(FONT_FILE):
             try: self.set_font('NanumGothic', '', 8)
             except: self.set_font('Arial', 'I', 8)
-        else:
-            self.set_font('Arial', 'I', 8)
+        else: self.set_font('Arial', 'I', 8)
         self.cell(0, 5, f'Page {self.page_no()}', align='C')
 
 def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, recipient_info):
@@ -262,62 +262,55 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         
         has_font = os.path.exists(FONT_FILE) and os.path.getsize(FONT_FILE) > 1000
         font_name = 'NanumGothic' if has_font else 'Arial'
-        
         if has_font:
             try: pdf.add_font(font_name, '', FONT_FILE, uni=True)
             except: font_name = 'Arial'
         
         pdf.set_font(font_name, '', 10)
 
-        # 사업자 정보
+        # (PDF 내용 생성 로직은 동일)
         pdf.set_fill_color(255, 255, 255)
         supplier_info = {"상호": "(주)신진켐텍", "대표자": "박형석 (인)", "주소": "경기도 이천시 부발읍 황무로 1859-157", "전화": "031-638-1809", "웹사이트": "www.sjct.kr / support@sjct.kr"}
         top_y = pdf.get_y()
         
-        pdf.set_xy(10, top_y)
-        pdf.set_font(font_name, '', 10)
-        pdf.cell(90, 8, " [ Customer Info ]", border=0, ln=1)
+        pdf.set_xy(10, top_y); pdf.set_font(font_name, '', 10); pdf.cell(90, 8, " [ 수신자 정보 ]", border=0, ln=1)
         pdf.set_font(font_name, '', 9)
-        pdf.cell(25, 6, "Customer:", border=0); pdf.cell(65, 6, f"{recipient_info.get('name', '')}", border="B", ln=1)
-        pdf.cell(25, 6, "Contact:", border=0); pdf.cell(65, 6, f"{recipient_info.get('contact', '')}", border="B", ln=1)
-        pdf.cell(25, 6, "Phone:", border=0); pdf.cell(65, 6, f"{recipient_info.get('phone', '')}", border="B", ln=1)
-        pdf.cell(25, 6, "Address:", border=0); pdf.cell(65, 6, f"{recipient_info.get('addr', '')}", border="B", ln=1)
+        pdf.cell(25, 6, "현장/업체명:", border=0); pdf.cell(65, 6, f"{recipient_info.get('name', '')}", border="B", ln=1)
+        pdf.cell(25, 6, "담당자:", border=0); pdf.cell(65, 6, f"{recipient_info.get('contact', '')}", border="B", ln=1)
+        pdf.cell(25, 6, "전화번호:", border=0); pdf.cell(65, 6, f"{recipient_info.get('phone', '')}", border="B", ln=1)
+        pdf.cell(25, 6, "주소:", border=0); pdf.cell(65, 6, f"{recipient_info.get('addr', '')}", border="B", ln=1)
         
-        pdf.set_xy(105, top_y)
-        pdf.set_font(font_name, '', 10)
-        pdf.cell(90, 8, " [ Supplier Info ]", border=0, ln=1)
-        box_x = 105; box_y = pdf.get_y()
-        pdf.set_xy(box_x, box_y); pdf.set_font(font_name, '', 9)
-        pdf.cell(20, 6, "Reg. No", border=1, align='C'); pdf.cell(75, 6, "123-45-67890", border=1, align='C', ln=1) 
-        pdf.set_x(box_x); pdf.cell(20, 6, "Company", border=1, align='C'); pdf.cell(35, 6, supplier_info["상호"], border=1, align='C'); pdf.cell(15, 6, "Rep", border=1, align='C'); pdf.cell(25, 6, supplier_info["대표자"], border=1, align='C', ln=1)
-        pdf.set_x(box_x); pdf.cell(20, 12, "Address", border=1, align='C'); pdf.multi_cell(75, 6, supplier_info["주소"], border=1, align='L')
-        pdf.set_xy(box_x, pdf.get_y()); pdf.cell(20, 6, "Biz Type", border=1, align='C'); pdf.cell(35, 6, "Wholesale", border=1, align='C'); pdf.cell(15, 6, "Tel", border=1, align='C'); pdf.cell(25, 6, "031-638-1809", border=1, align='C', ln=1)
-        pdf.set_x(box_x); pdf.cell(20, 6, "E-mail", border=1, align='C'); pdf.cell(75, 6, "support@sjct.kr", border=1, align='C', ln=1)
+        pdf.set_xy(105, top_y); pdf.set_font(font_name, '', 10); pdf.cell(90, 8, " [ 공급자 정보 ]", border=0, ln=1)
+        box_x = 105; box_y = pdf.get_y(); pdf.set_xy(box_x, box_y); pdf.set_font(font_name, '', 9)
+        pdf.cell(20, 6, "등록번호", border=1, align='C'); pdf.cell(75, 6, "123-45-67890", border=1, align='C', ln=1) 
+        pdf.set_x(box_x); pdf.cell(20, 6, "상호", border=1, align='C'); pdf.cell(35, 6, supplier_info["상호"], border=1, align='C'); pdf.cell(15, 6, "대표자", border=1, align='C'); pdf.cell(25, 6, supplier_info["대표자"], border=1, align='C', ln=1)
+        pdf.set_x(box_x); pdf.cell(20, 12, "주소", border=1, align='C'); pdf.multi_cell(75, 6, supplier_info["주소"], border=1, align='L')
+        pdf.set_xy(box_x, pdf.get_y()); pdf.cell(20, 6, "업태/종목", border=1, align='C'); pdf.cell(35, 6, "도소매 / 농자재", border=1, align='C'); pdf.cell(15, 6, "전화", border=1, align='C'); pdf.cell(25, 6, "031-638-1809", border=1, align='C', ln=1)
+        pdf.set_x(box_x); pdf.cell(20, 6, "E-mail", border=1, align='C'); pdf.cell(75, 6, "support@sjct.kr / www.sjct.kr", border=1, align='C', ln=1)
 
         pdf.ln(5); pdf.set_font(font_name, '', 9)
-        pdf.cell(0, 5, f"Date: {quote_date}   (Valid: 15 Days)", align='R', ln=1); pdf.ln(2)
+        pdf.cell(0, 5, f"견적일자: {quote_date}   (유효기간: 견적일로부터 15일)", align='R', ln=1); pdf.ln(2)
 
-        # 표 헤더
         pdf.set_fill_color(240, 240, 240); h_height = 10
         pdf.cell(15, h_height, "IMG", border=1, align='C', fill=True)
-        pdf.cell(45, h_height, "Item / Spec / Code", border=1, align='C', fill=True) 
-        pdf.cell(10, h_height, "Unit", border=1, align='C', fill=True)
-        pdf.cell(12, h_height, "Qty", border=1, align='C', fill=True)
+        pdf.cell(45, h_height, "품목정보", border=1, align='C', fill=True) 
+        pdf.cell(10, h_height, "단위", border=1, align='C', fill=True)
+        pdf.cell(12, h_height, "수량", border=1, align='C', fill=True)
 
         if form_type == "basic":
-            label_text = price_labels[0] if price_labels else "Price"
-            pdf.cell(35, h_height, f"Price ({label_text})", border=1, align='C', fill=True)
-            pdf.cell(35, h_height, "Amount", border=1, align='C', fill=True)
-            pdf.cell(38, h_height, "Remark", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
+            label_text = price_labels[0] if price_labels else "단가"
+            pdf.cell(35, h_height, f"단가 ({label_text})", border=1, align='C', fill=True)
+            pdf.cell(35, h_height, "금액", border=1, align='C', fill=True)
+            pdf.cell(38, h_height, "비고", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
         else:
             l1, l2 = price_labels[0], price_labels[1]
             pdf.set_font(font_name, '', 8)
             pdf.cell(18, h_height, f"{l1}", border=1, align='C', fill=True)
-            pdf.cell(22, h_height, "Amt", border=1, align='C', fill=True)
+            pdf.cell(22, h_height, "금액", border=1, align='C', fill=True)
             pdf.cell(18, h_height, f"{l2}", border=1, align='C', fill=True)
-            pdf.cell(22, h_height, "Amt", border=1, align='C', fill=True)
-            pdf.cell(15, h_height, "Profit", border=1, align='C', fill=True)
-            pdf.cell(13, h_height, "%", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(22, h_height, "금액", border=1, align='C', fill=True)
+            pdf.cell(15, h_height, "이익", border=1, align='C', fill=True)
+            pdf.cell(13, h_height, "율", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
             pdf.set_font(font_name, '', 9)
 
         sum_qty = 0; sum_a1 = 0; sum_a2 = 0; sum_profit = 0
@@ -325,8 +318,19 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         for item in final_data_list:
             name = item.get("품목", ""); spec = item.get("규격", "-"); code = str(item.get("코드", "")).zfill(5) 
             qty = int(item.get("수량", 0)); img_filename = item.get("image_data", None)
-            img_b64 = None
-            if img_filename: img_b64 = get_image_from_drive(img_filename)
+            
+            # [수정] 임시 파일 생성 방식 사용
+            img_path = None
+            if img_filename:
+                # Base64 데이터를 임시 파일로 저장
+                try:
+                    b64_data = get_image_from_drive(img_filename)
+                    if b64_data:
+                        raw_data = base64.b64decode(b64_data.split(",", 1)[1])
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                            tmp.write(raw_data)
+                            img_path = tmp.name
+                except: pass
 
             sum_qty += qty
             p1 = int(item.get("price_1", 0)); a1 = p1 * qty; sum_a1 += a1
@@ -338,16 +342,14 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
                 rate = (profit / a2 * 100) if a2 else 0
 
             h = 15
-            if pdf.get_y() > 250: pdf.add_page() # 페이지 넘김
+            if pdf.get_y() > 250: pdf.add_page()
 
             x, y = pdf.get_x(), pdf.get_y()
             pdf.cell(15, h, "", border=1)
-            if img_b64:
+            if img_path:
                 try:
-                    data = base64.b64decode(img_b64.split(",", 1)[1])
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                        tmp.write(data); tmp_path = tmp.name
-                    pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11); os.unlink(tmp_path)
+                    pdf.image(img_path, x=x+2, y=y+2, w=11, h=11)
+                    os.unlink(img_path) # 사용 후 삭제
                 except: pass
 
             pdf.set_xy(x+15, y); pdf.cell(45, h, "", border=1) 
@@ -371,8 +373,8 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
                 pdf.cell(15, h, f"{profit:,}", border=1, align='R'); pdf.cell(13, h, f"{rate:.1f}%", border=1, align='C')
                 pdf.set_font(font_name, '', 9); pdf.ln()
 
-        pdf.set_fill_color(230, 230, 230); pdf.set_font(font_name, 'B' if has_font else '', 9)
-        pdf.cell(70, 10, "Sub Total", border=1, align='C', fill=True)
+        pdf.set_fill_color(230, 230, 230); pdf.set_font(font_name, '', 9)
+        pdf.cell(70, 10, "소 계 (Sub Total)", border=1, align='C', fill=True)
         pdf.cell(12, 10, f"{sum_qty:,}", border=1, align='C', fill=True)
         if form_type == "basic":
             pdf.cell(35, 10, "", border=1, fill=True); pdf.cell(35, 10, f"{sum_a1:,}", border=1, align='R', fill=True); pdf.cell(38, 10, "", border=1, fill=True); pdf.ln()
@@ -386,27 +388,35 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         svc_total = 0
         if service_items:
             pdf.ln(2); pdf.set_fill_color(255, 255, 224)
-            pdf.cell(190, 6, " [ Additional Cost ] ", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(190, 6, " [ 추가 비용 ] ", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
             for s in service_items:
                 svc_total += s['금액']
-                pdf.cell(155, 6, s['항목'], border=1); pdf.cell(35, 6, f"{s['금액']:,}", border=1, align='R', new_x="LMARGIN", new_y="NEXT")
+                pdf.cell(155, 6, s['항목'], border=1); pdf.cell(35, 6, f"{s['금액']:,} 원", border=1, align='R', new_x="LMARGIN", new_y="NEXT")
 
-        pdf.ln(5); pdf.set_font(font_name, 'B' if has_font else '', 12)
+        pdf.ln(5); pdf.set_font(font_name, '', 12)
         if form_type == "basic":
             final_total = sum_a1 + svc_total
-            pdf.cell(120, 10, "", border=0); pdf.cell(35, 10, "Total", border=1, align='C', fill=True); pdf.cell(35, 10, f"{final_total:,}", border=1, align='R')
+            pdf.cell(120, 10, "", border=0); pdf.cell(35, 10, "총 합계", border=1, align='C', fill=True); pdf.cell(35, 10, f"{final_total:,} 원", border=1, align='R')
         else:
             t1_final = sum_a1 + svc_total; t2_final = sum_a2 + svc_total; total_profit = t2_final - t1_final
-            pdf.set_font(font_name, '', 10); pdf.cell(82, 10, "Total (VAT Incl.)", border=1, align='C', fill=True)
+            pdf.set_font(font_name, '', 10); pdf.cell(82, 10, "총 합계 (VAT 포함)", border=1, align='C', fill=True)
             pdf.cell(40, 10, f"{t1_final:,}", border=1, align='R')
-            pdf.set_font(font_name, 'B' if has_font else '', 10)
+            pdf.set_font(font_name, '', 10)
             pdf.cell(40, 10, f"{t2_final:,}", border=1, align='R'); pdf.cell(28, 10, f"({total_profit:,})", border=1, align='R')
         
-        pdf.ln(10); pdf.set_font(font_name, 'B' if has_font else '', 16)
-        pdf.cell(0, 10, "SHIN JIN CHEMTECH Co., Ltd.", align='C', ln=1)
+        pdf.ln(10); pdf.set_font(font_name, '', 16)
+        pdf.cell(0, 10, "주식회사 신진켐텍", align='C', ln=1)
         
-        # [핵심 수정] PDF 출력 방식 변경 (Latin-1 인코딩)
-        return pdf.output(dest='S').encode('latin-1')
+        # [핵심 수정] 임시 파일 생성 및 바이너리 읽기 (메모리 버퍼 방식 완전 대체)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+            pdf.output(tmp_pdf.name)
+            tmp_pdf_path = tmp_pdf.name
+        
+        with open(tmp_pdf_path, "rb") as f:
+            pdf_bytes = f.read()
+        
+        os.unlink(tmp_pdf_path) # 파일 삭제
+        return pdf_bytes
         
     except Exception as e:
         print(f"PDF 생성 에러: {e}")
@@ -516,11 +526,21 @@ if mode == "관리자 모드":
                 st.divider()
                 ec1, ec2 = st.columns([1, 1])
                 with ec1:
-                    buf = io.BytesIO()
-                    # [수정 확인] 문법 오류 발생했던 부분 안전하게 수정됨
-                    with pd.ExcelWriter(buf, engine='xlsxwriter') as w: 
-                        df_disp[final_cols].to_excel(w, index=False)
-                    st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")
+                    # [수정] 엑셀 다운로드 로직 변경 (임시 파일 사용)
+                    if st.button("엑셀 다운로드"):
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+                            df_disp[final_cols].to_excel(tmp.name, index=False)
+                            tmp_path = tmp.name
+                        
+                        with open(tmp_path, "rb") as f:
+                            btn = st.download_button(
+                                label="📥 엑셀 파일 받기 (Click)",
+                                data=f,
+                                file_name="products.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+                        os.unlink(tmp_path)
+
                 with ec2:
                     uf = st.file_uploader("엑셀 파일 선택", ["xlsx"], label_visibility="collapsed")
                     if uf and st.button("시트에 덮어쓰기"):
@@ -844,11 +864,11 @@ else:
         
         if sel:
             fmode = "basic" if "기본" in form_type else "profit"
-            pdf_b = create_advanced_pdf(edited.to_dict('records'), st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.recipient_info)
-            if pdf_b:
-                st.download_button("📥 PDF 다운로드", pdf_b, f"quote_{st.session_state.current_quote_name}.pdf", "application/pdf", type="primary")
+            pdf_bytes = create_advanced_pdf(edited.to_dict('records'), st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.recipient_info)
+            if pdf_bytes:
+                st.download_button("📥 PDF 다운로드", pdf_bytes, f"quote_{st.session_state.current_quote_name}.pdf", "application/pdf", type="primary")
             else:
-                st.error("🚨 PDF 생성 중 오류가 발생했습니다. (폰트 다운로드 문제일 수 있습니다.)")
+                st.error("🚨 PDF 생성 중 오류가 발생했습니다.")
 
         c1, c2 = st.columns(2)
         with c1: 

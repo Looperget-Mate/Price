@@ -126,7 +126,8 @@ def list_files_in_drive_folder():
 
 # --- 구글 시트 함수 ---
 SHEET_NAME = "Looperget_DB"
-COL_MAP = {"품목코드": "code", "카테고리": "category", "제품명": "name", "규격": "spec", "단위": "unit", "1롤길이(m)": "len_per_unit", "매입단가": "price_buy", "총판가1": "price_d1", "총판가2": "price_d2", "대리점가": "price_agy", "소비자가": "price_cons", "단가(현장)": "price_site", "이미지데이터": "image"}
+# [수정] 순번(order_no) 추가
+COL_MAP = {"순번": "order_no", "품목코드": "code", "카테고리": "category", "제품명": "name", "규격": "spec", "단위": "unit", "1롤길이(m)": "len_per_unit", "매입단가": "price_buy", "총판가1": "price_d1", "총판가2": "price_d2", "대리점가": "price_agy", "소비자가": "price_cons", "단가(현장)": "price_site", "이미지데이터": "image"}
 REV_COL_MAP = {v: k for k, v in COL_MAP.items()}
 
 def init_db():
@@ -169,6 +170,14 @@ def load_data_from_sheet():
                     else: new_rec[COL_MAP[k]] = v
             
             # [안전장치] 빈 값 처리
+            # 순번 처리 (없으면 9999로 보내서 맨 뒤로)
+            if "order_no" not in new_rec or new_rec["order_no"] == "":
+                new_rec["order_no"] = 9999
+            else:
+                try: new_rec["order_no"] = int(new_rec["order_no"])
+                except: new_rec["order_no"] = 9999
+
+            # 단가 처리
             for p_col in ["price_site", "price_cons", "price_buy", "price_d1", "price_d2", "price_agy"]:
                 if p_col not in new_rec or new_rec[p_col] == "":
                     new_rec[p_col] = 0
@@ -177,6 +186,10 @@ def load_data_from_sheet():
                     except: new_rec[p_col] = 0
 
             data["products"].append(new_rec)
+            
+        # [수정] 데이터 로드 후 '순번' 기준으로 정렬 (오름차순)
+        data["products"] = sorted(data["products"], key=lambda x: x["order_no"])
+
     except Exception as e: st.error(f"데이터 로드 오류: {e}")
 
     try:
@@ -450,30 +463,60 @@ if mode == "관리자 모드":
         with t1:
             st.markdown("##### 🔍 제품 및 엑셀 관리")
             with st.expander("📂 엑셀 데이터 등록/다운로드 (클릭)", expanded=True):
-                df = pd.DataFrame(st.session_state.db["products"]).rename(columns=REV_COL_MAP)
-                if "이미지데이터" in df.columns: df["이미지데이터"] = df["이미지데이터"].apply(lambda x: x if x else "")
+                # [수정] 순번 정렬을 위해 이미 로드할 때 정렬된 데이터를 사용
+                df = pd.DataFrame(st.session_state.db["products"])
+                
+                # 없는 컬럼 방어
+                if "order_no" not in df.columns: df["order_no"] = 9999
+                
+                # 순번 기준 정렬 (화면 표시용)
+                df = df.sort_values(by="order_no")
+                
+                df_disp = df.rename(columns=REV_COL_MAP)
+                if "이미지데이터" in df_disp.columns: df_disp["이미지데이터"] = df_disp["이미지데이터"].apply(lambda x: x if x else "")
                 
                 numeric_cols = ["price_buy", "price_d1", "price_d2", "price_agy", "price_cons", "price_site"]
                 for col_key in numeric_cols:
                     k_name = REV_COL_MAP.get(col_key, "")
-                    if k_name and k_name in df.columns:
-                        df[k_name] = pd.to_numeric(df[k_name], errors='coerce').fillna(0)
+                    if k_name and k_name in df_disp.columns:
+                        df_disp[k_name] = pd.to_numeric(df_disp[k_name], errors='coerce').fillna(0)
 
-                total_items = len(df)
-                linked_items = len(df[df["이미지데이터"] != ""])
+                total_items = len(df_disp)
+                linked_items = len(df_disp[df_disp["이미지데이터"] != ""])
                 st.info(f"📊 현재 이미지 연결 상태: 총 {total_items}개 중 {linked_items}개 연결됨 ({linked_items/total_items*100:.1f}%)")
                 
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                # [수정] 순번 컬럼을 맨 앞으로
+                ordered_cols = ["order_no", "code", "image", "category", "name", "spec", "unit", "len_per_unit", "price_d1", "price_d2", "price_agy", "price_cons", "price_site"]
+                # 표시용 컬럼명 리스트 생성
+                disp_cols = []
+                for c in ordered_cols:
+                    if c in REV_COL_MAP: disp_cols.append(REV_COL_MAP[c])
+                
+                # 없는 컬럼은 제외하고 표시
+                final_cols = [c for c in disp_cols if c in df_disp.columns]
+                
+                st.dataframe(
+                    df_disp[final_cols], 
+                    use_container_width=True, 
+                    hide_index=True,
+                    column_config={
+                        "이미지데이터": st.column_config.TextColumn("이미지 파일", help="연결된 이미지 파일명"),
+                        "단가(현장)": st.column_config.NumberColumn("단가(현장)", format="%d원"),
+                        "순번": st.column_config.NumberColumn("순번", format="%d")
+                    }
+                )
+                
                 st.divider()
                 ec1, ec2 = st.columns([1, 1])
                 with ec1:
                     buf = io.BytesIO()
-                    with pd.ExcelWriter(buf, engine='xlsxwriter') as w: df.to_excel(w, index=False)
+                    with pd.ExcelWriter(buf, engine='xlsxwriter') as w: df_disp[final_cols].to_excel(w, index=False)
                     st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")
                 with ec2:
                     uf = st.file_uploader("엑셀 파일 선택", ["xlsx"], label_visibility="collapsed")
                     if uf and st.button("시트에 덮어쓰기"):
                         try:
+                            # [수정] 업로드 시에도 순번 처리
                             ndf = pd.read_excel(uf, dtype={'품목코드': str}).rename(columns=COL_MAP).fillna(0)
                             nrec = ndf.to_dict('records')
                             save_products_to_sheet(nrec)
@@ -594,7 +637,11 @@ else:
         with st.expander("3. 기타"): inp_e = render_inputs(sets.get("기타자재", {}), "e")
         
         all_products = st.session_state.db["products"]
-        mpl = [p for p in all_products if p["category"] == "주배관"]; bpl = [p for p in all_products if p["category"] == "가지관"]
+        # [수정] 견적 작성 화면에서도 순번대로 정렬된 리스트 사용
+        # products는 이미 load_data_from_sheet에서 정렬되어 있음
+        mpl = [p for p in all_products if p["category"] == "주배관"]
+        bpl = [p for p in all_products if p["category"] == "가지관"]
+        
         c1, c2 = st.columns(2)
         with c1: 
             sm_obj = st.selectbox("주배관", mpl, format_func=lambda x: f"{x['name']} ({x.get('spec','-')})") if mpl else None
@@ -636,10 +683,16 @@ else:
         for n, q in st.session_state.quote_items.items():
             inf = pdb.get(n, {}); cpr = inf.get("price_cons", 0)
             row = {"품목": n, "규격": inf.get("spec", ""), "수량": q, "소비자가": cpr, "합계": cpr*q}
+            # 순번 정보 추가 (정렬용)
+            row["order_no"] = inf.get("order_no", 9999)
+            
             if view != "소비자가":
                 k, l = key_map[view]; pr = int(inf.get(k, 0)) if inf.get(k) else 0
                 row[f"{l}단가"] = pr; row[f"{l}합계"] = pr*q; row["이익"] = row["합계"] - row[f"{l}합계"]; row["율(%)"] = (row["이익"]/row["합계"]*100) if row["합계"] else 0
             rows.append(row)
+        
+        # [수정] 견적서 리스트도 순번 기준으로 정렬
+        rows = sorted(rows, key=lambda x: x["order_no"])
         
         df = pd.DataFrame(rows); disp = ["품목", "규격", "수량"]
         if view == "소비자가": disp += ["소비자가", "합계"]
@@ -680,9 +733,8 @@ else:
         with c_opt1: form_type = st.radio("양식", ["기본 양식", "이익 분석 양식"])
         with c_opt2:
             if form_type == "기본 양식":
-                # [수정] 라디오 버튼으로 변경하여 직관적 선택 가능 (단일 선택)
                 target_price = st.radio("출력 단가 선택", ["소비자가", "단가(현장)"], horizontal=True)
-                sel = [target_price] # 리스트 형태로 맞춤
+                sel = [target_price] 
             else:
                 opts = ["소비자가"]; 
                 if st.session_state.auth_price: opts = ["매입단가", "총판가1", "총판가2", "대리점가", "단가(현장)", "소비자가"]
@@ -708,7 +760,7 @@ else:
         fdata = []
         for n, q in st.session_state.quote_items.items():
             inf = pdb.get(n, {})
-            d = {"품목": n, "규격": inf.get("spec", ""), "코드": inf.get("code", ""), "단위": inf.get("unit", "EA"), "수량": int(q), "image_data": inf.get("image")}
+            d = {"품목": n, "규격": inf.get("spec", ""), "코드": inf.get("code", ""), "단위": inf.get("unit", "EA"), "수량": int(q), "image_data": inf.get("image"), "order_no": inf.get("order_no", 9999)}
             try: p1_val = int(inf.get(pk[0], 0))
             except: p1_val = 0
             d["price_1"] = p1_val
@@ -718,6 +770,9 @@ else:
                 d["price_2"] = p2_val
             fdata.append(d)
         
+        # [수정] 최종 견적서 리스트도 순번 정렬
+        fdata = sorted(fdata, key=lambda x: x["order_no"])
+
         st.markdown("---")
         cc = {"품목": st.column_config.TextColumn(disabled=True), "규격": st.column_config.TextColumn(disabled=True), "코드": st.column_config.TextColumn(disabled=True), "image_data": st.column_config.TextColumn("이미지", disabled=True), "수량": st.column_config.NumberColumn(step=1), "price_1": st.column_config.NumberColumn(label=sel[0] if sel else "단가", format="%d")}
         if len(pk)>1: cc["price_2"] = st.column_config.NumberColumn(label=sel[1], format="%d")

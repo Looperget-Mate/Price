@@ -18,14 +18,19 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 
 # ==========================================
+# [중요] 페이지 설정은 반드시 맨 처음에 와야 합니다.
+# ==========================================
+st.set_page_config(layout="wide", page_title="루퍼젯 프로 매니저 V10.0")
+
+# ==========================================
 # 1. 설정 및 구글 연동 유틸리티
 # ==========================================
 FONT_FILE = "NanumGothic.ttf"
 FONT_BOLD_FILE = "NanumGothicBold.ttf"
 FONT_URL = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
 
-# [안전장치] 폰트 파일 검증 및 다운로드
-if not os.path.exists(FONT_FILE) or os.path.getsize(FONT_FILE) < 1000:
+# 폰트 파일 검증 및 다운로드
+if not os.path.exists(FONT_FILE) or os.path.getsize(FONT_FILE) < 100:
     import urllib.request
     try: 
         urllib.request.urlretrieve(FONT_URL, FONT_FILE)
@@ -89,6 +94,7 @@ def get_image_from_drive(filename):
         
         file_id = files[0]['id']
         request = drive_service.files().get_media(fileId=file_id)
+        
         fh = io.BytesIO()
         downloader = MediaIoBaseDownload(fh, request)
         done = False
@@ -97,6 +103,7 @@ def get_image_from_drive(filename):
         fh.seek(0)
         img = Image.open(fh).convert('RGB')
         img.thumbnail((300, 225))
+        
         buffer = io.BytesIO()
         img.save(buffer, format="JPEG")
         return f"data:image/jpeg;base64,{base64.b64encode(buffer.getvalue()).decode()}"
@@ -162,16 +169,15 @@ def load_data_from_sheet():
     except Exception: pass 
 
     try:
-        ws_sets = sh.worksheet("Sets")
-        s_recs = ws_sets.get_all_records()
-        for r in s_recs:
-            c = r.get("카테고리")
-            n = r.get("세트명")
-            if c and n:
-                if c not in data["sets"]: data["sets"][c] = {}
+        set_records = ws_sets.get_all_records()
+        for rec in set_records:
+            cat = rec.get("카테고리", "")
+            name = rec.get("세트명", "")
+            if cat and name:
+                if cat not in data["sets"]: data["sets"][cat] = {}
                 try: js = json.loads(r.get("레시피JSON", "{}"))
                 except: js = {}
-                data["sets"][c][n] = {"recipe": js, "image": r.get("이미지파일명", ""), "sub_cat": r.get("하위분류", "")}
+                data["sets"][cat][name] = {"recipe": js, "image": r.get("이미지파일명", ""), "sub_cat": r.get("하위분류", "")}
     except: pass
     
     return data
@@ -198,7 +204,7 @@ def save_sets_to_sheet(sets_dict):
     ws.update(rows)
 
 # ==========================================
-# 2. PDF 생성 (안전한 Latin-1 인코딩)
+# 2. PDF 생성 엔진 (안전한 Latin-1 인코딩)
 # ==========================================
 class PDF(FPDF):
     def header(self):
@@ -350,6 +356,8 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
 # ==========================================
 # 3. 메인 로직
 # ==========================================
+st.title("💧 루퍼젯 프로 매니저 V10.0")
+
 if "db" not in st.session_state:
     st.session_state.db = load_data_from_sheet()
 
@@ -367,8 +375,9 @@ if "recipient_info" not in st.session_state: st.session_state.recipient_info = {
 if "added_main_pipes" not in st.session_state: st.session_state.added_main_pipes = []
 if "added_branch_pipes" not in st.session_state: st.session_state.added_branch_pipes = []
 
-st.set_page_config(layout="wide", title="루퍼젯 프로 매니저")
-st.title("💧 루퍼젯 프로 매니저 V10.0")
+DEFAULT_DATA = {"config": {"password": "1234"}, "products":[], "sets":{}}
+if not st.session_state.db: st.session_state.db = DEFAULT_DATA
+if "config" not in st.session_state.db: st.session_state.db["config"] = {"password": "1234"}
 
 # 사이드바
 with st.sidebar:
@@ -420,10 +429,10 @@ if mode == "관리자 모드":
             df_disp = df.rename(columns=REV_COL_MAP)
             st.dataframe(df_disp, use_container_width=True)
             
-            # [수정] 여기가 중요합니다! 문법 오류를 완벽하게 고친 코드입니다.
+            # [수정] 문법 오류 해결된 엑셀 다운로드
             buf = io.BytesIO()
             with pd.ExcelWriter(buf, engine='xlsxwriter') as w:
-                df_disp.to_excel(w, index=False)
+                df.to_excel(w, index=False)
             st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")
             
             if st.button("🔄 드라이브 이미지 연결"):

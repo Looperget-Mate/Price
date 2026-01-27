@@ -26,12 +26,11 @@ st.set_page_config(layout="wide", page_title="루퍼젯 프로 매니저 V10.0")
 # [1] 폰트 및 구글 연동
 # ==========================================
 FONT_FILE = "NanumGothic.ttf"
-# 폰트가 없으면 다운로드 시도 (안전장치)
 if not os.path.exists(FONT_FILE):
-    FONT_URL = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
     try:
         import urllib.request
-        urllib.request.urlretrieve(FONT_URL, FONT_FILE)
+        url = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
+        urllib.request.urlretrieve(url, FONT_FILE)
     except: pass
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -127,14 +126,12 @@ def load_data():
 
     data = {"config": {"password": "1234"}, "products": [], "sets": {}}
     
-    # Config
     try:
         cfg = sh.worksheet("Config").get_all_records()
         for c in cfg:
             if c.get('Key') == 'password': data['config']['password'] = str(c.get('Value', '1234'))
     except: pass
 
-    # Products
     try:
         recs = sh.worksheet("Products").get_all_records()
         for r in recs:
@@ -157,7 +154,6 @@ def load_data():
         data["products"] = sorted(data["products"], key=lambda x: x["order_no"])
     except: pass
 
-    # Sets
     try:
         s_recs = sh.worksheet("Sets").get_all_records()
         for r in s_recs:
@@ -175,7 +171,6 @@ def save_all_data(data):
     if not gc: return
     sh = gc.open(SHEET_NAME)
     
-    # Products
     ws_p = sh.worksheet("Products")
     df = pd.DataFrame(data["products"])
     if not df.empty:
@@ -184,7 +179,6 @@ def save_all_data(data):
         ws_p.clear()
         ws_p.update([df_up.columns.values.tolist()] + df_up.values.tolist())
     
-    # Sets
     ws_s = sh.worksheet("Sets")
     rows = [["세트명", "카테고리", "하위분류", "이미지파일명", "레시피JSON"]]
     for c, items in data["sets"].items():
@@ -192,13 +186,11 @@ def save_all_data(data):
             rows.append([n, c, info.get("sub_cat",""), info.get("image",""), json.dumps(info.get("recipe",{}), ensure_ascii=False)])
     ws_s.clear(); ws_s.update(rows)
 
-    # Config
     ws_c = sh.worksheet("Config")
     ws_c.clear(); ws_c.update([["Key", "Value"], ["password", data["config"]["password"]]])
 
-
 # ==========================================
-# 2. PDF 생성 엔진 (오류 수정 완료)
+# 2. PDF 생성 엔진 (Bold 스타일 제거로 오류 원천 차단)
 # ==========================================
 class PDF(FPDF):
     def header(self):
@@ -207,7 +199,7 @@ class PDF(FPDF):
         self.cell(0, 10, '견 적 서 (Quotation)', 0, 1, 'C')
         self.ln(5)
 
-# [중요 수정] 인자 개수와 순서를 정확히 맞춤
+# [수정 완료] 인자 일치 확인, 'B' 스타일 제거
 def create_pdf(rows, services, recipient):
     pdf = PDF()
     pdf.add_page()
@@ -216,7 +208,6 @@ def create_pdf(rows, services, recipient):
     except: font='Arial'
     pdf.set_font(font, '', 10)
 
-    # 정보란
     pdf.set_fill_color(240,240,240)
     pdf.cell(95, 8, " 수신자 (Customer)", 1, 0, 'L', 1)
     pdf.cell(95, 8, " 공급자 (Supplier)", 1, 1, 'L', 1)
@@ -260,7 +251,7 @@ def create_pdf(rows, services, recipient):
         
         nm = f"{item['품목']}\n{item['규격']}"
         ut = item['단위']; qty = int(item['수량'])
-        pr = int(item.get('price_1', 0)) # price 키워드 수정
+        pr = int(item.get('price_1', 0))
         amt = qty * pr
         total += amt
         
@@ -309,7 +300,8 @@ def create_pdf(rows, services, recipient):
             total += s['금액']
 
     pdf.ln(5)
-    pdf.set_font(font, 'B', 12)
+    # [수정] 여기서 'B'를 빼고 ''로 변경 (에러 해결 핵심)
+    pdf.set_font(font, '', 12)
     pdf.cell(140, 10, "총 합 계 (VAT 별도)", 1, 0, 'C', 1)
     pdf.cell(50, 10, f"{total:,} 원", 1, 1, 'R', 1)
     
@@ -347,7 +339,7 @@ with st.sidebar:
     st.divider()
     mode = st.radio("모드", ["견적 작성", "관리자 모드"])
 
-# --- 관리자 모드 (기능 복구) ---
+# --- 관리자 모드 ---
 if mode == "관리자 모드":
     st.title("🛠 관리자 모드")
     
@@ -364,9 +356,10 @@ if mode == "관리자 모드":
         with t1: # 제품
             if st.button("새로고침"): st.session_state.db = load_data(); st.rerun()
             df = pd.DataFrame(st.session_state.db["products"])
+            # 순번 중복 제거
             st.dataframe(df, hide_index=True)
             
-            # 엑셀 다운 (안전한 문법)
+            # 엑셀 다운 (안전한 3줄 코딩)
             buf = io.BytesIO()
             with pd.ExcelWriter(buf, engine='xlsxwriter') as w: df.to_excel(w, index=False)
             st.download_button("엑셀 다운로드", buf.getvalue(), "data.xlsx")
@@ -379,8 +372,27 @@ if mode == "관리자 모드":
                     c = str(p.get("code","")).strip()
                     if c in fmap: p["image"] = fmap[c]; cnt+=1
                 if cnt:
-                    save_all_data(st.session_state.db)
+                    save_products_to_sheet(st.session_state.db["products"])
                     st.success(f"{cnt}건 연결"); st.rerun()
+
+            # 이미지 개별 업로드
+            c1, c2, c3 = st.columns([2, 2, 1])
+            products = st.session_state.db["products"]
+            with c1: 
+                selected_product_obj = st.selectbox("대상 품목", products, format_func=lambda x: f"[{x['code']}] {x['name']} ({x.get('spec', '-')})")
+                tp = selected_product_obj['name']
+            with c2: ifile = st.file_uploader("이미지 파일", ["png", "jpg"], key="pimg")
+            with c3:
+                st.write(""); st.write("")
+                if st.button("드라이브 저장"):
+                    if ifile:
+                        with st.spinner("업로드 중..."):
+                            fname = f"{tp}_{ifile.name}"; fid = upload_image_to_drive(ifile, fname)
+                            if fid:
+                                for p in st.session_state.db["products"]:
+                                    if p["name"] == tp: p["image"] = fid
+                                save_products_to_sheet(st.session_state.db["products"]); st.success("완료!")
+                            else: st.error("실패")
 
         with t2: # 세트
             st.subheader("세트 관리")
@@ -495,7 +507,7 @@ else:
 
         c1, c2 = st.columns(2)
         with c1:
-            ap = st.selectbox("부품 추가", st.session_state.db["products"], format_func=lambda x: f"{x['name']} ({x['spec']})")
+            ap = st.selectbox("부품 추가", st.session_state.db["products"], format_func=lambda x: f"[{x['code']}] {x['name']} ({x['spec']})")
             aq = st.number_input("수량", 1, key='aq')
             if st.button("부품 추가"):
                 st.session_state.quote_items[ap['code']] = st.session_state.quote_items.get(ap['code'], 0) + aq
@@ -539,7 +551,6 @@ else:
         if st.session_state.services: st.write("추가 비용:", st.session_state.services)
 
         if st.button("📄 PDF 다운로드 생성", type="primary"):
-            # [수정] 인자 개수 3개로 맞춤
             pdf_bytes = create_pdf(final_rows, st.session_state.services, st.session_state.recipient)
             st.download_button("⬇️ 다운로드 클릭", pdf_bytes, file_name=f"견적서_{qn}.pdf", mime="application/pdf")
         

@@ -144,7 +144,6 @@ def list_files_in_drive_folder():
                 break
         
         # 파일명(확장자 제외) -> 파일명(전체) 매핑 생성
-        # 예: '00200.jpg' -> key: '00200', value: '00200.jpg'
         file_map = {}
         for f in files:
             name_stem = os.path.splitext(f['name'])[0] # 확장자 제거
@@ -270,6 +269,14 @@ def save_sets_to_sheet(sets_dict):
     ws_sets.clear()
     ws_sets.update(rows)
 
+# ==========================================
+# [Helper] 스마트 검색을 위한 포맷팅 함수
+# ==========================================
+def format_prod_label(option):
+    """제품 목록 표시에 사용: [코드] 제품명 (규격)"""
+    if isinstance(option, dict):
+        return f"[{option.get('code', '00000')}] {option.get('name', '')} ({option.get('spec', '-')})"
+    return str(option)
 
 # ==========================================
 # 2. PDF 생성 엔진
@@ -488,6 +495,7 @@ if "history" not in st.session_state: st.session_state.history = {}
 if "quote_step" not in st.session_state: st.session_state.quote_step = 1
 if "quote_items" not in st.session_state: st.session_state.quote_items = {}
 if "services" not in st.session_state: st.session_state.services = []
+if "pipe_cart" not in st.session_state: st.session_state.pipe_cart = []  # [New] 배관 장바구니
 if "temp_set_recipe" not in st.session_state: st.session_state.temp_set_recipe = {}
 if "current_quote_name" not in st.session_state: st.session_state.current_quote_name = ""
 if "auth_admin" not in st.session_state: st.session_state.auth_admin = False
@@ -513,19 +521,32 @@ with st.sidebar:
     with c1:
         if st.button("💾 임시저장"):
             st.session_state.history[q_name] = {
-                "items": st.session_state.quote_items, "services": st.session_state.services, "step": st.session_state.quote_step
+                "items": st.session_state.quote_items, 
+                "services": st.session_state.services, 
+                "pipe_cart": st.session_state.pipe_cart, # 배관 목록도 저장
+                "step": st.session_state.quote_step
             }
             st.session_state.current_quote_name = q_name; st.success("저장됨")
     with c2:
         if st.button("✨ 초기화"):
-            st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.quote_step = 1; st.session_state.current_quote_name = ""; st.rerun()
+            st.session_state.quote_items = {}
+            st.session_state.services = []
+            st.session_state.pipe_cart = []
+            st.session_state.quote_step = 1
+            st.session_state.current_quote_name = ""
+            st.rerun()
     st.divider()
     h_list = list(st.session_state.history.keys())[::-1]
     if h_list:
         sel_h = st.selectbox("불러오기", h_list)
         if st.button("📂 로드"):
             d = st.session_state.history[sel_h]
-            st.session_state.quote_items = d["items"]; st.session_state.services = d["services"]; st.session_state.quote_step = d.get("step", 2); st.session_state.current_quote_name = sel_h; st.rerun()
+            st.session_state.quote_items = d["items"]
+            st.session_state.services = d["services"]
+            st.session_state.pipe_cart = d.get("pipe_cart", [])
+            st.session_state.quote_step = d.get("step", 2)
+            st.session_state.current_quote_name = sel_h
+            st.rerun()
     
     st.divider()
     mode = st.radio("모드", ["견적 작성", "관리자 모드"])
@@ -581,7 +602,7 @@ if mode == "관리자 모드":
                             st.success("업로드 및 동기화 완료 (품목코드 00 유지됨)"); st.rerun()
                         except Exception as e: st.error(e)
 
-            # 이미지 일괄 동기화 (새 기능 추가됨!)
+            # 이미지 일괄 동기화
             st.divider()
             st.markdown("##### 🔄 드라이브 이미지 일괄 동기화")
             with st.expander("구글 드라이브 폴더의 이미지와 자동 연결하기", expanded=False):
@@ -657,7 +678,7 @@ if mode == "관리자 모드":
             if mt == "신규":
                  nn = st.text_input("세트명")
                  c1, c2, c3 = st.columns([3,2,1])
-                 with c1: sp_obj = st.selectbox("부품", products_obj, format_func=lambda x: f"{x['name']} ({x.get('spec','-')})", key="nsp")
+                 with c1: sp_obj = st.selectbox("부품", products_obj, format_func=format_prod_label, key="nsp")
                  with c2: sq = st.number_input("수량", 1, key="nsq")
                  with c3: 
                      if st.button("담기"): st.session_state.temp_set_recipe[sp_obj['name']] = sq
@@ -677,7 +698,7 @@ if mode == "관리자 모드":
                          if c3.button("삭제", key=f"d{k}"): del st.session_state.temp_set_recipe[k]; st.rerun()
                      
                      c1, c2, c3 = st.columns([3,2,1])
-                     with c1: ap_obj = st.selectbox("추가", products_obj, format_func=lambda x: f"{x['name']} ({x.get('spec','-')})", key="esp")
+                     with c1: ap_obj = st.selectbox("추가", products_obj, format_func=format_prod_label, key="esp")
                      with c2: aq = st.number_input("수량", 1, key="esq")
                      with c3: 
                          if st.button("담기", key="esa"): st.session_state.temp_set_recipe[ap_obj['name']] = aq; st.rerun()
@@ -732,20 +753,47 @@ else:
         with st.expander("2. 가지관"): inp_b = render_inputs(sets.get("가지관세트", {}), "b")
         with st.expander("3. 기타"): inp_e = render_inputs(sets.get("기타자재", {}), "e")
         
-        all_products = st.session_state.db["products"]
-        mpl = [p for p in all_products if p["category"] == "주배관"]
-        bpl = [p for p in all_products if p["category"] == "가지관"]
+        # [NEW] 배관 장바구니 시스템
+        st.divider()
+        st.markdown("#### 📏 배관 물량 산출 (장바구니)")
         
-        c1, c2 = st.columns(2)
+        all_products = st.session_state.db["products"]
+        # 배관 카테고리만 필터링 (주배관, 가지관 등)
+        pipe_products = [p for p in all_products if p["category"] in ["주배관", "가지관"]]
+        
+        c1, c2, c3 = st.columns([3, 2, 1])
         with c1: 
-            sm_obj = st.selectbox("주배관", mpl, format_func=lambda x: f"{x['name']} ({x.get('spec','-')})") if mpl else None
-            lm = st.number_input("길이m", 0, key="lm")
+            sel_pipe = st.selectbox("배관 선택", pipe_products, format_func=format_prod_label, key="pipe_sel")
         with c2: 
-            sb_obj = st.selectbox("가지관", bpl, format_func=lambda x: f"{x['name']} ({x.get('spec','-')})") if bpl else None
-            lb = st.number_input("길이m", 0, key="lb")
+            # [요청사항] 소수점 없이 정수만 입력
+            len_pipe = st.number_input("길이(m)", min_value=1, step=1, format="%d", key="pipe_len")
+        with c3:
+            st.write("")
+            st.write("")
+            if st.button("➕ 목록 추가"):
+                st.session_state.pipe_cart.append({
+                    "name": sel_pipe['name'],
+                    "spec": sel_pipe.get("spec", ""),
+                    "code": sel_pipe.get("code", ""),
+                    "len": len_pipe
+                })
+        
+        # 장바구니 목록 표시
+        if st.session_state.pipe_cart:
+            st.caption("📋 입력된 배관 목록")
+            # 데이터프레임으로 깔끔하게 보여주기
+            cart_df = pd.DataFrame(st.session_state.pipe_cart)
+            cart_df = cart_df.rename(columns={"name": "제품명", "spec": "규격", "len": "길이(m)", "code": "코드"})
+            st.dataframe(cart_df, use_container_width=True, hide_index=True)
+            
+            if st.button("🗑️ 배관 목록 전체 비우기"):
+                st.session_state.pipe_cart = []
+                st.rerun()
 
+        st.divider()
         if st.button("계산하기 (STEP 2)"):
             res = {}
+            # 1. 세트 물량 합산
             all_m = {**inp_m_50, **inp_m_40, **inp_m_etc, **inp_m_u}
             def ex(ins, db):
                 for k,v in ins.items():
@@ -753,9 +801,25 @@ else:
                         rec = db[k].get("recipe", db[k])
                         for p, q in rec.items(): res[p] = res.get(p, 0) + q*v
             ex(all_m, sets.get("주배관세트", {})); ex(inp_b, sets.get("가지관세트", {})); ex(inp_e, sets.get("기타자재", {}))
-            def cr(p_obj, l):
-                if l>0 and p_obj: res[p_obj['name']] = res.get(p_obj['name'], 0) + math.ceil(l/p_obj["len_per_unit"])
-            cr(sm_obj, lm); cr(sb_obj, lb)
+            
+            # 2. [NEW] 배관 장바구니 물량 합산 로직
+            # 목록에 있는 배관들의 길이를 제품별로 모두 더한 뒤, 1롤 길이(len_per_unit)로 나누어 소요량(EA) 계산
+            pipe_sums = {} # {제품명: 총길이}
+            for p_item in st.session_state.pipe_cart:
+                p_name = p_item['name']
+                p_len = p_item['len']
+                pipe_sums[p_name] = pipe_sums.get(p_name, 0) + p_len
+            
+            # 제품 DB에서 단위 길이 찾아서 계산
+            for p_name, total_len in pipe_sums.items():
+                # 해당 제품 정보 찾기
+                prod_info = next((item for item in all_products if item["name"] == p_name), None)
+                if prod_info:
+                    unit_len = prod_info.get("len_per_unit", 4) # 기본값 4m 보호코드
+                    if unit_len <= 0: unit_len = 4
+                    req_qty = math.ceil(total_len / unit_len)
+                    res[p_name] = res.get(p_name, 0) + req_qty
+
             st.session_state.quote_items = res; st.session_state.quote_step = 2; st.rerun()
 
     # STEP 2
@@ -797,19 +861,49 @@ else:
             disp += [f"{l}단가", f"{l}합계", "소비자가", "합계", "이익", "율(%)"]
         st.dataframe(df[disp], use_container_width=True, hide_index=True)
         
-        c1, c2 = st.columns(2)
-        with c1:
-            all_products = st.session_state.db["products"]
-            ap_obj = st.selectbox("품목 추가", all_products, format_func=lambda x: f"{x['name']} ({x.get('spec','-')})")
-            aq = st.number_input("수량", 1)
-            if st.button("추가"): st.session_state.quote_items[ap_obj['name']] = st.session_state.quote_items.get(ap_obj['name'], 0) + aq; st.rerun()
-        with c2:
-            stype = st.selectbox("비용", ["배송비", "용역비", "기타"])
-            sn = st.text_input("내용") if stype=="기타" else stype
-            sp = st.number_input("금액", 0, step=1000)
-            if st.button("비용추가"): st.session_state.services.append({"항목": sn, "금액": sp}); st.rerun()
-        if st.session_state.services: st.table(st.session_state.services)
-        if st.button("최종 확정 (STEP 3)"): st.session_state.quote_step = 3; st.rerun()
+        st.divider()
+        # [UI 개선] 부품 추가와 비용 추가를 좌우로 배치
+        col_add_part, col_add_cost = st.columns([1, 1])
+        
+        with col_add_part:
+            st.markdown("##### ➕ 부품 추가")
+            with st.container(border=True):
+                all_products = st.session_state.db["products"]
+                # [스마트 검색] format_func 적용
+                ap_obj = st.selectbox("품목 선택", all_products, format_func=format_prod_label, key="step2_add_part")
+                c_qty, c_btn = st.columns([2, 1])
+                with c_qty:
+                    aq = st.number_input("수량", 1, key="step2_add_qty")
+                with c_btn:
+                    st.write("") # 간격 맞춤
+                    if st.button("추가", use_container_width=True): 
+                        st.session_state.quote_items[ap_obj['name']] = st.session_state.quote_items.get(ap_obj['name'], 0) + aq
+                        st.rerun()
+
+        with col_add_cost:
+            st.markdown("##### 💰 비용 추가")
+            with st.container(border=True):
+                c_type, c_amt = st.columns([1, 1])
+                with c_type:
+                    stype = st.selectbox("항목", ["배송비", "용역비", "기타"], key="step2_cost_type")
+                with c_amt:
+                    sp = st.number_input("금액", 0, step=1000, key="step2_cost_amt")
+                
+                sn = stype
+                if stype == "기타":
+                    sn = st.text_input("내용 입력", key="step2_cost_desc")
+                
+                if st.button("비용 리스트에 추가", use_container_width=True): 
+                    st.session_state.services.append({"항목": sn, "금액": sp})
+                    st.rerun()
+
+        # 추가된 비용 리스트 표시
+        if st.session_state.services:
+            st.caption("추가된 비용 목록")
+            st.table(st.session_state.services)
+
+        st.divider()
+        if st.button("최종 확정 (STEP 3)", type="primary", use_container_width=True): st.session_state.quote_step = 3; st.rerun()
 
     # STEP 3
     elif st.session_state.quote_step == 3:
@@ -823,7 +917,7 @@ else:
             opts = ["소비자가"]
             if st.session_state.auth_price: opts = ["매입단가", "총판가1", "총판가2", "대리점가", "소비자가"]
             
-            # [수정] 이익 분석 선택 시 비밀번호 입력창 바로 표시
+            # 이익 분석 선택 시 비밀번호 입력창 바로 표시
             if "이익" in form_type and not st.session_state.auth_price:
                 st.warning("🔒 원가 정보를 보려면 비밀번호를 입력하세요.")
                 c_pw, c_btn = st.columns([2,1])
@@ -847,6 +941,7 @@ else:
         pdb = {p["name"]: p for p in st.session_state.db["products"]}
         pk = [pkey[l] for l in sel] if sel else ["price_cons"]
         
+        # [중요] final_data_list 생성 - PDF 생성 함수 인자와 매칭
         fdata = []
         for n, q in st.session_state.quote_items.items():
             inf = pdb.get(n, {})
@@ -873,6 +968,7 @@ else:
         
         if sel:
             fmode = "basic" if "기본" in form_type else "profit"
+            # [절대 주의] create_advanced_pdf 호출 시 인자 순서 및 데이터 구조 유지
             pdf_b = create_advanced_pdf(edited.to_dict('records'), st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel)
             st.download_button("📥 PDF 다운로드", pdf_b, f"quote_{st.session_state.current_quote_name}.pdf", "application/pdf", type="primary")
 
@@ -880,4 +976,4 @@ else:
         with c1: 
             if st.button("⬅️ 수정"): st.session_state.quote_step = 2; st.rerun()
         with c2:
-            if st.button("🔄 처음으로"): st.session_state.quote_step = 1; st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.current_quote_name = ""; st.rerun()
+            if st.button("🔄 처음으로"): st.session_state.quote_step = 1; st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.pipe_cart = []; st.session_state.current_quote_name = ""; st.rerun()

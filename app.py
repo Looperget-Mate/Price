@@ -20,11 +20,11 @@ from googleapiclient.http import MediaIoBaseUpload
 # ==========================================
 # 1. 설정 및 구글 연동 유틸리티
 # ==========================================
-# 폰트 파일명 설정 (사용자 환경에 맞춤)
-FONT_REGULAR = "NanumGothic.ttf"       # 또는 NanumGothic-Regular.ttf
-FONT_BOLD = "NanumGothic-Bold.ttf"     # 또는 NanumGothic-ExtraBold.ttf
+# 폰트 파일명 설정
+FONT_REGULAR = "NanumGothic.ttf"
+FONT_BOLD = "NanumGothic-Bold.ttf"
 
-# (옵션) 파일이 없을 경우를 대비한 다운로드 로직은 유지하되, 로컬 파일 우선 사용
+# 로컬 폰트 우선 확인, 없으면 다운로드 (GitHub Raw URL)
 FONT_URL = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
 FONT_BOLD_URL = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Bold.ttf"
 
@@ -69,11 +69,14 @@ DRIVE_FOLDER_NAME = "Looperget_Images"
 def get_or_create_drive_folder():
     if not drive_service: return None
     try:
+        # 폴더 검색
         query = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
         results = drive_service.files().list(q=query, fields="files(id)").execute()
         files = results.get('files', [])
+        
         if files: return files[0]['id']
         else:
+            # 폴더 생성
             file_metadata = {'name': DRIVE_FOLDER_NAME, 'mimeType': 'application/vnd.google-apps.folder'}
             folder = drive_service.files().create(body=file_metadata, fields='id').execute()
             return folder.get('id')
@@ -99,18 +102,16 @@ def get_image_from_drive(filename_or_id):
     if not filename_or_id or not drive_service: return None
     
     file_id = None
-    # 1. ID인지 확인 (간단히 길이로 추정하거나, 바로 get 시도)
-    # 보통 구글 드라이브 ID는 33자 내외, 파일명은 .jpg 포함
     
+    # 1. ID라고 가정하고 시도
     try:
-        # ID라고 가정하고 바로 요청 시도 (가장 빠름)
         drive_service.files().get(fileId=filename_or_id).execute()
         file_id = filename_or_id
     except:
-        # ID가 아니면 파일명으로 검색
+        # 2. 파일명으로 검색
         try:
             folder_id = get_or_create_drive_folder()
-            # 파일명 검색
+            # 정확한 파일명 검색
             query = f"name='{filename_or_id}' and '{folder_id}' in parents and trashed=false"
             results = drive_service.files().list(q=query, fields="files(id)").execute()
             files = results.get('files', [])
@@ -126,7 +127,7 @@ def get_image_from_drive(filename_or_id):
         downloader = request.execute()
         img = Image.open(io.BytesIO(downloader))
         img = img.convert('RGB')
-        img.thumbnail((300, 225))
+        img.thumbnail((300, 225)) # 썸네일 리사이징
         buffer = io.BytesIO()
         img.save(buffer, format="JPEG")
         return f"data:image/jpeg;base64,{base64.b64encode(buffer.getvalue()).decode()}"
@@ -197,7 +198,7 @@ def load_data_from_sheet():
                 if k in COL_MAP:
                     if k == "품목코드": new_rec[COL_MAP[k]] = str(v).zfill(5)
                     else: new_rec[COL_MAP[k]] = v
-            # [중요] 이미지 데이터가 비어있으면 None 처리 (PDF 로직 위함)
+            # 이미지 데이터가 비어있으면 None 처리
             if "image" in new_rec and not new_rec["image"]:
                 new_rec["image"] = None
             data["products"].append(new_rec)
@@ -223,6 +224,8 @@ def save_products_to_sheet(products_list):
     df = pd.DataFrame(products_list)
     if "code" in df.columns: df["code"] = df["code"].astype(str).apply(lambda x: x.zfill(5))
     df_up = df.rename(columns=REV_COL_MAP)
+    # 없는 컬럼 NaN -> 빈 문자열
+    df_up = df_up.fillna("")
     ws_prod.clear(); ws_prod.update([df_up.columns.values.tolist()] + df_up.values.tolist())
 
 def save_sets_to_sheet(sets_dict):
@@ -239,55 +242,59 @@ def format_prod_label(option):
     return str(option)
 
 # ==========================================
-# 2. PDF 생성 엔진 (폰트/이미지 수정)
+# 2. PDF 생성 엔진
 # ==========================================
 class PDF(FPDF):
     def header(self):
-        # 폰트 등록 (로컬 파일 우선)
-        # Regular
+        # 폰트 로드
+        header_font = 'Helvetica'
+        header_style = 'B'
+        
         if os.path.exists(FONT_REGULAR):
             self.add_font('NanumGothic', '', FONT_REGULAR, uni=True)
-        else:
-            self.set_font('Helvetica', '', 9) # Fallback
-
-        # Bold
-        if os.path.exists(FONT_BOLD):
-            self.add_font('NanumGothic', 'B', FONT_BOLD, uni=True)
+            header_font = 'NanumGothic'
+            if os.path.exists(FONT_BOLD):
+                self.add_font('NanumGothic', 'B', FONT_BOLD, uni=True)
+                header_style = 'B'
+            else:
+                header_style = ''
         
-        # 제목 출력
-        if os.path.exists(FONT_BOLD):
-            self.set_font('NanumGothic', 'B', 20)
-        else:
-            self.set_font('Helvetica', 'B', 20)
-            
+        # 제목
+        self.set_font(header_font, header_style, 20)
         self.cell(0, 15, '견 적 서 (Quotation)', align='C', new_x="LMARGIN", new_y="NEXT")
         
-        # 기본 폰트로 복귀
-        if os.path.exists(FONT_REGULAR):
-            self.set_font('NanumGothic', '', 9)
-        else:
-            self.set_font('Helvetica', '', 9)
+        # 기본 폰트
+        self.set_font(header_font, '', 9)
 
     def footer(self):
         self.set_y(-20)
-        has_font = os.path.exists(FONT_REGULAR)
-        has_bold = os.path.exists(FONT_BOLD)
         
-        if has_font:
-            self.set_font('NanumGothic', 'B' if has_bold else '', 12)
+        footer_font = 'Helvetica'
+        footer_style = 'B'
+        
+        if os.path.exists(FONT_REGULAR):
+            footer_font = 'NanumGothic'
+            if os.path.exists(FONT_BOLD):
+                footer_style = 'B'
+            else:
+                footer_style = ''
+        
+        self.set_font(footer_font, footer_style, 12)
+        
+        if footer_font == 'NanumGothic':
             self.cell(0, 8, "주식회사 신진켐텍", align='C', ln=True)
             self.set_font('NanumGothic', '', 8)
         else:
-            self.set_font('Helvetica', 'B', 12)
             self.cell(0, 8, "SHIN JIN CHEMTECH Co., Ltd.", align='C', ln=True)
             self.set_font('Helvetica', 'I', 8)
+            
         self.cell(0, 5, f'Page {self.page_no()}', align='C')
 
 def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, buyer_info):
     pdf = PDF()
     pdf.add_page()
     
-    # 폰트 확인
+    # 본문 폰트 설정
     has_font = os.path.exists(FONT_REGULAR)
     has_bold = os.path.exists(FONT_BOLD)
     font_name = 'NanumGothic' if has_font else 'Helvetica'
@@ -346,7 +353,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     pdf.cell(12, h_height, "수량", border=1, align='C', fill=True)
 
     if form_type == "basic":
-        # price_labels[0]이 "소비자가" 또는 "단가(현장)" 등으로 찍힘
+        # price_labels[0]이 "소비자가" 또는 "단가(현장)"
         pdf.cell(35, h_height, f"{price_labels[0]}", border=1, align='C', fill=True)
         pdf.cell(35, h_height, "금액", border=1, align='C', fill=True)
         pdf.cell(38, h_height, "비고", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
@@ -368,12 +375,19 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         spec = item.get("규격", "-")
         code = str(item.get("코드", "")).zfill(5) 
         qty = int(item.get("수량", 0))
-        img_id = item.get("image_data") # 이 값이 구글 드라이브 ID이거나 파일명
-
-        # 이미지 로드 시도
+        
+        # [수정] 이미지 로직 강화 (이중 체크)
+        img_val = item.get("image_data") # 1차: DB 값 확인
         img_b64 = None
-        if img_id:
-            img_b64 = get_image_from_drive(img_id)
+        
+        # 1. DB값으로 시도 (파일명 or ID)
+        if img_val:
+            img_b64 = get_image_from_drive(img_val)
+        
+        # 2. DB값 없거나 실패시, "코드.jpg"로 강제 검색 (Fallback)
+        if not img_b64 and code:
+            fallback_name = f"{code}.jpg"
+            img_b64 = get_image_from_drive(fallback_name)
 
         sum_qty += qty
         p1 = int(item.get("price_1", 0))
@@ -396,7 +410,6 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         pdf.cell(15, h, "", border=1)
         if img_b64:
             try:
-                # data:image/jpeg;base64, 부분 제거
                 if "," in img_b64:
                     img_data_str = img_b64.split(",", 1)[1]
                 else:
@@ -410,9 +423,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
                 # 이미지 삽입
                 pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
                 os.unlink(tmp_path)
-            except Exception as e:
-                # 에러 발생 시 로그는 못 남기더라도 진행은 함
-                pass
+            except Exception: pass
 
         # 2. 품목 정보
         pdf.set_xy(x+15, y)
@@ -624,7 +635,8 @@ if mode == "관리자 모드":
             with c2: ifile = st.file_uploader("이미지 파일", ["png", "jpg"], key="pimg")
             with c3:
                 st.write(""); st.write("")
-                if st.button("저장"):
+                # [수정] Duplicate ID 해결 (key 추가)
+                if st.button("저장", key="btn_save_img_manual"):
                     if ifile:
                         fname = f"{tp}_{ifile.name}"
                         fid = upload_image_to_drive(ifile, fname)
@@ -661,7 +673,8 @@ if mode == "관리자 모드":
                  with c3: 
                      if st.button("담기"): st.session_state.temp_set_recipe[sp_obj['name']] = sq
                  st.write(st.session_state.temp_set_recipe)
-                 if st.button("저장"):
+                 # [수정] Duplicate ID 해결 (key 추가)
+                 if st.button("저장", key="btn_save_new_set"):
                      if cat not in st.session_state.db["sets"]: st.session_state.db["sets"][cat] = {}
                      st.session_state.db["sets"][cat][nn] = {"recipe": st.session_state.temp_set_recipe, "image": "", "sub_cat": sub_cat}
                      save_sets_to_sheet(st.session_state.db["sets"]); st.session_state.temp_set_recipe={}; st.success("저장")
@@ -856,7 +869,7 @@ else:
         with c_date: q_date = st.date_input("견적일", datetime.datetime.now())
         with c_opt1: form_type = st.radio("양식", ["기본 양식", "이익 분석 양식"])
         with c_opt2:
-            # [수정] 기본 옵션(소비자가/단가(현장))은 항상 노출
+            # [수정] 단가(현장)이 항상 보이도록 설정
             basic_opts = ["소비자가", "단가(현장)"]
             admin_opts = ["매입단가", "총판가1", "총판가2", "대리점가"]
             opts = basic_opts + (admin_opts if st.session_state.auth_price else [])
@@ -896,7 +909,7 @@ else:
             d = {
                 "품목": n, "규격": inf.get("spec", ""), "코드": inf.get("code", ""),
                 "단위": inf.get("unit", "EA"), "수량": int(q), 
-                "image_data": inf.get("image") # 이미지 데이터 전달 확인
+                "image_data": inf.get("image")
             }
             d["price_1"] = int(inf.get(pk[0], 0))
             if len(pk)>1: d["price_2"] = int(inf.get(pk[1], 0))

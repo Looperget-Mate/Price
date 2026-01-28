@@ -203,26 +203,26 @@ def load_data_from_sheet():
                         new_rec[COL_MAP[k]] = str(v).zfill(5)
                     else:
                         new_rec[COL_MAP[k]] = v
-            if "image" in new_rec and new_rec["image"]:
-                pass 
             data["products"].append(new_rec)
     except Exception as e:
         st.error(f"🚨 데이터 로드 오류 발생: {e}")
 
-    # 2. Sets 로드
+    # 2. Sets 로드 (오류 수정: 예외처리 강화)
     try:
         set_records = ws_sets.get_all_records()
         for rec in set_records:
-            cat = rec["카테고리"]
-            name = rec["세트명"]
-            sub = rec["하위분류"]
-            img = rec["이미지파일명"]
-            recipe_str = rec["레시피JSON"]
+            cat = rec.get("카테고리", "")
+            name = rec.get("세트명", "")
+            sub = rec.get("하위분류", "")
+            img = rec.get("이미지파일명", "")
+            recipe_str = rec.get("레시피JSON", "{}")
             
+            if not cat or not name: continue # 필수 데이터 없으면 스킵
+
             if cat not in data["sets"]: data["sets"][cat] = {}
             try:
-                recipe = json.loads(recipe_str)
-            except:
+                recipe = json.loads(str(recipe_str))
+            except json.JSONDecodeError:
                 recipe = {}
                 
             data["sets"][cat][name] = {
@@ -230,7 +230,8 @@ def load_data_from_sheet():
                 "image": img,
                 "sub_cat": sub
             }
-    except: pass
+    except Exception as e:
+        st.error(f"🚨 세트 데이터 로드 오류: {e}")
             
     return data
 
@@ -243,6 +244,7 @@ def save_products_to_sheet(products_list):
     if "code" in df.columns:
         df["code"] = df["code"].astype(str).apply(lambda x: x.zfill(5))
     df_upload = df.rename(columns=REV_COL_MAP)
+    # 없는 컬럼은 빈 값으로 처리하여 업데이트
     ws_prod.clear()
     ws_prod.update([df_upload.columns.values.tolist()] + df_upload.values.tolist())
 
@@ -283,19 +285,22 @@ def format_prod_label(option):
 # ==========================================
 class PDF(FPDF):
     def header(self):
+        # 폰트 로드 확인
         if os.path.exists(FONT_FILE):
             self.add_font('NanumGothic', '', FONT_FILE, uni=True)
             if os.path.exists(FONT_BOLD_FILE):
                 self.add_font('NanumGothic', 'B', FONT_BOLD_FILE, uni=True)
-            self.set_font('NanumGothic', 'B' if os.path.exists(FONT_BOLD_FILE) else '', 20) 
-        else: self.set_font('Helvetica', 'B', 20)
-        
-        self.cell(0, 15, '견 적 서 (Quotation)', align='C', new_x="LMARGIN", new_y="NEXT")
-        self.set_font('NanumGothic', '', 9) if os.path.exists(FONT_FILE) else self.set_font('Helvetica', '', 9)
-        self.ln(2)
-        self.cell(0, 5, "1. 견적 유효기간: 견적일로부터 15일 이내", ln=True, align='R')
-        self.cell(0, 5, "2. 출고: 결재 완료 후 즉시 또는 7일 이내", ln=True, align='R')
-        self.ln(5)
+            
+            # 1. 제목
+            self.set_font('NanumGothic', 'B', 20)
+            self.cell(0, 15, '견 적 서 (Quotation)', align='C', new_x="LMARGIN", new_y="NEXT")
+            
+            # 2. 기본 폰트 설정
+            self.set_font('NanumGothic', '', 9)
+        else:
+            self.set_font('Helvetica', 'B', 20)
+            self.cell(0, 15, '견 적 서 (Quotation)', align='C', new_x="LMARGIN", new_y="NEXT")
+            self.set_font('Helvetica', '', 9)
 
     def footer(self):
         self.set_y(-20)
@@ -309,7 +314,10 @@ class PDF(FPDF):
             self.set_font('Helvetica', 'I', 8)
         self.cell(0, 5, f'Page {self.page_no()}', align='C')
 
-def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, form_type, price_labels):
+def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, buyer_info):
+    """
+    buyer_info: { 'manager':..., 'phone':..., 'addr':... }
+    """
     pdf = PDF()
     pdf.add_page()
     has_font = os.path.exists(FONT_FILE)
@@ -320,17 +328,77 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         pdf.add_font(font_name, '', FONT_FILE, uni=True)
         if has_bold: pdf.add_font(font_name, 'B', FONT_BOLD_FILE, uni=True)
     
+    # ----------------------------------------------------
+    # [수정] 구매자/판매자 정보 표 출력
+    # ----------------------------------------------------
     pdf.set_font(font_name, '', 10)
+    
+    # 상단 날짜 및 현장명
+    pdf.set_fill_color(255, 255, 255)
+    pdf.cell(100, 8, f" 견적일 : {quote_date}", border=0)
+    pdf.cell(90, 8, f" 현장명 : {quote_name}", border=0, align='R', new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(2)
 
-    # 견적명
-    pdf.set_font(font_name, 'B' if has_bold else '', 12)
-    pdf.cell(120, 10, f"현장명 : {quote_name}", border=0)
-    pdf.cell(70, 10, f"견적일 : {quote_date}", border=0, align='R', new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font(font_name, '', 10)
-
-    # 헤더
+    # 표 그리기 (왼쪽: 공급받는자, 오른쪽: 공급자)
+    x_start = pdf.get_x()
+    y_start = pdf.get_y()
+    half_w = 95
+    h_line = 6
+    
+    # 타이틀
     pdf.set_fill_color(240, 240, 240)
+    pdf.set_font(font_name, 'B', 10)
+    pdf.cell(half_w, h_line, "  [공급받는 자]", border=1, fill=True)
+    pdf.cell(half_w, h_line, "  [공급자]", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+    
+    pdf.set_font(font_name, '', 9)
+    # 내용 (5줄)
+    # 공급받는자 정보
+    buy_name = f" 상호(현장): {quote_name}"
+    buy_man = f" 담당자: {buyer_info.get('manager', '')}"
+    buy_tel = f" 연락처: {buyer_info.get('phone', '')}"
+    buy_addr = f" 주소: {buyer_info.get('addr', '')}"
+    buy_empty = ""
+
+    # 공급자 정보 (고정)
+    sell_name = " 상호: 주식회사 신진켐텍"
+    sell_rep = " 대표자: 박형석 (인)"
+    sell_addr = " 주소: 경기도 이천시 부발읍 황무로 1859-157"
+    sell_tel = " 전화: 031-638-1809 / 팩스: 031-638-1810"
+    sell_etc = " 이메일: support@sjct.kr / 홈페이지: www.sjct.kr"
+
+    lines = [
+        (buy_name, sell_name),
+        (buy_man, sell_rep),
+        (buy_tel, sell_addr),
+        (buy_addr, sell_tel),
+        (buy_empty, sell_etc)
+    ]
+
+    for b_txt, s_txt in lines:
+        # 긴 주소 처리 등을 위해 cell 대신 text_box 로직이 필요할 수 있으나, 간략히 cell 사용
+        # 주소 등은 길어지면 짤릴 수 있으므로 multi_cell로 처리하되 높이 고정
+        cur_y = pdf.get_y()
+        
+        # 왼쪽 셀
+        pdf.set_xy(x_start, cur_y)
+        pdf.cell(half_w, h_line, " " + b_txt, border=1)
+        
+        # 오른쪽 셀
+        pdf.set_xy(x_start + half_w, cur_y)
+        pdf.cell(half_w, h_line, " " + s_txt, border=1)
+        
+        pdf.ln(h_line)
+        
+    pdf.ln(5) # 표 아래 공백
+
+    # ----------------------------------------------------
+    # 품목 리스트 헤더
+    # ----------------------------------------------------
+    pdf.set_fill_color(240, 240, 240)
+    pdf.set_font(font_name, 'B', 10)
     h_height = 10
+    
     pdf.cell(15, h_height, "IMG", border=1, align='C', fill=True)
     pdf.cell(45, h_height, "품목정보 (명/규격/코드)", border=1, align='C', fill=True) 
     pdf.cell(10, h_height, "단위", border=1, align='C', fill=True)
@@ -343,9 +411,9 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     else:
         l1, l2 = price_labels[0], price_labels[1]
         pdf.set_font(font_name, '', 8)
-        pdf.cell(18, h_height, f"{l1}단가", border=1, align='C', fill=True)
+        pdf.cell(18, h_height, f"{l1}", border=1, align='C', fill=True) # 줄임
         pdf.cell(22, h_height, f"{l1}금액", border=1, align='C', fill=True)
-        pdf.cell(18, h_height, f"{l2}단가", border=1, align='C', fill=True)
+        pdf.cell(18, h_height, f"{l2}", border=1, align='C', fill=True) # 줄임
         pdf.cell(22, h_height, f"{l2}금액", border=1, align='C', fill=True)
         pdf.cell(15, h_height, "이익금", border=1, align='C', fill=True)
         pdf.cell(13, h_height, "율(%)", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
@@ -359,7 +427,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         code = str(item.get("코드", "")).zfill(5) 
         
         qty = int(item.get("수량", 0))
-        img_filename = item.get("image_data", None)
+        img_filename = item.get("image_data", None) # 파일명 또는 ID
         
         img_b64 = None
         if img_filename:
@@ -382,16 +450,29 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         h = 15
         x, y = pdf.get_x(), pdf.get_y()
         
+        # 1. 이미지 셀
         pdf.cell(15, h, "", border=1)
         if img_b64:
             try:
-                data = base64.b64decode(img_b64.split(",", 1)[1])
+                # Base64 헤더 제거 (data:image/jpeg;base64,...)
+                if "base64," in img_b64:
+                    img_data_str = img_b64.split("base64,")[1]
+                else:
+                    img_data_str = img_b64
+                
+                img_bytes = base64.b64decode(img_data_str)
+                
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(data); tmp_path = tmp.name
+                    tmp.write(img_bytes)
+                    tmp_path = tmp.name
+                
+                # 이미지 삽입
                 pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
                 os.unlink(tmp_path)
-            except: pass
+            except Exception as e:
+                pass # 이미지 로드 실패시 무시
 
+        # 2. 품목정보 셀
         pdf.set_xy(x+15, y)
         pdf.cell(45, h, "", border=1) 
         
@@ -410,9 +491,11 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         pdf.set_xy(x+60, y)
         pdf.set_font(font_name, '', 9) 
 
+        # 3. 단위, 수량
         pdf.cell(10, h, item.get("단위", "EA"), border=1, align='C')
         pdf.cell(12, h, str(qty), border=1, align='C')
 
+        # 4. 가격 정보
         if form_type == "basic":
             pdf.cell(35, h, f"{p1:,}", border=1, align='R')
             pdf.cell(35, h, f"{a1:,}", border=1, align='R')
@@ -466,6 +549,14 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     # 총계
     pdf.ln(5)
     pdf.set_font(font_name, 'B' if has_bold else '', 12)
+    
+    # 꼬리말 (유효기간 등)
+    pdf.set_font(font_name, '', 9)
+    pdf.cell(0, 5, "1. 견적 유효기간: 견적일로부터 15일 이내", ln=True, align='R')
+    pdf.cell(0, 5, "2. 출고: 결재 완료 후 즉시 또는 7일 이내", ln=True, align='R')
+    
+    pdf.ln(2)
+    pdf.set_font(font_name, 'B' if has_bold else '', 12)
     if form_type == "basic":
         final_total = sum_a1 + svc_total
         pdf.cell(120, 10, "", border=0)
@@ -495,9 +586,12 @@ if "history" not in st.session_state: st.session_state.history = {}
 if "quote_step" not in st.session_state: st.session_state.quote_step = 1
 if "quote_items" not in st.session_state: st.session_state.quote_items = {}
 if "services" not in st.session_state: st.session_state.services = []
-if "pipe_cart" not in st.session_state: st.session_state.pipe_cart = []  # [New] 배관 장바구니
+if "pipe_cart" not in st.session_state: st.session_state.pipe_cart = [] 
 if "temp_set_recipe" not in st.session_state: st.session_state.temp_set_recipe = {}
 if "current_quote_name" not in st.session_state: st.session_state.current_quote_name = ""
+# [New] 구매자 정보 세션
+if "buyer_info" not in st.session_state: st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}
+
 if "auth_admin" not in st.session_state: st.session_state.auth_admin = False
 if "auth_price" not in st.session_state: st.session_state.auth_price = False
 
@@ -509,22 +603,30 @@ if "config" not in st.session_state.db: st.session_state.db["config"] = {"passwo
 st.set_page_config(layout="wide", page_title="루퍼젯 프로 매니저 V10.0")
 st.title("💧 루퍼젯 프로 매니저 V10.0 (Cloud)")
 
-# 컬럼 매핑
-COL_MAP = {"품목코드": "code", "카테고리": "category", "제품명": "name", "규격": "spec", "단위": "unit", "1롤길이(m)": "len_per_unit", "매입단가": "price_buy", "총판가1": "price_d1", "총판가2": "price_d2", "대리점가": "price_agy", "소비자가": "price_cons", "이미지데이터": "image"}
+# 컬럼 매핑 (단가(현장) 추가)
+COL_MAP = {
+    "품목코드": "code", "카테고리": "category", "제품명": "name", "규격": "spec", "단위": "unit", 
+    "1롤길이(m)": "len_per_unit", "매입단가": "price_buy", 
+    "총판가1": "price_d1", "총판가2": "price_d2", "대리점가": "price_agy", 
+    "소비자가": "price_cons", "단가(현장)": "price_site", 
+    "이미지데이터": "image"
+}
 REV_COL_MAP = {v: k for k, v in COL_MAP.items()}
 
 # --- 사이드바 ---
 with st.sidebar:
     st.header("🗂️ 견적 보관함")
-    q_name = st.text_input("현장명", value=st.session_state.current_quote_name)
+    # [수정] Step 1에서 입력받을 것이므로 여기서는 Display만 하거나 연동
+    q_name = st.text_input("현장명 (저장용)", value=st.session_state.current_quote_name)
     c1, c2 = st.columns(2)
     with c1:
         if st.button("💾 임시저장"):
             st.session_state.history[q_name] = {
                 "items": st.session_state.quote_items, 
                 "services": st.session_state.services, 
-                "pipe_cart": st.session_state.pipe_cart, # 배관 목록도 저장
-                "step": st.session_state.quote_step
+                "pipe_cart": st.session_state.pipe_cart, 
+                "step": st.session_state.quote_step,
+                "buyer": st.session_state.buyer_info # 구매자 정보도 저장
             }
             st.session_state.current_quote_name = q_name; st.success("저장됨")
     with c2:
@@ -534,6 +636,7 @@ with st.sidebar:
             st.session_state.pipe_cart = []
             st.session_state.quote_step = 1
             st.session_state.current_quote_name = ""
+            st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}
             st.rerun()
     st.divider()
     h_list = list(st.session_state.history.keys())[::-1]
@@ -545,6 +648,7 @@ with st.sidebar:
             st.session_state.services = d["services"]
             st.session_state.pipe_cart = d.get("pipe_cart", [])
             st.session_state.quote_step = d.get("step", 2)
+            st.session_state.buyer_info = d.get("buyer", {"manager": "", "phone": "", "addr": ""})
             st.session_state.current_quote_name = sel_h
             st.rerun()
     
@@ -715,11 +819,33 @@ if mode == "관리자 모드":
 
 # --- [견적 모드] ---
 else:
+    # [수정] 현장명 입력을 Step 1 내부로 이동 또는 동기화
     st.markdown(f"### 📝 현장명: **{st.session_state.current_quote_name if st.session_state.current_quote_name else '(제목 없음)'}**")
 
     # STEP 1
     if st.session_state.quote_step == 1:
-        st.subheader("STEP 1. 물량 입력")
+        st.subheader("STEP 1. 물량 및 정보 입력")
+        
+        # [NEW] 구매자 정보 입력 섹션
+        with st.expander("👤 구매자(현장) 정보 입력", expanded=True):
+            c_info1, c_info2 = st.columns(2)
+            with c_info1:
+                new_q_name = st.text_input("현장명(거래처명)", value=st.session_state.current_quote_name, placeholder="예: 이천 공장 신축 현장")
+                # 현장명 변경 시 세션 업데이트
+                if new_q_name != st.session_state.current_quote_name:
+                    st.session_state.current_quote_name = new_q_name
+                
+                manager = st.text_input("담당자", value=st.session_state.buyer_info.get("manager",""))
+            with c_info2:
+                phone = st.text_input("전화번호", value=st.session_state.buyer_info.get("phone",""))
+                addr = st.text_input("주소", value=st.session_state.buyer_info.get("addr",""))
+            
+            # 입력값 세션 저장
+            st.session_state.buyer_info["manager"] = manager
+            st.session_state.buyer_info["phone"] = phone
+            st.session_state.buyer_info["addr"] = addr
+
+        st.divider()
         sets = st.session_state.db.get("sets", {})
         
         # 헬퍼
@@ -753,37 +879,41 @@ else:
         with st.expander("2. 가지관"): inp_b = render_inputs(sets.get("가지관세트", {}), "b")
         with st.expander("3. 기타"): inp_e = render_inputs(sets.get("기타자재", {}), "e")
         
-        # [NEW] 배관 장바구니 시스템
+        # [NEW] 배관 장바구니 시스템 (분리 기능 추가)
         st.divider()
         st.markdown("#### 📏 배관 물량 산출 (장바구니)")
         
         all_products = st.session_state.db["products"]
-        # 배관 카테고리만 필터링 (주배관, 가지관 등)
-        pipe_products = [p for p in all_products if p["category"] in ["주배관", "가지관"]]
+        
+        # [수정] 배관 종류 선택 (라디오 버튼)
+        pipe_type_sel = st.radio("배관 구분", ["주배관", "가지관"], horizontal=True)
+        
+        # 필터링
+        filtered_pipes = [p for p in all_products if p["category"] == pipe_type_sel]
         
         c1, c2, c3 = st.columns([3, 2, 1])
         with c1: 
-            sel_pipe = st.selectbox("배관 선택", pipe_products, format_func=format_prod_label, key="pipe_sel")
+            sel_pipe = st.selectbox(f"{pipe_type_sel} 선택", filtered_pipes, format_func=format_prod_label, key="pipe_sel")
         with c2: 
-            # [요청사항] 소수점 없이 정수만 입력
             len_pipe = st.number_input("길이(m)", min_value=1, step=1, format="%d", key="pipe_len")
         with c3:
             st.write("")
             st.write("")
             if st.button("➕ 목록 추가"):
-                st.session_state.pipe_cart.append({
-                    "name": sel_pipe['name'],
-                    "spec": sel_pipe.get("spec", ""),
-                    "code": sel_pipe.get("code", ""),
-                    "len": len_pipe
-                })
+                if sel_pipe:
+                    st.session_state.pipe_cart.append({
+                        "type": pipe_type_sel, # 구분용
+                        "name": sel_pipe['name'],
+                        "spec": sel_pipe.get("spec", ""),
+                        "code": sel_pipe.get("code", ""),
+                        "len": len_pipe
+                    })
         
         # 장바구니 목록 표시
         if st.session_state.pipe_cart:
             st.caption("📋 입력된 배관 목록")
-            # 데이터프레임으로 깔끔하게 보여주기
             cart_df = pd.DataFrame(st.session_state.pipe_cart)
-            cart_df = cart_df.rename(columns={"name": "제품명", "spec": "규격", "len": "길이(m)", "code": "코드"})
+            cart_df = cart_df.rename(columns={"type": "구분", "name": "제품명", "spec": "규격", "len": "길이(m)", "code": "코드"})
             st.dataframe(cart_df, use_container_width=True, hide_index=True)
             
             if st.button("🗑️ 배관 목록 전체 비우기"):
@@ -792,41 +922,43 @@ else:
 
         st.divider()
         if st.button("계산하기 (STEP 2)"):
-            res = {}
-            # 1. 세트 물량 합산
-            all_m = {**inp_m_50, **inp_m_40, **inp_m_etc, **inp_m_u}
-            def ex(ins, db):
-                for k,v in ins.items():
-                    if v>0:
-                        rec = db[k].get("recipe", db[k])
-                        for p, q in rec.items(): res[p] = res.get(p, 0) + q*v
-            ex(all_m, sets.get("주배관세트", {})); ex(inp_b, sets.get("가지관세트", {})); ex(inp_e, sets.get("기타자재", {}))
-            
-            # 2. [NEW] 배관 장바구니 물량 합산 로직
-            # 목록에 있는 배관들의 길이를 제품별로 모두 더한 뒤, 1롤 길이(len_per_unit)로 나누어 소요량(EA) 계산
-            pipe_sums = {} # {제품명: 총길이}
-            for p_item in st.session_state.pipe_cart:
-                p_name = p_item['name']
-                p_len = p_item['len']
-                pipe_sums[p_name] = pipe_sums.get(p_name, 0) + p_len
-            
-            # 제품 DB에서 단위 길이 찾아서 계산
-            for p_name, total_len in pipe_sums.items():
-                # 해당 제품 정보 찾기
-                prod_info = next((item for item in all_products if item["name"] == p_name), None)
-                if prod_info:
-                    unit_len = prod_info.get("len_per_unit", 4) # 기본값 4m 보호코드
-                    if unit_len <= 0: unit_len = 4
-                    req_qty = math.ceil(total_len / unit_len)
-                    res[p_name] = res.get(p_name, 0) + req_qty
+            if not st.session_state.current_quote_name:
+                st.error("현장명을 입력해주세요.")
+            else:
+                res = {}
+                # 1. 세트 물량 합산
+                all_m = {**inp_m_50, **inp_m_40, **inp_m_etc, **inp_m_u}
+                def ex(ins, db):
+                    for k,v in ins.items():
+                        if v>0:
+                            rec = db[k].get("recipe", db[k])
+                            for p, q in rec.items(): res[p] = res.get(p, 0) + q*v
+                ex(all_m, sets.get("주배관세트", {})); ex(inp_b, sets.get("가지관세트", {})); ex(inp_e, sets.get("기타자재", {}))
+                
+                # 2. 배관 장바구니 물량 합산 로직
+                pipe_sums = {} # {제품명: 총길이}
+                for p_item in st.session_state.pipe_cart:
+                    p_name = p_item['name']
+                    p_len = p_item['len']
+                    pipe_sums[p_name] = pipe_sums.get(p_name, 0) + p_len
+                
+                # 제품 DB에서 단위 길이 찾아서 계산
+                for p_name, total_len in pipe_sums.items():
+                    prod_info = next((item for item in all_products if item["name"] == p_name), None)
+                    if prod_info:
+                        unit_len = prod_info.get("len_per_unit", 4)
+                        if unit_len <= 0: unit_len = 4
+                        req_qty = math.ceil(total_len / unit_len)
+                        res[p_name] = res.get(p_name, 0) + req_qty
 
-            st.session_state.quote_items = res; st.session_state.quote_step = 2; st.rerun()
+                st.session_state.quote_items = res; st.session_state.quote_step = 2; st.rerun()
 
     # STEP 2
     elif st.session_state.quote_step == 2:
         st.subheader("STEP 2. 내용 검토")
+        # [수정] 단가(현장) 뷰 옵션 추가
         view_opts = ["소비자가"]
-        if st.session_state.auth_price: view_opts += ["매입가", "총판1", "총판2", "대리점"]
+        if st.session_state.auth_price: view_opts += ["단가(현장)", "매입가", "총판1", "총판2", "대리점"]
         
         c_lock, c_view = st.columns([1, 2])
         with c_lock:
@@ -838,7 +970,15 @@ else:
             else: st.success("🔓 원가 조회 가능")
         with c_view: view = st.radio("단가 보기", view_opts, horizontal=True)
 
-        key_map = {"매입가":("price_buy","매입"), "총판1":("price_d1","총판1"), "총판2":("price_d2","총판2"), "대리점":("price_agy","대리점")}
+        # [수정] 키 매핑 추가
+        key_map = {
+            "매입가":("price_buy","매입"), 
+            "총판1":("price_d1","총판1"), 
+            "총판2":("price_d2","총판2"), 
+            "대리점":("price_agy","대리점"),
+            "단가(현장)":("price_site", "현장") 
+        }
+
         rows = []
         pdb = {p["name"]: p for p in st.session_state.db["products"]}
         for n, q in st.session_state.quote_items.items():
@@ -862,20 +1002,18 @@ else:
         st.dataframe(df[disp], use_container_width=True, hide_index=True)
         
         st.divider()
-        # [UI 개선] 부품 추가와 비용 추가를 좌우로 배치
         col_add_part, col_add_cost = st.columns([1, 1])
         
         with col_add_part:
             st.markdown("##### ➕ 부품 추가")
             with st.container(border=True):
                 all_products = st.session_state.db["products"]
-                # [스마트 검색] format_func 적용
                 ap_obj = st.selectbox("품목 선택", all_products, format_func=format_prod_label, key="step2_add_part")
                 c_qty, c_btn = st.columns([2, 1])
                 with c_qty:
                     aq = st.number_input("수량", 1, key="step2_add_qty")
                 with c_btn:
-                    st.write("") # 간격 맞춤
+                    st.write("")
                     if st.button("추가", use_container_width=True): 
                         st.session_state.quote_items[ap_obj['name']] = st.session_state.quote_items.get(ap_obj['name'], 0) + aq
                         st.rerun()
@@ -897,7 +1035,6 @@ else:
                     st.session_state.services.append({"항목": sn, "금액": sp})
                     st.rerun()
 
-        # 추가된 비용 리스트 표시
         if st.session_state.services:
             st.caption("추가된 비용 목록")
             st.table(st.session_state.services)
@@ -908,16 +1045,16 @@ else:
     # STEP 3
     elif st.session_state.quote_step == 3:
         st.header("🏁 최종 견적")
-        if not st.session_state.current_quote_name: st.warning("저장해주세요!")
+        if not st.session_state.current_quote_name: st.warning("현장명(저장)을 확인해주세요!")
         st.markdown("##### 🖨️ 출력 옵션")
         c_date, c_opt1, c_opt2 = st.columns([1, 1, 1])
         with c_date: q_date = st.date_input("견적일", datetime.datetime.now())
         with c_opt1: form_type = st.radio("양식", ["기본 양식", "이익 분석 양식"])
         with c_opt2:
-            opts = ["소비자가"]
-            if st.session_state.auth_price: opts = ["매입단가", "총판가1", "총판가2", "대리점가", "소비자가"]
+            # [수정] 단가(현장) 포함 및 선택 로직 개선
+            opts = ["소비자가", "단가(현장)"]
+            if st.session_state.auth_price: opts = ["매입단가", "총판가1", "총판가2", "대리점가", "단가(현장)", "소비자가"]
             
-            # 이익 분석 선택 시 비밀번호 입력창 바로 표시
             if "이익" in form_type and not st.session_state.auth_price:
                 st.warning("🔒 원가 정보를 보려면 비밀번호를 입력하세요.")
                 c_pw, c_btn = st.columns([2,1])
@@ -929,19 +1066,27 @@ else:
                         else: st.error("불일치")
                 st.stop()
 
-            if "기본" in form_type: sel = st.multiselect("출력 단가", opts, default=["소비자가"], max_selections=1)
-            else: sel = st.multiselect("비교 단가 (2개)", opts, max_selections=2)
+            if "기본" in form_type: 
+                # [수정] 기본 양식에서도 소비자가 vs 단가(현장) 선택 가능
+                sel = st.multiselect("출력 단가 (1개 선택)", opts, default=["소비자가"], max_selections=1)
+            else: 
+                sel = st.multiselect("비교 단가 (2개)", opts, max_selections=2)
 
-        if "이익" in form_type and len(sel) < 2: st.warning("2개 선택 필요"); st.stop()
+        if "기본" in form_type and len(sel) != 1: st.warning("출력할 단가를 1개 선택해주세요."); st.stop()
+        if "이익" in form_type and len(sel) < 2: st.warning("비교할 단가를 2개 선택해주세요."); st.stop()
 
-        price_rank = {"매입단가": 0, "총판가1": 1, "총판가2": 2, "대리점가": 3, "소비자가": 4}
-        if sel: sel = sorted(sel, key=lambda x: price_rank.get(x, 5))
+        # 정렬 순서 정의
+        price_rank = {"매입단가": 0, "총판가1": 1, "총판가2": 2, "대리점가": 3, "단가(현장)": 4, "소비자가": 5}
+        if sel: sel = sorted(sel, key=lambda x: price_rank.get(x, 6))
 
-        pkey = {"매입단가":"price_buy", "총판가1":"price_d1", "총판가2":"price_d2", "대리점가":"price_agy", "소비자가":"price_cons"}
+        pkey = {
+            "매입단가":"price_buy", "총판가1":"price_d1", "총판가2":"price_d2", 
+            "대리점가":"price_agy", "소비자가":"price_cons", "단가(현장)":"price_site"
+        }
+        
         pdb = {p["name"]: p for p in st.session_state.db["products"]}
         pk = [pkey[l] for l in sel] if sel else ["price_cons"]
         
-        # [중요] final_data_list 생성 - PDF 생성 함수 인자와 매칭
         fdata = []
         for n, q in st.session_state.quote_items.items():
             inf = pdb.get(n, {})
@@ -951,7 +1096,7 @@ else:
                 "코드": inf.get("code", ""),
                 "단위": inf.get("unit", "EA"), 
                 "수량": int(q), 
-                "image_data": inf.get("image")
+                "image_data": inf.get("image") # 이미지 데이터 전달 확인
             }
             d["price_1"] = int(inf.get(pk[0], 0))
             if len(pk)>1: d["price_2"] = int(inf.get(pk[1], 0))
@@ -968,12 +1113,27 @@ else:
         
         if sel:
             fmode = "basic" if "기본" in form_type else "profit"
-            # [절대 주의] create_advanced_pdf 호출 시 인자 순서 및 데이터 구조 유지
-            pdf_b = create_advanced_pdf(edited.to_dict('records'), st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel)
+            # [수정] PDF 생성 함수에 buyer_info 전달
+            pdf_b = create_advanced_pdf(
+                edited.to_dict('records'), 
+                st.session_state.services, 
+                st.session_state.current_quote_name, 
+                q_date.strftime("%Y-%m-%d"), 
+                fmode, 
+                sel,
+                st.session_state.buyer_info
+            )
             st.download_button("📥 PDF 다운로드", pdf_b, f"quote_{st.session_state.current_quote_name}.pdf", "application/pdf", type="primary")
 
         c1, c2 = st.columns(2)
         with c1: 
             if st.button("⬅️ 수정"): st.session_state.quote_step = 2; st.rerun()
         with c2:
-            if st.button("🔄 처음으로"): st.session_state.quote_step = 1; st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.pipe_cart = []; st.session_state.current_quote_name = ""; st.rerun()
+            if st.button("🔄 처음으로"): 
+                st.session_state.quote_step = 1
+                st.session_state.quote_items = {}
+                st.session_state.services = []
+                st.session_state.pipe_cart = []
+                st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}
+                st.session_state.current_quote_name = ""
+                st.rerun()

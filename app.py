@@ -129,6 +129,10 @@ def get_image_from_drive(filename_or_id):
         return download_image_by_id(fmap[stem])
     return None
 
+def list_files_in_drive_folder():
+    """폴더 내의 모든 파일 목록 가져오기 (파일명 -> ID 매핑)"""
+    return get_drive_file_map() # 기존 함수 활용
+
 # --- 구글 시트 함수 ---
 SHEET_NAME = "Looperget_DB"
 COL_MAP = {
@@ -405,6 +409,7 @@ if "quote_step" not in st.session_state: st.session_state.quote_step = 1
 if "quote_items" not in st.session_state: st.session_state.quote_items = {}
 if "services" not in st.session_state: st.session_state.services = []
 if "pipe_cart" not in st.session_state: st.session_state.pipe_cart = [] 
+if "set_cart" not in st.session_state: st.session_state.set_cart = [] # [NEW] 세트 장바구니
 if "temp_set_recipe" not in st.session_state: st.session_state.temp_set_recipe = {}
 if "current_quote_name" not in st.session_state: st.session_state.current_quote_name = ""
 if "buyer_info" not in st.session_state: st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}
@@ -424,11 +429,11 @@ with st.sidebar:
     c1, c2 = st.columns(2)
     with c1:
         if st.button("💾 임시저장"):
-            st.session_state.history[q_name] = {"items": st.session_state.quote_items, "services": st.session_state.services, "pipe_cart": st.session_state.pipe_cart, "step": st.session_state.quote_step, "buyer": st.session_state.buyer_info}
+            st.session_state.history[q_name] = {"items": st.session_state.quote_items, "services": st.session_state.services, "pipe_cart": st.session_state.pipe_cart, "set_cart": st.session_state.set_cart, "step": st.session_state.quote_step, "buyer": st.session_state.buyer_info}
             st.session_state.current_quote_name = q_name; st.success("저장됨")
     with c2:
         if st.button("✨ 초기화"):
-            st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.pipe_cart = []; st.session_state.quote_step = 1
+            st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.pipe_cart = []; st.session_state.set_cart = []; st.session_state.quote_step = 1
             st.session_state.current_quote_name = ""; st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}; st.rerun()
     st.divider()
     h_list = list(st.session_state.history.keys())[::-1]
@@ -436,7 +441,8 @@ with st.sidebar:
         sel_h = st.selectbox("불러오기", h_list)
         if st.button("📂 로드"):
             d = st.session_state.history[sel_h]
-            st.session_state.quote_items = d["items"]; st.session_state.services = d["services"]; st.session_state.pipe_cart = d.get("pipe_cart", []); st.session_state.quote_step = d.get("step", 2)
+            st.session_state.quote_items = d["items"]; st.session_state.services = d["services"]; st.session_state.pipe_cart = d.get("pipe_cart", []); st.session_state.set_cart = d.get("set_cart", [])
+            st.session_state.quote_step = d.get("step", 2)
             st.session_state.buyer_info = d.get("buyer", {"manager": "", "phone": "", "addr": ""})
             st.session_state.current_quote_name = sel_h; st.rerun()
     st.divider()
@@ -472,6 +478,34 @@ if mode == "관리자 모드":
                             ndf = pd.read_excel(uf, dtype={'품목코드': str}).rename(columns=COL_MAP).fillna(0)
                             save_products_to_sheet(ndf.to_dict('records')); st.session_state.db = load_data_from_sheet(); st.success("완료"); st.rerun()
                         except Exception as e: st.error(e)
+            
+            # [복원됨] 구글 드라이브 이미지 동기화 섹션
+            st.divider()
+            st.markdown("##### 🔄 드라이브 이미지 일괄 동기화")
+            with st.expander("구글 드라이브 폴더의 이미지와 자동 연결하기", expanded=False):
+                st.info("💡 사용법: 이미지 파일명을 '품목코드.jpg' (예: 00200.jpg)로 저장해서 구글 드라이브 'Looperget_Images' 폴더에 먼저 업로드하세요.")
+                if st.button("🔄 드라이브 이미지 자동 연결 실행", key="btn_sync_images"):
+                    with st.spinner("드라이브 폴더를 검색하는 중..."):
+                        file_map = get_drive_file_map() # 최신화된 목록 가져옴
+                        if not file_map:
+                            st.warning("폴더가 비어있거나 찾을 수 없습니다.")
+                        else:
+                            updated_count = 0
+                            products = st.session_state.db["products"]
+                            for p in products:
+                                code = str(p.get("code", "")).strip()
+                                # 코드가 파일명 목록에 있으면 연결
+                                if code and code in file_map:
+                                    p["image"] = file_map[code] # 파일명(확장자 포함) 저장
+                                    updated_count += 1
+                            
+                            if updated_count > 0:
+                                save_products_to_sheet(products)
+                                st.success(f"✅ 총 {updated_count}개의 제품 이미지를 연결했습니다!")
+                                st.session_state.db = load_data_from_sheet() # 리로드
+                            else:
+                                st.warning("매칭되는 이미지가 없습니다. (파일명이 품목코드와 같은지 확인하세요)")
+
             st.divider()
             c1, c2, c3 = st.columns([2, 2, 1])
             pn = [p["name"] for p in st.session_state.db["products"]]
@@ -564,34 +598,77 @@ else:
 
         st.divider()
         sets = st.session_state.db.get("sets", {})
-        def render_inputs(d, pf):
-            cols = st.columns(4); res = {}
-            for i, (n, v) in enumerate(d.items()):
-                with cols[i%4]:
-                    img_name = v.get("image") if isinstance(v, dict) else None
-                    if img_name:
-                        b64 = get_image_from_drive(img_name)
-                        if b64: st.image(b64, use_container_width=True)
-                        else: st.markdown("No Image")
-                    else: st.markdown("<div style='height:80px;background:#eee'></div>", unsafe_allow_html=True)
-                    res[n] = st.number_input(n, 0, key=f"{pf}_{n}")
-            return res
-
-        with st.expander("1. 주배관", True):
+        
+        # [NEW] 세트 장바구니 로직 적용
+        with st.expander("1. 주배관 및 가지관 세트 선택", True):
             m_sets = sets.get("주배관세트", {})
             grouped = {"50mm":{}, "40mm":{}, "기타":{}, "미분류":{}}
             for k, v in m_sets.items():
                 sc = v.get("sub_cat", "미분류") if isinstance(v, dict) else "미분류"
                 if sc not in grouped: grouped[sc] = {}
                 grouped[sc][k] = v
+            
+            # 탭별 렌더링
             mt1, mt2, mt3, mt4 = st.tabs(["50mm", "40mm", "기타", "전체"])
-            with mt1: inp_m_50 = render_inputs(grouped["50mm"], "m50")
-            with mt2: inp_m_40 = render_inputs(grouped["40mm"], "m40")
-            with mt3: inp_m_etc = render_inputs(grouped["기타"], "metc")
-            with mt4: inp_m_u = render_inputs(grouped["미분류"], "mu")
-        
-        with st.expander("2. 가지관"): inp_b = render_inputs(sets.get("가지관세트", {}), "b")
-        with st.expander("3. 기타"): inp_e = render_inputs(sets.get("기타자재", {}), "e")
+            
+            def render_inputs_with_key(d, pf):
+                cols = st.columns(4); res = {}
+                for i, (n, v) in enumerate(d.items()):
+                    with cols[i%4]:
+                        img_name = v.get("image") if isinstance(v, dict) else None
+                        if img_name:
+                            b64 = get_image_from_drive(img_name)
+                            if b64: st.image(b64, use_container_width=True)
+                            else: st.markdown("No Image")
+                        else: st.markdown("<div style='height:80px;background:#eee'></div>", unsafe_allow_html=True)
+                        # 개별 key 부여
+                        res[n] = st.number_input(n, 0, key=f"{pf}_{n}_input")
+                return res
+
+            with mt1: inp_m_50 = render_inputs_with_key(grouped["50mm"], "m50")
+            with mt2: inp_m_40 = render_inputs_with_key(grouped["40mm"], "m40")
+            with mt3: inp_m_etc = render_inputs_with_key(grouped["기타"], "metc")
+            with mt4: inp_m_u = render_inputs_with_key(grouped["미분류"], "mu")
+            
+            # 가지관/기타 탭도 필요하다면 여기서 렌더링하거나, 별도 Expander 유지
+            # 사용자가 "주배관의 세트를 고르는데..." 라고 했으므로 세트 입력란 하단에 추가 버튼 배치
+            
+            st.write("")
+            if st.button("➕ 입력한 수량 세트 목록에 추가"):
+                # 모든 탭의 입력값을 확인하여 0보다 큰 것만 장바구니에 추가
+                all_inputs = {**inp_m_50, **inp_m_40, **inp_m_etc, **inp_m_u}
+                added_count = 0
+                for set_name, qty in all_inputs.items():
+                    if qty > 0:
+                        st.session_state.set_cart.append({"name": set_name, "qty": qty, "type": "주배관"})
+                        added_count += 1
+                if added_count > 0:
+                    st.success(f"{added_count}개 항목이 목록에 추가되었습니다.")
+                else:
+                    st.warning("수량을 입력해주세요.")
+
+        # 가지관/기타 자재도 세트라면 같은 방식 적용 (여기서는 기존 로직 유지하되 장바구니 사용)
+        with st.expander("2. 가지관 및 기타 세트"):
+            c1, c2 = st.tabs(["가지관", "기타자재"])
+            with c1: inp_b = render_inputs_with_key(sets.get("가지관세트", {}), "b_set")
+            with c2: inp_e = render_inputs_with_key(sets.get("기타자재", {}), "e_set")
+            
+            if st.button("➕ 가지관/기타 목록 추가"):
+                all_inputs = {**inp_b, **inp_e}
+                added_count = 0
+                for set_name, qty in all_inputs.items():
+                    if qty > 0:
+                        st.session_state.set_cart.append({"name": set_name, "qty": qty, "type": "기타"})
+                        added_count += 1
+                if added_count > 0: st.success("추가됨")
+
+        # 세트 장바구니 표시
+        if st.session_state.set_cart:
+            st.info("📋 선택된 세트 목록 (합산 예정)")
+            st.dataframe(pd.DataFrame(st.session_state.set_cart), use_container_width=True, hide_index=True)
+            if st.button("🗑️ 세트 목록 비우기"):
+                st.session_state.set_cart = []
+                st.rerun()
         
         st.divider()
         st.markdown("#### 📏 배관 물량 산출 (장바구니)")
@@ -616,16 +693,24 @@ else:
             if not st.session_state.current_quote_name: st.error("현장명을 입력해주세요.")
             else:
                 res = {}
-                # Set logic (still name based)
-                all_m = {**inp_m_50, **inp_m_40, **inp_m_etc, **inp_m_u}
-                def ex(ins, db):
-                    for k,v in ins.items():
-                        if v>0:
-                            rec = db[k].get("recipe", db[k])
-                            for p, q in rec.items(): res[p] = res.get(p, 0) + q*v
-                ex(all_m, sets.get("주배관세트", {})); ex(inp_b, sets.get("가지관세트", {})); ex(inp_e, sets.get("기타자재", {}))
                 
-                # Pipe logic (CODE based)
+                # 1. 세트 장바구니 계산 (set_cart)
+                # 세트 이름 -> 레시피 -> 품목 합산
+                all_sets_db = {}
+                for cat, val in sets.items():
+                    all_sets_db.update(val)
+                
+                for item in st.session_state.set_cart:
+                    s_name = item['name']
+                    s_qty = item['qty']
+                    if s_name in all_sets_db:
+                        recipe = all_sets_db[s_name].get("recipe", {})
+                        for p_name, p_qty in recipe.items():
+                            # 여기서도 CODE를 찾아서 합산하면 좋으나, 레시피가 이름 기준이라 이름으로 합산 후 나중에 CODE 매핑 권장
+                            # 현재는 기존 로직 유지를 위해 이름 기준 합산 (단, PDB에서 이름으로 유니크하게 찾을 수 있다고 가정)
+                            res[p_name] = res.get(p_name, 0) + (p_qty * s_qty)
+
+                # 2. 배관 장바구니 계산 (pipe_cart) - CODE 기준
                 code_sums = {}
                 for p_item in st.session_state.pipe_cart:
                     c = p_item.get('code')
@@ -637,14 +722,19 @@ else:
                         unit_len = prod_info.get("len_per_unit", 4)
                         if unit_len <= 0: unit_len = 4
                         qty = math.ceil(total_len / unit_len)
-                        # Store by CODE to separate items with same name
+                        
+                        # 세트에서 이름으로 들어간 것과 합치기 위해, 이름으로 저장된게 있으면 합산 or 새로 추가
+                        # 결과 dict인 res의 키를 '이름'이 아닌 '코드'로 통일하는 것이 안전함.
+                        # -> 세트 계산 결과를 코드 기준으로 변환
+                        
+                        # (임시) 일단 이름이 키인 경우와 코드가 키인 경우가 섞여있음. Step 2에서 PDB 매핑으로 해결.
+                        # 배관은 확실히 분리하기 위해 코드로 저장
                         res[str(p_code)] = res.get(str(p_code), 0) + qty
 
                 st.session_state.quote_items = res; st.session_state.quote_step = 2; st.rerun()
 
     elif st.session_state.quote_step == 2:
         st.subheader("STEP 2. 내용 검토")
-        # [수정] 상단에 돌아가기 버튼 추가
         if st.button("⬅️ 1단계(물량수정)로 돌아가기"):
             st.session_state.quote_step = 1
             st.rerun()
@@ -665,15 +755,16 @@ else:
         key_map = {"매입가":("price_buy","매입"), "총판1":("price_d1","총판1"), "총판2":("price_d2","총판2"), "대리점":("price_agy","대리점"), "단가(현장)":("price_site", "현장")}
         rows = []
         
-        # [수정] PDB Key 확장 (Name & Code)
         pdb = {}
         for p in st.session_state.db["products"]:
             pdb[p["name"]] = p
             if p.get("code"): pdb[str(p["code"])] = p
-            
+
+        pk = [key_map[view][0]] if view != "소비자가" else ["price_cons"]
+        
         for n, q in st.session_state.quote_items.items():
-            inf = pdb.get(str(n), {}) # Try to find by code or name
-            if not inf: continue # Skip if not found
+            inf = pdb.get(str(n), {})
+            if not inf: continue
             
             cpr = inf.get("price_cons", 0)
             row = {"품목": inf.get("name", n), "규격": inf.get("spec", ""), "수량": q, "소비자가": cpr, "합계": cpr*q}
@@ -753,7 +844,6 @@ else:
         if sel: sel = sorted(sel, key=lambda x: price_rank.get(x, 6))
         pkey = {"매입단가":"price_buy", "총판가1":"price_d1", "총판가2":"price_d2", "대리점가":"price_agy", "소비자가":"price_cons", "단가(현장)":"price_site"}
         
-        # [수정] PDB Key 확장 (Name & Code)
         pdb = {}
         for p in st.session_state.db["products"]:
             pdb[p["name"]] = p
@@ -787,4 +877,4 @@ else:
         with c1: 
             if st.button("⬅️ 수정"): st.session_state.quote_step = 2; st.rerun()
         with c2:
-            if st.button("🔄 처음으로"): st.session_state.quote_step = 1; st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.pipe_cart = []; st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}; st.session_state.current_quote_name = ""; st.rerun()
+            if st.button("🔄 처음으로"): st.session_state.quote_step = 1; st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.pipe_cart = []; st.session_state.set_cart = []; st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}; st.session_state.current_quote_name = ""; st.rerun()

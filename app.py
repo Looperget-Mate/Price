@@ -532,12 +532,18 @@ if mode == "관리자 모드":
                 sel_rows = st.session_state.set_table.get("selection", {}).get("rows", [])
                 if sel_rows:
                     tg = sl[sel_rows[0]]["세트명"]
+                    # [수정] 수정하기 버튼 클릭 시 모드 자동 변경 로직 추가
                     if st.button(f"'{tg}' 수정하기"):
                         st.session_state.temp_set_recipe = cset[tg].get("recipe", {}).copy()
                         st.session_state.target_set_edit = tg
+                        st.session_state.set_manage_mode = "수정" # 강제 수정 모드 전환
                         st.rerun()
             st.divider()
-            mt = st.radio("작업", ["신규", "수정"], horizontal=True)
+            
+            # [수정] 라디오 버튼에 key 부여하여 상태 관리
+            if "set_manage_mode" not in st.session_state: st.session_state.set_manage_mode = "신규"
+            mt = st.radio("작업", ["신규", "수정"], horizontal=True, key="set_manage_mode")
+            
             sub_cat = None
             if cat == "주배관세트": sub_cat = st.selectbox("하위분류", ["50mm", "40mm", "기타"], key="sub_c")
             products_obj = st.session_state.db["products"]

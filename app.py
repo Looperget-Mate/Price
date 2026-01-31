@@ -569,26 +569,51 @@ if mode == "관리자 모드":
                      tg = st.session_state.target_set_edit
                      st.info(f"편집: {tg}")
                      
-                     # 레시피 목록 (삭제 기능 포함)
-                     for k,v in list(st.session_state.temp_set_recipe.items()):
-                         c1, c2, c3 = st.columns([4,1,1])
+                     # [NEW] 레시피 수정 기능 (수량 변경 및 삭제)
+                     st.markdown("###### 구성 품목 수정 (수량 변경 및 삭제)")
+                     # 딕셔너리를 리스트로 변환하여 순회 (RuntimeError 방지)
+                     for k, v in list(st.session_state.temp_set_recipe.items()):
+                         c1, c2, c3 = st.columns([5, 2, 1])
                          disp_name = code_name_map.get(k, k)
-                         c1.text(f"{disp_name} ({v})")
-                         if c3.button("삭제", key=f"d{k}"): del st.session_state.temp_set_recipe[k]; st.rerun()
+                         
+                         with c1:
+                             st.text(disp_name)
+                         with c2:
+                             # 수량 변경 입력 (Key에 품목코드 포함하여 유니크하게)
+                             new_qty = st.number_input(
+                                 "수량", 
+                                 value=int(v), 
+                                 step=1, 
+                                 key=f"edit_q_{k}", 
+                                 label_visibility="collapsed"
+                             )
+                             # 값이 변경되면 즉시 State 업데이트
+                             st.session_state.temp_set_recipe[k] = new_qty
+                         with c3:
+                             # 삭제 버튼
+                             if st.button("삭제", key=f"del_set_item_{k}"):
+                                 del st.session_state.temp_set_recipe[k]
+                                 st.rerun()
                      
+                     st.divider()
+                     st.markdown("###### ➕ 품목 추가")
                      c1, c2, c3 = st.columns([3,2,1])
-                     with c1: ap_obj = st.selectbox("추가", products_obj, format_func=format_prod_label, key="esp")
-                     with c2: aq = st.number_input("수량", 1, key="esq")
+                     with c1: ap_obj = st.selectbox("추가할 부품", products_obj, format_func=format_prod_label, key="esp")
+                     with c2: aq = st.number_input("추가 수량", 1, key="esq")
                      with c3: 
-                         # [수정] 추가 시에도 '코드'로 저장
-                         if st.button("담기", key="esa"): st.session_state.temp_set_recipe[str(ap_obj['code'])] = aq; st.rerun()
+                         st.write("")
+                         if st.button("담기", key="esa"): 
+                             # 추가 시에도 '코드'로 저장 (기존에 있으면 덮어쓰기됨)
+                             st.session_state.temp_set_recipe[str(ap_obj['code'])] = aq
+                             st.rerun()
                      
-                     if st.button("수정 저장"):
+                     if st.button("수정 내용 저장", type="primary"):
                          st.session_state.db["sets"][cat][tg]["recipe"] = st.session_state.temp_set_recipe
-                         save_sets_to_sheet(st.session_state.db["sets"]); st.success("수정됨")
+                         save_sets_to_sheet(st.session_state.db["sets"])
+                         st.success("수정되었습니다.")
                      
                      st.write("")
-                     if st.button(f"🗑️ '{tg}' 세트 영구 삭제", type="primary", key="btn_del_set"):
+                     if st.button(f"🗑️ '{tg}' 세트 영구 삭제", key="btn_del_set"):
                          del st.session_state.db["sets"][cat][tg]
                          save_sets_to_sheet(st.session_state.db["sets"])
                          st.session_state.target_set_edit = None

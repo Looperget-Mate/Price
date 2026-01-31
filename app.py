@@ -461,23 +461,78 @@ if mode == "관리자 모드":
         t1, t2, t3 = st.tabs(["부품 관리", "세트 관리", "설정"])
         with t1:
             st.markdown("##### 🔍 제품 및 엑셀 관리")
-            with st.expander("📂 엑셀 데이터", expanded=True):
+            
+            # [수정됨] 부품 직접 수정 기능 (data_editor)
+            with st.expander("📂 부품 데이터 직접 수정 (수정/추가/삭제)", expanded=True):
+                st.info("💡 팁: 표 안에서 직접 내용을 수정하거나, 맨 아래 행에 추가하거나, 행을 선택해 삭제(Del키)할 수 있습니다.")
+                
+                # 데이터 프레임 준비
                 df = pd.DataFrame(st.session_state.db["products"]).rename(columns=REV_COL_MAP)
                 if "이미지데이터" in df.columns: df["이미지데이터"] = df["이미지데이터"].apply(lambda x: x if x else "")
-                st.dataframe(df, use_container_width=True, hide_index=True)
-                st.divider()
-                ec1, ec2 = st.columns([1, 1])
-                with ec1:
-                    buf = io.BytesIO()
-                    with pd.ExcelWriter(buf, engine='xlsxwriter') as w: df.to_excel(w, index=False)
-                    st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")
-                with ec2:
-                    uf = st.file_uploader("엑셀 파일 선택", ["xlsx"], label_visibility="collapsed")
-                    if uf and st.button("시트에 덮어쓰기"):
-                        try:
-                            ndf = pd.read_excel(uf, dtype={'품목코드': str}).rename(columns=COL_MAP).fillna(0)
-                            save_products_to_sheet(ndf.to_dict('records')); st.session_state.db = load_data_from_sheet(); st.success("완료"); st.rerun()
-                        except Exception as e: st.error(e)
+                
+                # 편집기 표시
+                edited_df = st.data_editor(
+                    df, 
+                    num_rows="dynamic", 
+                    use_container_width=True, 
+                    key="product_editor",
+                    column_config={
+                        "품목코드": st.column_config.TextColumn(help="5자리 코드로 입력하세요 (예: 00100)"),
+                        "매입단가": st.column_config.NumberColumn(format="%d"),
+                        "총판가1": st.column_config.NumberColumn(format="%d"),
+                        "총판가2": st.column_config.NumberColumn(format="%d"),
+                        "대리점가": st.column_config.NumberColumn(format="%d"),
+                        "소비자가": st.column_config.NumberColumn(format="%d"),
+                        "단가(현장)": st.column_config.NumberColumn(format="%d"),
+                    }
+                )
+
+                # 저장 버튼 및 확인 로직
+                if st.button("💾 변경사항 구글시트에 반영"):
+                    st.session_state.confirming_product_save = True
+                
+                if st.session_state.get("confirming_product_save"):
+                    st.warning("⚠️ 정말로 구글 시트에 이 내용을 반영하시겠습니까? (되돌릴 수 없습니다)")
+                    col_yes, col_no = st.columns(2)
+                    with col_yes:
+                        if st.button("✅ 네, 반영합니다"):
+                            try:
+                                # DataFrame을 다시 list of dict로 변환 (한글컬럼 -> 영문키)
+                                # NaN 값 처리 (빈 문자열이나 0으로)
+                                edited_df = edited_df.fillna("")
+                                new_products_list = edited_df.rename(columns=COL_MAP).to_dict('records')
+                                
+                                # 저장 함수 호출
+                                save_products_to_sheet(new_products_list)
+                                
+                                # DB 리로드
+                                st.session_state.db = load_data_from_sheet()
+                                st.success("구글 시트에 성공적으로 반영되었습니다!")
+                                st.session_state.confirming_product_save = False
+                                time.sleep(1)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"저장 중 오류 발생: {e}")
+                    with col_no:
+                        if st.button("❌ 아니오 (취소)"):
+                            st.session_state.confirming_product_save = False
+                            st.rerun()
+
+            st.divider()
+            ec1, ec2 = st.columns([1, 1])
+            with ec1:
+                buf = io.BytesIO()
+                # 원본 df 다시 생성 (위에서 편집된 것 말고 저장된 것 기준)
+                org_df = pd.DataFrame(st.session_state.db["products"]).rename(columns=REV_COL_MAP)
+                with pd.ExcelWriter(buf, engine='xlsxwriter') as w: org_df.to_excel(w, index=False)
+                st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")
+            with ec2:
+                uf = st.file_uploader("엑셀 파일 선택 (일괄 덮어쓰기)", ["xlsx"], label_visibility="collapsed")
+                if uf and st.button("시트에 덮어쓰기"):
+                    try:
+                        ndf = pd.read_excel(uf, dtype={'품목코드': str}).rename(columns=COL_MAP).fillna(0)
+                        save_products_to_sheet(ndf.to_dict('records')); st.session_state.db = load_data_from_sheet(); st.success("완료"); st.rerun()
+                    except Exception as e: st.error(e)
             
             # [복원됨] 구글 드라이브 이미지 동기화 섹션
             st.divider()

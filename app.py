@@ -131,7 +131,7 @@ def get_image_from_drive(filename_or_id):
 
 def list_files_in_drive_folder():
     """폴더 내의 모든 파일 목록 가져오기 (파일명 -> ID 매핑)"""
-    return get_drive_file_map() # 기존 함수 활용
+    return get_drive_file_map() 
 
 # --- 구글 시트 함수 ---
 SHEET_NAME = "Looperget_DB"
@@ -409,7 +409,7 @@ if "quote_step" not in st.session_state: st.session_state.quote_step = 1
 if "quote_items" not in st.session_state: st.session_state.quote_items = {}
 if "services" not in st.session_state: st.session_state.services = []
 if "pipe_cart" not in st.session_state: st.session_state.pipe_cart = [] 
-if "set_cart" not in st.session_state: st.session_state.set_cart = [] # [NEW] 세트 장바구니
+if "set_cart" not in st.session_state: st.session_state.set_cart = [] 
 if "temp_set_recipe" not in st.session_state: st.session_state.temp_set_recipe = {}
 if "current_quote_name" not in st.session_state: st.session_state.current_quote_name = ""
 if "buyer_info" not in st.session_state: st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}
@@ -630,9 +630,6 @@ else:
             with mt3: inp_m_etc = render_inputs_with_key(grouped["기타"], "metc")
             with mt4: inp_m_u = render_inputs_with_key(grouped["미분류"], "mu")
             
-            # 가지관/기타 탭도 필요하다면 여기서 렌더링하거나, 별도 Expander 유지
-            # 사용자가 "주배관의 세트를 고르는데..." 라고 했으므로 세트 입력란 하단에 추가 버튼 배치
-            
             st.write("")
             if st.button("➕ 입력한 수량 세트 목록에 추가"):
                 # 모든 탭의 입력값을 확인하여 0보다 큰 것만 장바구니에 추가
@@ -647,7 +644,7 @@ else:
                 else:
                     st.warning("수량을 입력해주세요.")
 
-        # 가지관/기타 자재도 세트라면 같은 방식 적용 (여기서는 기존 로직 유지하되 장바구니 사용)
+        # 가지관/기타 자재도 세트라면 같은 방식 적용
         with st.expander("2. 가지관 및 기타 세트"):
             c1, c2 = st.tabs(["가지관", "기타자재"])
             with c1: inp_b = render_inputs_with_key(sets.get("가지관세트", {}), "b_set")
@@ -694,8 +691,7 @@ else:
             else:
                 res = {}
                 
-                # 1. 세트 장바구니 계산 (set_cart)
-                # 세트 이름 -> 레시피 -> 품목 합산
+                # 1. 세트 장바구니 계산
                 all_sets_db = {}
                 for cat, val in sets.items():
                     all_sets_db.update(val)
@@ -706,11 +702,9 @@ else:
                     if s_name in all_sets_db:
                         recipe = all_sets_db[s_name].get("recipe", {})
                         for p_name, p_qty in recipe.items():
-                            # 여기서도 CODE를 찾아서 합산하면 좋으나, 레시피가 이름 기준이라 이름으로 합산 후 나중에 CODE 매핑 권장
-                            # 현재는 기존 로직 유지를 위해 이름 기준 합산 (단, PDB에서 이름으로 유니크하게 찾을 수 있다고 가정)
                             res[p_name] = res.get(p_name, 0) + (p_qty * s_qty)
 
-                # 2. 배관 장바구니 계산 (pipe_cart) - CODE 기준
+                # 2. 배관 장바구니 계산
                 code_sums = {}
                 for p_item in st.session_state.pipe_cart:
                     c = p_item.get('code')
@@ -722,13 +716,6 @@ else:
                         unit_len = prod_info.get("len_per_unit", 4)
                         if unit_len <= 0: unit_len = 4
                         qty = math.ceil(total_len / unit_len)
-                        
-                        # 세트에서 이름으로 들어간 것과 합치기 위해, 이름으로 저장된게 있으면 합산 or 새로 추가
-                        # 결과 dict인 res의 키를 '이름'이 아닌 '코드'로 통일하는 것이 안전함.
-                        # -> 세트 계산 결과를 코드 기준으로 변환
-                        
-                        # (임시) 일단 이름이 키인 경우와 코드가 키인 경우가 섞여있음. Step 2에서 PDB 매핑으로 해결.
-                        # 배관은 확실히 분리하기 위해 코드로 저장
                         res[str(p_code)] = res.get(str(p_code), 0) + qty
 
                 st.session_state.quote_items = res; st.session_state.quote_step = 2; st.rerun()
@@ -764,13 +751,24 @@ else:
         
         for n, q in st.session_state.quote_items.items():
             inf = pdb.get(str(n), {})
-            if not inf: continue
+            
+            # [수정] DB 미등록 품목이라도 표시 (누락 방지)
+            if not inf: 
+                inf = {"name": n, "spec": "⚠️DB미등록", "code": "", "price_cons": 0}
             
             cpr = inf.get("price_cons", 0)
+            # 안전하게 가져오기
+            try: cpr = int(cpr)
+            except: cpr = 0
+                
             row = {"품목": inf.get("name", n), "규격": inf.get("spec", ""), "수량": q, "소비자가": cpr, "합계": cpr*q}
+            
             if view != "소비자가":
                 k, l = key_map[view]
                 pr = inf.get(k, 0)
+                try: pr = int(pr)
+                except: pr = 0
+                
                 row[f"{l}단가"] = pr; row[f"{l}합계"] = pr*q
                 row["이익"] = row["합계"] - row[f"{l}합계"]
                 row["율(%)"] = (row["이익"]/row["합계"]*100) if row["합계"] else 0
@@ -854,11 +852,19 @@ else:
         fdata = []
         for n, q in st.session_state.quote_items.items():
             inf = pdb.get(str(n), {})
-            if not inf: continue
+            # [수정] DB 미등록 품목이라도 PDF 포함
+            if not inf: 
+                inf = {"name": n, "spec": "DB미등록", "code": "", "unit": "EA", "image": ""}
             
             d = {"품목": inf.get("name", n), "규격": inf.get("spec", ""), "코드": inf.get("code", ""), "단위": inf.get("unit", "EA"), "수량": int(q), "image_data": inf.get("image")}
-            d["price_1"] = int(inf.get(pk[0], 0))
-            if len(pk)>1: d["price_2"] = int(inf.get(pk[1], 0))
+            
+            try: d["price_1"] = int(inf.get(pk[0], 0))
+            except: d["price_1"] = 0
+            
+            if len(pk)>1: 
+                try: d["price_2"] = int(inf.get(pk[1], 0))
+                except: d["price_2"] = 0
+            
             fdata.append(d)
         
         st.markdown("---")

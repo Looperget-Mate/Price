@@ -131,7 +131,7 @@ def get_image_from_drive(filename_or_id):
 
 def list_files_in_drive_folder():
     """폴더 내의 모든 파일 목록 가져오기 (파일명 -> ID 매핑)"""
-    return get_drive_file_map() 
+    return get_drive_file_map()
 
 # --- 구글 시트 함수 ---
 SHEET_NAME = "Looperget_DB"
@@ -542,14 +542,24 @@ if mode == "관리자 모드":
             if cat == "주배관세트": sub_cat = st.selectbox("하위분류", ["50mm", "40mm", "기타"], key="sub_c")
             products_obj = st.session_state.db["products"]
             
+            # [Helper] 상품 코드로 이름 찾기용 맵 (관리자 화면용)
+            code_name_map = {str(p.get("code")): f"[{p.get('code')}] {p.get('name')} ({p.get('spec')})" for p in products_obj}
+
             if mt == "신규":
                  nn = st.text_input("세트명")
                  c1, c2, c3 = st.columns([3,2,1])
                  with c1: sp_obj = st.selectbox("부품", products_obj, format_func=format_prod_label, key="nsp")
                  with c2: sq = st.number_input("수량", 1, key="nsq")
                  with c3: 
-                     if st.button("담기"): st.session_state.temp_set_recipe[sp_obj['name']] = sq
-                 st.write(st.session_state.temp_set_recipe)
+                     # [수정] 세트 레시피 저장 키를 '코드'로 변경
+                     if st.button("담기"): st.session_state.temp_set_recipe[str(sp_obj['code'])] = sq
+                 
+                 # 레시피 보여주기 (코드를 이름으로 변환하여 표시)
+                 st.caption("구성 품목 (코드 기준)")
+                 for k, v in st.session_state.temp_set_recipe.items():
+                     disp_name = code_name_map.get(k, k) # 코드로 이름 찾기, 없으면 코드 그대로
+                     st.text(f"- {disp_name}: {v}개")
+
                  if st.button("저장", key="btn_new_set"):
                      if cat not in st.session_state.db["sets"]: st.session_state.db["sets"][cat] = {}
                      st.session_state.db["sets"][cat][nn] = {"recipe": st.session_state.temp_set_recipe, "image": "", "sub_cat": sub_cat}
@@ -558,15 +568,20 @@ if mode == "관리자 모드":
                  if "target_set_edit" in st.session_state and st.session_state.target_set_edit:
                      tg = st.session_state.target_set_edit
                      st.info(f"편집: {tg}")
+                     
+                     # 레시피 목록 (삭제 기능 포함)
                      for k,v in list(st.session_state.temp_set_recipe.items()):
                          c1, c2, c3 = st.columns([4,1,1])
-                         c1.text(f"{k} ({v})")
+                         disp_name = code_name_map.get(k, k)
+                         c1.text(f"{disp_name} ({v})")
                          if c3.button("삭제", key=f"d{k}"): del st.session_state.temp_set_recipe[k]; st.rerun()
+                     
                      c1, c2, c3 = st.columns([3,2,1])
                      with c1: ap_obj = st.selectbox("추가", products_obj, format_func=format_prod_label, key="esp")
                      with c2: aq = st.number_input("수량", 1, key="esq")
                      with c3: 
-                         if st.button("담기", key="esa"): st.session_state.temp_set_recipe[ap_obj['name']] = aq; st.rerun()
+                         # [수정] 추가 시에도 '코드'로 저장
+                         if st.button("담기", key="esa"): st.session_state.temp_set_recipe[str(ap_obj['code'])] = aq; st.rerun()
                      
                      if st.button("수정 저장"):
                          st.session_state.db["sets"][cat][tg]["recipe"] = st.session_state.temp_set_recipe
@@ -644,7 +659,7 @@ else:
                 else:
                     st.warning("수량을 입력해주세요.")
 
-        # 가지관/기타 자재도 세트라면 같은 방식 적용
+        # 가지관/기타 자재도 세트라면 같은 방식 적용 (여기서는 기존 로직 유지하되 장바구니 사용)
         with st.expander("2. 가지관 및 기타 세트"):
             c1, c2 = st.tabs(["가지관", "기타자재"])
             with c1: inp_b = render_inputs_with_key(sets.get("가지관세트", {}), "b_set")
@@ -691,7 +706,7 @@ else:
             else:
                 res = {}
                 
-                # 1. 세트 장바구니 계산
+                # 1. 세트 장바구니 계산 (set_cart) - [수정] 코드 기반 합산
                 all_sets_db = {}
                 for cat, val in sets.items():
                     all_sets_db.update(val)
@@ -701,10 +716,22 @@ else:
                     s_qty = item['qty']
                     if s_name in all_sets_db:
                         recipe = all_sets_db[s_name].get("recipe", {})
-                        for p_name, p_qty in recipe.items():
-                            res[p_name] = res.get(p_name, 0) + (p_qty * s_qty)
+                        for p_code_or_name, p_qty in recipe.items():
+                            # 레시피의 Key가 코드일 수도 있고 이름일 수도 있음
+                            # 하지만 결과 res는 '코드'를 Key로 쓰는 것이 안전함
+                            
+                            # 만약 키가 품목명이라면(구 데이터), 코드를 찾아야 함 -> 하지만 쉽지 않음(중복명)
+                            # 만약 키가 코드라면(신규 데이터), 그대로 사용
+                            
+                            # 여기서는 "p_code_or_name"을 그대로 키로 사용하여 합산한다.
+                            # 단, Step 2에서 PDB Lookup 시 코드와 이름 모두로 찾을 수 있게 해두었으므로
+                            # 신규 세트(코드 저장)는 코드로, 구 세트(이름 저장)는 이름으로 저장되어도
+                            # Step 2에서는 다 찾을 수 있음.
+                            # *중요*: 신규 세트는 코드로 저장되므로 50mm/40mm가 구분됨.
+                            
+                            res[str(p_code_or_name)] = res.get(str(p_code_or_name), 0) + (p_qty * s_qty)
 
-                # 2. 배관 장바구니 계산
+                # 2. 배관 장바구니 계산 (pipe_cart) - CODE 기준
                 code_sums = {}
                 for p_item in st.session_state.pipe_cart:
                     c = p_item.get('code')
@@ -742,6 +769,7 @@ else:
         key_map = {"매입가":("price_buy","매입"), "총판1":("price_d1","총판1"), "총판2":("price_d2","총판2"), "대리점":("price_agy","대리점"), "단가(현장)":("price_site", "현장")}
         rows = []
         
+        # PDB Key 확장 (Name & Code)
         pdb = {}
         for p in st.session_state.db["products"]:
             pdb[p["name"]] = p
@@ -750,25 +778,15 @@ else:
         pk = [key_map[view][0]] if view != "소비자가" else ["price_cons"]
         
         for n, q in st.session_state.quote_items.items():
+            # n은 코드일 수도 있고 이름일 수도 있음
             inf = pdb.get(str(n), {})
-            
-            # [수정] DB 미등록 품목이라도 표시 (누락 방지)
-            if not inf: 
-                inf = {"name": n, "spec": "⚠️DB미등록", "code": "", "price_cons": 0}
+            if not inf: continue
             
             cpr = inf.get("price_cons", 0)
-            # 안전하게 가져오기
-            try: cpr = int(cpr)
-            except: cpr = 0
-                
             row = {"품목": inf.get("name", n), "규격": inf.get("spec", ""), "수량": q, "소비자가": cpr, "합계": cpr*q}
-            
             if view != "소비자가":
                 k, l = key_map[view]
                 pr = inf.get(k, 0)
-                try: pr = int(pr)
-                except: pr = 0
-                
                 row[f"{l}단가"] = pr; row[f"{l}합계"] = pr*q
                 row["이익"] = row["합계"] - row[f"{l}합계"]
                 row["율(%)"] = (row["이익"]/row["합계"]*100) if row["합계"] else 0
@@ -793,7 +811,8 @@ else:
                 with c_qty: aq = st.number_input("수량", 1, key="step2_add_qty")
                 with c_btn:
                     st.write("")
-                    if st.button("추가", use_container_width=True): st.session_state.quote_items[ap_obj['name']] = st.session_state.quote_items.get(ap_obj['name'], 0) + aq; st.rerun()
+                    # [수정] 추가 시에도 코드 사용 권장
+                    if st.button("추가", use_container_width=True): st.session_state.quote_items[str(ap_obj['code'])] = st.session_state.quote_items.get(str(ap_obj['code']), 0) + aq; st.rerun()
 
         with col_add_cost:
             st.markdown("##### 💰 비용 추가")
@@ -852,19 +871,11 @@ else:
         fdata = []
         for n, q in st.session_state.quote_items.items():
             inf = pdb.get(str(n), {})
-            # [수정] DB 미등록 품목이라도 PDF 포함
-            if not inf: 
-                inf = {"name": n, "spec": "DB미등록", "code": "", "unit": "EA", "image": ""}
+            if not inf: continue
             
             d = {"품목": inf.get("name", n), "규격": inf.get("spec", ""), "코드": inf.get("code", ""), "단위": inf.get("unit", "EA"), "수량": int(q), "image_data": inf.get("image")}
-            
-            try: d["price_1"] = int(inf.get(pk[0], 0))
-            except: d["price_1"] = 0
-            
-            if len(pk)>1: 
-                try: d["price_2"] = int(inf.get(pk[1], 0))
-                except: d["price_2"] = 0
-            
+            d["price_1"] = int(inf.get(pk[0], 0))
+            if len(pk)>1: d["price_2"] = int(inf.get(pk[1], 0))
             fdata.append(d)
         
         st.markdown("---")

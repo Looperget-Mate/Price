@@ -8,6 +8,8 @@ import tempfile
 import json
 import datetime
 import time
+# [추가] 엑셀 생성을 위한 라이브러리
+import xlsxwriter 
 from PIL import Image
 from fpdf import FPDF
 
@@ -209,7 +211,7 @@ def format_prod_label(option):
     return str(option)
 
 # ==========================================
-# 2. PDF 생성 엔진
+# 2. PDF 및 Excel 생성 엔진
 # ==========================================
 class PDF(FPDF):
     def header(self):
@@ -397,6 +399,97 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         pdf.cell(28, 10, f"({total_profit:,})", border=1, align='R')
         
     return bytes(pdf.output())
+
+# [NEW] 엑셀 견적서 생성 함수
+def create_quote_excel(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, buyer_info):
+    output = io.BytesIO()
+    workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+    ws = workbook.add_worksheet("견적서")
+
+    # Formats
+    fmt_title = workbook.add_format({'bold': True, 'font_size': 16, 'align': 'center', 'valign': 'vcenter'})
+    fmt_header = workbook.add_format({'bold': True, 'bg_color': '#f0f0f0', 'border': 1, 'align': 'center'})
+    fmt_text = workbook.add_format({'border': 1})
+    fmt_num = workbook.add_format({'border': 1, 'num_format': '#,##0'})
+    fmt_center = workbook.add_format({'border': 1, 'align': 'center'})
+
+    # Title & Info
+    ws.merge_range('A1:F1', '견 적 서', fmt_title)
+    ws.write(1, 0, f"현장명: {quote_name}")
+    ws.write(1, 4, f"견적일: {quote_date}")
+    ws.write(2, 0, f"담당자: {buyer_info.get('manager', '')}")
+    ws.write(2, 4, f"연락처: {buyer_info.get('phone', '')}")
+
+    # Table Header
+    headers = ["품목", "규격", "코드", "단위", "수량"]
+    if form_type == "basic":
+        headers.extend([price_labels[0], "금액", "비고"])
+    else:
+        headers.extend([price_labels[0], "금액(1)", price_labels[1], "금액(2)", "이익", "율(%)"])
+
+    for col, h in enumerate(headers):
+        ws.write(4, col, h, fmt_header)
+
+    # Body
+    row = 5
+    total_a1 = 0
+    total_a2 = 0
+    total_profit = 0
+
+    for item in final_data_list:
+        qty = int(item.get("수량", 0))
+        p1 = int(item.get("price_1", 0))
+        a1 = p1 * qty
+        total_a1 += a1
+
+        # Common columns
+        ws.write(row, 0, item.get("품목", ""), fmt_text)
+        ws.write(row, 1, item.get("규격", ""), fmt_text)
+        ws.write(row, 2, item.get("코드", ""), fmt_center)
+        ws.write(row, 3, item.get("단위", ""), fmt_center)
+        ws.write(row, 4, qty, fmt_center)
+
+        if form_type == "basic":
+            ws.write(row, 5, p1, fmt_num)
+            ws.write(row, 6, a1, fmt_num)
+            ws.write(row, 7, "", fmt_text)
+        else:
+            p2 = int(item.get("price_2", 0))
+            a2 = p2 * qty
+            profit = a2 - a1
+            rate = (profit / a2 * 100) if a2 else 0
+            total_a2 += a2
+            total_profit += profit
+
+            ws.write(row, 5, p1, fmt_num)
+            ws.write(row, 6, a1, fmt_num)
+            ws.write(row, 7, p2, fmt_num)
+            ws.write(row, 8, a2, fmt_num)
+            ws.write(row, 9, profit, fmt_num)
+            ws.write(row, 10, f"{rate:.1f}%", fmt_center)
+        row += 1
+
+    # Services
+    svc_total = 0
+    if service_items:
+        row += 1
+        ws.write(row, 0, "[추가 비용]", fmt_header)
+        row += 1
+        for s in service_items:
+            ws.write(row, 0, s['항목'], fmt_text)
+            ws.write(row, 6 if form_type == "basic" else 8, s['금액'], fmt_num)
+            svc_total += s['금액']
+            row += 1
+
+    # Grand Total
+    row += 1
+    ws.write(row, 0, "총 합계", fmt_header)
+    final_sum = (total_a1 if form_type == "basic" else total_a2) + svc_total
+    col_idx = 6 if form_type == "basic" else 8
+    ws.write(row, col_idx, final_sum, fmt_num)
+
+    workbook.close()
+    return output.getvalue()
 
 # ==========================================
 # 3. 메인 로직
@@ -973,8 +1066,16 @@ else:
         
         if sel:
             fmode = "basic" if "기본" in form_type else "profit"
+            
+            # [수정] PDF 및 Excel 동시 다운로드 버튼 배치
             pdf_b = create_advanced_pdf(edited.to_dict('records'), st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info)
-            st.download_button("📥 PDF 다운로드", pdf_b, f"quote_{st.session_state.current_quote_name}.pdf", "application/pdf", type="primary")
+            excel_b = create_quote_excel(edited.to_dict('records'), st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info)
+            
+            col_pdf, col_xls = st.columns(2)
+            with col_pdf:
+                st.download_button("📥 PDF 다운로드", pdf_b, f"quote_{st.session_state.current_quote_name}.pdf", "application/pdf", type="primary", use_container_width=True)
+            with col_xls:
+                st.download_button("📊 엑셀 다운로드", excel_b, f"quote_{st.session_state.current_quote_name}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
         
         c1, c2 = st.columns(2)
         with c1: 

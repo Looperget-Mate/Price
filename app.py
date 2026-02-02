@@ -400,18 +400,21 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         
     return bytes(pdf.output())
 
-# [NEW] 엑셀 견적서 생성 함수
+# [NEW] 엑셀 견적서 생성 함수 (이미지 포함)
 def create_quote_excel(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, buyer_info):
     output = io.BytesIO()
     workbook = xlsxwriter.Workbook(output, {'in_memory': True})
     ws = workbook.add_worksheet("견적서")
+    
+    # 드라이브 파일 맵 (ID -> base64 로딩용)
+    drive_file_map = get_drive_file_map()
 
     # Formats
     fmt_title = workbook.add_format({'bold': True, 'font_size': 16, 'align': 'center', 'valign': 'vcenter'})
-    fmt_header = workbook.add_format({'bold': True, 'bg_color': '#f0f0f0', 'border': 1, 'align': 'center'})
-    fmt_text = workbook.add_format({'border': 1})
-    fmt_num = workbook.add_format({'border': 1, 'num_format': '#,##0'})
-    fmt_center = workbook.add_format({'border': 1, 'align': 'center'})
+    fmt_header = workbook.add_format({'bold': True, 'bg_color': '#f0f0f0', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
+    fmt_text = workbook.add_format({'border': 1, 'valign': 'vcenter'})
+    fmt_num = workbook.add_format({'border': 1, 'num_format': '#,##0', 'valign': 'vcenter'})
+    fmt_center = workbook.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'})
 
     # Title & Info
     ws.merge_range('A1:F1', '견 적 서', fmt_title)
@@ -421,7 +424,8 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
     ws.write(2, 4, f"연락처: {buyer_info.get('phone', '')}")
 
     # Table Header
-    headers = ["품목", "규격", "코드", "단위", "수량"]
+    # [수정] 맨 앞에 이미지 컬럼 추가
+    headers = ["이미지", "품목", "규격", "코드", "단위", "수량"]
     if form_type == "basic":
         headers.extend([price_labels[0], "금액", "비고"])
     else:
@@ -430,29 +434,66 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
     for col, h in enumerate(headers):
         ws.write(4, col, h, fmt_header)
 
+    # 컬럼 너비 조정 (이미지 컬럼 넓게)
+    ws.set_column(0, 0, 10)  # 이미지
+    ws.set_column(1, 1, 25)  # 품목
+    ws.set_column(2, 2, 15)  # 규격
+
     # Body
     row = 5
     total_a1 = 0
     total_a2 = 0
     total_profit = 0
+    
+    # 임시 파일들을 저장할 리스트 (나중에 삭제)
+    temp_files = []
 
     for item in final_data_list:
+        # 행 높이 설정 (이미지가 잘 보이도록)
+        ws.set_row(row, 50)
+        
         qty = int(item.get("수량", 0))
         p1 = int(item.get("price_1", 0))
         a1 = p1 * qty
         total_a1 += a1
+        
+        code = str(item.get("코드", "")).strip().zfill(5)
+        
+        # [NEW] 이미지 처리 및 삽입
+        img_b64 = None
+        if code in drive_file_map:
+            img_b64 = download_image_by_id(drive_file_map[code])
+            
+        if img_b64:
+            try:
+                # Base64 디코딩
+                img_data_str = img_b64.split(",", 1)[1] if "," in img_b64 else img_b64
+                img_bytes = base64.b64decode(img_data_str)
+                
+                # 임시 파일 생성
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                    tmp.write(img_bytes)
+                    tmp_path = tmp.name
+                    temp_files.append(tmp_path)
+                
+                # 이미지 삽입 (셀에 맞춰 스케일 조정)
+                ws.insert_image(row, 0, tmp_path, {'x_scale': 0.25, 'y_scale': 0.25, 'object_position': 1})
+            except:
+                ws.write(row, 0, "No Img", fmt_center)
+        else:
+            ws.write(row, 0, "", fmt_center)
 
-        # Common columns
-        ws.write(row, 0, item.get("품목", ""), fmt_text)
-        ws.write(row, 1, item.get("규격", ""), fmt_text)
-        ws.write(row, 2, item.get("코드", ""), fmt_center)
-        ws.write(row, 3, item.get("단위", ""), fmt_center)
-        ws.write(row, 4, qty, fmt_center)
+        # Common columns (인덱스 +1 씩 밀림)
+        ws.write(row, 1, item.get("품목", ""), fmt_text)
+        ws.write(row, 2, item.get("규격", ""), fmt_text)
+        ws.write(row, 3, item.get("코드", ""), fmt_center)
+        ws.write(row, 4, item.get("단위", ""), fmt_center)
+        ws.write(row, 5, qty, fmt_center)
 
         if form_type == "basic":
-            ws.write(row, 5, p1, fmt_num)
-            ws.write(row, 6, a1, fmt_num)
-            ws.write(row, 7, "", fmt_text)
+            ws.write(row, 6, p1, fmt_num)
+            ws.write(row, 7, a1, fmt_num)
+            ws.write(row, 8, "", fmt_text)
         else:
             p2 = int(item.get("price_2", 0))
             a2 = p2 * qty
@@ -461,34 +502,42 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
             total_a2 += a2
             total_profit += profit
 
-            ws.write(row, 5, p1, fmt_num)
-            ws.write(row, 6, a1, fmt_num)
-            ws.write(row, 7, p2, fmt_num)
-            ws.write(row, 8, a2, fmt_num)
-            ws.write(row, 9, profit, fmt_num)
-            ws.write(row, 10, f"{rate:.1f}%", fmt_center)
+            ws.write(row, 6, p1, fmt_num)
+            ws.write(row, 7, a1, fmt_num)
+            ws.write(row, 8, p2, fmt_num)
+            ws.write(row, 9, a2, fmt_num)
+            ws.write(row, 10, profit, fmt_num)
+            ws.write(row, 11, f"{rate:.1f}%", fmt_center)
         row += 1
 
     # Services
     svc_total = 0
     if service_items:
         row += 1
-        ws.write(row, 0, "[추가 비용]", fmt_header)
+        ws.write(row, 1, "[추가 비용]", fmt_header)
         row += 1
         for s in service_items:
-            ws.write(row, 0, s['항목'], fmt_text)
-            ws.write(row, 6 if form_type == "basic" else 8, s['금액'], fmt_num)
+            ws.write(row, 1, s['항목'], fmt_text)
+            # 금액 컬럼 위치 (이미지 컬럼 때문에 인덱스 조정)
+            price_col = 7 if form_type == "basic" else 9
+            ws.write(row, price_col, s['금액'], fmt_num)
             svc_total += s['금액']
             row += 1
 
     # Grand Total
     row += 1
-    ws.write(row, 0, "총 합계", fmt_header)
+    ws.write(row, 1, "총 합계", fmt_header)
     final_sum = (total_a1 if form_type == "basic" else total_a2) + svc_total
-    col_idx = 6 if form_type == "basic" else 8
+    col_idx = 7 if form_type == "basic" else 9
     ws.write(row, col_idx, final_sum, fmt_num)
 
     workbook.close()
+    
+    # 임시 파일 정리
+    for f in temp_files:
+        try: os.unlink(f)
+        except: pass
+        
     return output.getvalue()
 
 # ==========================================

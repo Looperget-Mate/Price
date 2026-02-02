@@ -652,6 +652,9 @@ if mode == "관리자 모드":
                 df = pd.DataFrame(st.session_state.db["products"]).rename(columns=REV_COL_MAP)
                 if "이미지데이터" in df.columns: df["이미지데이터"] = df["이미지데이터"].apply(lambda x: x if x else "")
                 
+                # [추가] 순번 열 생성 (저장 시에는 제외)
+                df.insert(0, "No.", range(1, len(df) + 1))
+
                 # 편집기 표시
                 edited_df = st.data_editor(
                     df, 
@@ -659,6 +662,7 @@ if mode == "관리자 모드":
                     use_container_width=True, 
                     key="product_editor",
                     column_config={
+                        "No.": st.column_config.NumberColumn(width="small", disabled=True),
                         "품목코드": st.column_config.TextColumn(help="5자리 코드로 입력하세요 (예: 00100)"),
                         "매입단가": st.column_config.NumberColumn(format="%d"),
                         "총판가1": st.column_config.NumberColumn(format="%d"),
@@ -679,6 +683,10 @@ if mode == "관리자 모드":
                     with col_yes:
                         if st.button("✅ 네, 반영합니다"):
                             try:
+                                # [수정] 저장 전 'No.' 열 제거
+                                if "No." in edited_df.columns:
+                                    edited_df = edited_df.drop(columns=["No."])
+                                
                                 # DataFrame을 다시 list of dict로 변환 (한글컬럼 -> 영문키)
                                 # NaN 값 처리 (빈 문자열이나 0으로)
                                 edited_df = edited_df.fillna("")

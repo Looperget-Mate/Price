@@ -57,8 +57,10 @@ def get_google_services():
 
 gc, drive_service = get_google_services()
 
-# --- 구글 드라이브 함수 ---
+# --- 구글 드라이브 함수 (제품용) ---
 DRIVE_FOLDER_NAME = "Looperget_Images"
+# [추가] 세트 이미지용 폴더 이름
+DRIVE_SET_FOLDER_NAME = "Looperget_Set_Images"
 ADMIN_FOLDER_NAME = "Looperget_Admin"
 ADMIN_PPT_NAME = "Set_Composition_Master.pptx"
 
@@ -77,6 +79,22 @@ def get_or_create_drive_folder():
         st.error(f"드라이브 폴더 오류: {e}")
         return None
 
+# [추가] 세트 이미지용 폴더 생성/조회 함수
+def get_or_create_set_drive_folder():
+    if not drive_service: return None
+    try:
+        query = f"name='{DRIVE_SET_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        results = drive_service.files().list(q=query, fields="files(id)").execute()
+        files = results.get('files', [])
+        if files: return files[0]['id']
+        else:
+            file_metadata = {'name': DRIVE_SET_FOLDER_NAME, 'mimeType': 'application/vnd.google-apps.folder'}
+            folder = drive_service.files().create(body=file_metadata, fields='id').execute()
+            return folder.get('id')
+    except Exception as e:
+        st.error(f"세트 폴더 오류: {e}")
+        return None
+
 def upload_image_to_drive(file_obj, filename):
     folder_id = get_or_create_drive_folder()
     if not folder_id: return None
@@ -87,6 +105,20 @@ def upload_image_to_drive(file_obj, filename):
         return filename
     except Exception as e:
         st.error(f"업로드 실패: {e}")
+        return None
+
+# [추가] 세트 이미지 업로드 함수
+def upload_set_image_to_drive(file_obj, filename):
+    folder_id = get_or_create_set_drive_folder()
+    if not folder_id: return None
+    try:
+        file_metadata = {'name': filename, 'parents': [folder_id]}
+        media = MediaIoBaseUpload(file_obj, mimetype=file_obj.type, resumable=True)
+        # 파일명 중복 시 덮어쓰거나 새로 생성 (여기선 새로 생성 후 ID 리턴)
+        file_info = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        return file_info.get('id')
+    except Exception as e:
+        st.error(f"세트 이미지 업로드 실패: {e}")
         return None
 
 @st.cache_data(ttl=600)
@@ -103,12 +135,33 @@ def get_drive_file_map():
             files = response.get('files', [])
             for f in files:
                 name_stem = os.path.splitext(f['name'])[0]
-                # [수정] 파일명이 숫자로만 되어있으면 품목코드 형식(00200)으로 변환하여 매핑
                 if name_stem.isdigit():
                     norm_name = str(name_stem).zfill(5)
                     file_map[norm_name] = f['id']
-                # 원본 이름도 매핑 (혹시 모르니)
                 file_map[name_stem] = f['id']
+            page_token = response.get('nextPageToken', None)
+            if page_token is None: break
+    except Exception: pass
+    return file_map
+
+# [추가] 세트 이미지 폴더 파일 매핑
+@st.cache_data(ttl=600)
+def get_set_drive_file_map():
+    folder_id = get_or_create_set_drive_folder()
+    if not folder_id: return {}
+    file_map = {}
+    try:
+        query = f"'{folder_id}' in parents and trashed=false"
+        page_token = None
+        while True:
+            response = drive_service.files().list(q=query, spaces='drive', fields='nextPageToken, files(id, name)', pageToken=page_token).execute()
+            files = response.get('files', [])
+            for f in files:
+                # 세트 이미지는 파일명보다는 ID로 직접 관리할 것이므로 ID 매핑이 중요하지만,
+                # 만약 이름으로 찾을 경우를 위해 매핑
+                name_stem = os.path.splitext(f['name'])[0]
+                file_map[name_stem] = f['id']
+                file_map[f['id']] = f['id'] # ID로도 찾을 수 있게
             page_token = response.get('nextPageToken', None)
             if page_token is None: break
     except Exception: pass
@@ -131,15 +184,19 @@ def download_image_by_id(file_id):
 @st.cache_data(ttl=3600)
 def get_image_from_drive(filename_or_id):
     if not filename_or_id: return None
+    # 1. 제품 폴더에서 찾기
     fmap = get_drive_file_map()
-    if filename_or_id in fmap.values():
-        return download_image_by_id(filename_or_id)
+    if filename_or_id in fmap.values(): return download_image_by_id(filename_or_id)
+    
+    # 2. 세트 폴더에서도 찾기 (ID인 경우 바로 다운로드 시도)
+    if len(filename_or_id) > 10: # 구글 드라이브 ID 형태라고 가정
+         return download_image_by_id(filename_or_id)
+
     stem = os.path.splitext(filename_or_id)[0]
-    if stem in fmap:
-        return download_image_by_id(fmap[stem])
+    if stem in fmap: return download_image_by_id(fmap[stem])
+    
     return None
 
-# [NEW] PPT 파일 다운로드 함수
 @st.cache_data(ttl=600)
 def get_admin_ppt_content():
     if not drive_service: return None
@@ -161,21 +218,10 @@ def get_admin_ppt_content():
     except Exception:
         return None
 
-# [NEW] 이미지 ID 결정 로직 (파일명 우선 -> DB값 차선)
 def get_best_image_id(code, db_image_val, file_map):
-    """
-    1순위: 구글 드라이브에 '품목코드.jpg'로 저장된 파일이 있으면 그 ID 사용
-    2순위: DB에 저장된 값이 유효한 ID 형태라면 그 ID 사용
-    """
     clean_code = str(code).strip().zfill(5)
-    # 1. 파일명 매칭 시도
-    if clean_code in file_map:
-        return file_map[clean_code]
-    
-    # 2. DB 값 사용 (구글 ID는 보통 길이가 깁니다)
-    if db_image_val and len(str(db_image_val)) > 10:
-        return db_image_val
-        
+    if clean_code in file_map: return file_map[clean_code]
+    if db_image_val and len(str(db_image_val)) > 10: return db_image_val
     return None
 
 def list_files_in_drive_folder():
@@ -810,13 +856,51 @@ if mode == "관리자 모드":
                     # 수정 기능 (단일 선택 시에만 활성화)
                     if len(sel_rows) == 1:
                         tg = sl[sel_rows[0]]["세트명"]
-                        if st.button(f"✏️ '{tg}' 수정하기"):
-                            st.session_state.temp_set_recipe = cset[tg].get("recipe", {}).copy()
-                            st.session_state.target_set_edit = tg
-                            st.session_state.set_manage_mode = "수정" 
-                            st.rerun()
+                        st.markdown(f"#### 🔧 세트 관리: {tg}")
+                        
+                        col_edit, col_img = st.columns([1, 1])
+                        
+                        with col_edit:
+                            if st.button(f"✏️ '{tg}' 구성품 수정하기", use_container_width=True):
+                                st.session_state.temp_set_recipe = cset[tg].get("recipe", {}).copy()
+                                st.session_state.target_set_edit = tg
+                                st.session_state.set_manage_mode = "수정" 
+                                st.rerun()
+                        
+                        # [추가] 세트 이미지 관리 기능
+                        with col_img:
+                            with st.expander("🖼️ 세트 이미지 관리", expanded=True):
+                                current_set_data = st.session_state.db["sets"][cat][tg]
+                                current_img_id = current_set_data.get("image", "")
+                                
+                                if current_img_id:
+                                    st.image(get_image_from_drive(current_img_id), caption="현재 등록된 이미지", use_container_width=True)
+                                    if st.button("🗑️ 이미지 삭제", key=f"del_img_{tg}"):
+                                        st.session_state.db["sets"][cat][tg]["image"] = ""
+                                        save_sets_to_sheet(st.session_state.db["sets"])
+                                        st.success("이미지가 삭제되었습니다.")
+                                        st.rerun()
+                                else:
+                                    st.info("등록된 이미지가 없습니다.")
+                                
+                                set_img_file = st.file_uploader("이미지 업로드/변경", type=["png", "jpg", "jpeg"], key=f"uploader_{tg}")
+                                if set_img_file:
+                                    if st.button("💾 이미지 저장", key=f"save_img_{tg}"):
+                                        with st.spinner("이미지 업로드 중..."):
+                                            # 파일명: 세트명_이미지.jpg (한글 등 호환을 위해 세트명 사용)
+                                            file_ext = set_img_file.name.split('.')[-1]
+                                            new_filename = f"{tg}_image.{file_ext}"
+                                            new_img_id = upload_set_image_to_drive(set_img_file, new_filename)
+                                            
+                                            if new_img_id:
+                                                st.session_state.db["sets"][cat][tg]["image"] = new_img_id
+                                                save_sets_to_sheet(st.session_state.db["sets"])
+                                                st.success("이미지가 등록되었습니다!")
+                                                time.sleep(1)
+                                                st.rerun()
+
                     else:
-                        st.caption("💡 수정을 하려면 1개만 선택해주세요.")
+                        st.caption("💡 수정 또는 이미지 관리를 하려면 1개만 선택해주세요.")
 
                     # [추가] 다중 삭제 기능
                     st.markdown("---")

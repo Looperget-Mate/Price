@@ -67,16 +67,14 @@ ADMIN_PPT_NAME = "Set_Composition_Master.pptx"
 def get_or_create_drive_folder():
     if not drive_service: return None
     try:
-        # [수정] 1순위: '공유된 폴더(sharedWithMe)' 중에서 찾기
-        # 봇이 스스로 만든(용량 없는) 폴더 대신, 사용자가 공유해준(용량 있는) 폴더를 먼저 찾습니다.
+        # 1순위: '공유된 폴더' 찾기 (봇이 스스로 만든 폴더가 아닌, 사용자가 공유해준 폴더 우선)
         query_shared = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and sharedWithMe=true and trashed=false"
         results_shared = drive_service.files().list(q=query_shared, fields="files(id)").execute()
         files_shared = results_shared.get('files', [])
         
-        if files_shared:
-            return files_shared[0]['id']
+        if files_shared: return files_shared[0]['id']
         
-        # [수정] 2순위: 공유된 게 없으면 그냥 이름으로 찾기 (기존 로직)
+        # 2순위: 일반 검색
         query = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
         results = drive_service.files().list(q=query, fields="files(id)").execute()
         files = results.get('files', [])
@@ -90,7 +88,6 @@ def get_or_create_drive_folder():
         st.error(f"드라이브 폴더 오류: {e}")
         return None
 
-# 세트 폴더 함수: 위에서 강화한 검색 로직을 그대로 사용
 def get_or_create_set_drive_folder():
     return get_or_create_drive_folder()
 
@@ -98,9 +95,9 @@ def upload_image_to_drive(file_obj, filename):
     folder_id = get_or_create_drive_folder()
     if not folder_id: return None
     try:
-        # [안정성 강화] 파일 내용을 안전하게 BytesIO로 변환
         file_content = file_obj.getvalue()
         buffer = io.BytesIO(file_content)
+        buffer.seek(0)
         
         file_metadata = {'name': filename, 'parents': [folder_id]}
         media = MediaIoBaseUpload(buffer, mimetype=file_obj.type, resumable=False)
@@ -111,35 +108,35 @@ def upload_image_to_drive(file_obj, filename):
         return None
 
 # [수정] 세트 이미지 업로드 함수
-# 기존 upload_image_to_drive와 구조를 동일하게 맞추되, 파일 ID를 반환하도록 설정
 def upload_set_image_to_drive(file_obj, filename):
-    folder_id = get_or_create_drive_folder() # 강화된 폴더 찾기 함수 사용
+    folder_id = get_or_create_drive_folder()
     if not folder_id: return None
     try:
-        # 파일 내용을 메모리에 안전하게 로드
         file_content = file_obj.getvalue()
         buffer = io.BytesIO(file_content)
+        buffer.seek(0)
         
         file_metadata = {'name': filename, 'parents': [folder_id]}
-        
-        # [핵심] resumable=False 사용 (단일 요청으로 업로드하여 복잡한 권한 문제 회피)
         media = MediaIoBaseUpload(buffer, mimetype=file_obj.type, resumable=False)
         
-        # supportsAllDrives 옵션은 제거 (일반 드라이브 환경에 맞춰 단순화)
         file_info = drive_service.files().create(
             body=file_metadata, 
             media_body=media, 
             fields='id'
         ).execute()
-        
         return file_info.get('id')
     except Exception as e:
-        st.error(f"세트 이미지 업로드 실패: {e}\n(팁: 구글 드라이브의 '{DRIVE_FOLDER_NAME}' 폴더가 서비스 계정에게 편집 권한으로 공유되어 있는지 다시 확인해주세요.)")
+        # [변경] 실패 시 무작정 에러를 띄우기보다, 동기화 방법을 안내하는 메시지 출력
+        error_msg = str(e)
+        if "storageQuotaExceeded" in error_msg:
+            st.error("⚠️ 구글 드라이브 용량/권한 정책으로 인해 봇이 직접 파일을 업로드할 수 없습니다.")
+            st.info(f"💡 해결책: '{filename}' 파일을 구글 드라이브 '{DRIVE_FOLDER_NAME}' 폴더에 직접 올리신 후, 상단의 [🔄 드라이브 세트 이미지 자동 동기화] 버튼을 눌러주세요.")
+        else:
+            st.error(f"세트 이미지 업로드 실패: {e}")
         return None
 
 @st.cache_data(ttl=600)
 def get_drive_file_map():
-    """폴더 내의 파일명 -> ID 매핑 (숫자 파일명은 5자리 코드로 정규화)"""
     folder_id = get_or_create_drive_folder()
     if not folder_id: return {}
     file_map = {}
@@ -160,7 +157,6 @@ def get_drive_file_map():
     except Exception: pass
     return file_map
 
-# 세트 이미지 매핑도 통합된 폴더 사용
 @st.cache_data(ttl=600)
 def get_set_drive_file_map():
     return get_drive_file_map()
@@ -919,6 +915,39 @@ if mode == "관리자 모드":
                                 st.rerun()
                             else:
                                 st.error("비밀번호가 일치하지 않습니다.")
+
+            st.divider()
+            
+            # [추가] 세트 이미지 일괄 동기화 (사용자 요청 기능)
+            st.markdown("##### 🔄 세트 이미지 일괄 동기화 (수동 업로드 후 연결)")
+            with st.expander("📂 드라이브에 올린 파일과 세트 자동 연결하기", expanded=False):
+                st.info(f"💡 봇 업로드가 실패할 경우 사용하세요.\n1. 구글 드라이브 '{DRIVE_FOLDER_NAME}' 폴더에 이미지 파일을 직접 업로드하세요.\n2. 파일명은 반드시 '세트명'과 같아야 합니다 (예: {list(cset.keys())[0]}.png)")
+                if st.button("🔄 드라이브 세트 이미지 자동 동기화", key="btn_sync_set_images"):
+                    with st.spinner("드라이브 폴더를 검색하는 중..."):
+                        file_map = get_drive_file_map()
+                        if not file_map:
+                            st.warning("폴더를 찾을 수 없거나 비어있습니다.")
+                        else:
+                            updated_count = 0
+                            # 모든 카테고리의 세트를 순회
+                            all_sets = st.session_state.db["sets"]
+                            for cat_key, cat_items in all_sets.items():
+                                for s_name, s_data in cat_items.items():
+                                    # 파일명 매칭 시도 (확장자 제외한 이름)
+                                    if s_name in file_map:
+                                        s_data["image"] = file_map[s_name]
+                                        updated_count += 1
+                                    # 혹은 '세트명_image' 같은 패턴도 지원 가능하면 좋음
+                                    elif f"{s_name}_image" in file_map:
+                                        s_data["image"] = file_map[f"{s_name}_image"]
+                                        updated_count += 1
+                            
+                            if updated_count > 0:
+                                save_sets_to_sheet(all_sets)
+                                st.success(f"✅ 총 {updated_count}개의 세트 이미지를 연결했습니다!")
+                                st.session_state.db = load_data_from_sheet()
+                            else:
+                                st.warning("매칭되는 이미지가 없습니다. (파일명이 세트명과 같은지 확인하세요)")
 
             st.divider()
             

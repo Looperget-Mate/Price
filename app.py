@@ -59,8 +59,8 @@ gc, drive_service = get_google_services()
 
 # --- 구글 드라이브 함수 (제품용) ---
 DRIVE_FOLDER_NAME = "Looperget_Images"
-# [추가] 세트 이미지용 폴더 이름
-DRIVE_SET_FOLDER_NAME = "Looperget_Set_Images"
+# [변경] 세트 이미지도 별도 폴더가 아닌, 잘 작동하는 기존 폴더를 같이 사용합니다.
+DRIVE_SET_FOLDER_NAME = "Looperget_Images" 
 ADMIN_FOLDER_NAME = "Looperget_Admin"
 ADMIN_PPT_NAME = "Set_Composition_Master.pptx"
 
@@ -79,37 +79,16 @@ def get_or_create_drive_folder():
         st.error(f"드라이브 폴더 오류: {e}")
         return None
 
-# [수정] 세트 이미지용 폴더: '검색'이 아니라 '없으면 생성'으로 복구
-# 이유: 사용자가 만든 폴더에 SA가 업로드하면 소유권 문제로 용량 에러 발생.
-# SA가 직접 만든 폴더에 업로드해야 성공할 확률이 높음.
+# [수정] 세트 폴더 함수: 별도 폴더를 생성하지 않고 기존 제품 폴더(ID)를 반환합니다.
+# (기존 폴더는 이미 업로드 권한/용량 처리가 검증되었기 때문)
 def get_or_create_set_drive_folder():
-    if not drive_service: return None
-    try:
-        # 공유 드라이브 등 모든 위치에서 검색
-        query = f"name='{DRIVE_SET_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        results = drive_service.files().list(
-            q=query, 
-            fields="files(id)", 
-            supportsAllDrives=True, 
-            includeItemsFromAllDrives=True
-        ).execute()
-        files = results.get('files', [])
-        if files: 
-            return files[0]['id']
-        else:
-            # 없으면 생성 (서비스 계정이 소유자가 됨)
-            file_metadata = {'name': DRIVE_SET_FOLDER_NAME, 'mimeType': 'application/vnd.google-apps.folder'}
-            folder = drive_service.files().create(body=file_metadata, fields='id', supportsAllDrives=True).execute()
-            return folder.get('id')
-    except Exception as e:
-        st.error(f"세트 폴더 처리 오류: {e}")
-        return None
+    return get_or_create_drive_folder()
 
 def upload_image_to_drive(file_obj, filename):
     folder_id = get_or_create_drive_folder()
     if not folder_id: return None
     try:
-        # [수정] 제품 이미지 업로드도 안전하게 BytesIO 변환 적용
+        # Streamlit 파일을 BytesIO로 변환 (안정성 확보)
         file_content = file_obj.getvalue()
         buffer = io.BytesIO(file_content)
         
@@ -121,19 +100,19 @@ def upload_image_to_drive(file_obj, filename):
         st.error(f"업로드 실패: {e}")
         return None
 
-# [수정] 세트 이미지 업로드 함수 (BytesIO 변환 및 폴더 생성 로직 연동)
+# [수정] 세트 이미지 업로드 함수
 def upload_set_image_to_drive(file_obj, filename):
-    folder_id = get_or_create_set_drive_folder() # [변경] 생성 함수 사용
+    # 검증된 기존 폴더 ID를 가져옵니다.
+    folder_id = get_or_create_drive_folder()
     if not folder_id: return None
     try:
-        # [중요] Streamlit UploadedFile을 순수 BytesIO로 변환
-        # 이렇게 해야 multipart 업로드 시 파일 크기와 포맷을 API가 정확히 인식함
+        # [중요] 파일 객체를 순수 BytesIO로 변환하여 업로드 오류 방지
         file_content = file_obj.getvalue()
         buffer = io.BytesIO(file_content)
         
         file_metadata = {'name': filename, 'parents': [folder_id]}
         
-        # resumable=False: 단일 요청 업로드 (서비스 계정 용량 체크 우회용)
+        # [중요] resumable=False로 설정하여 서비스 계정 용량 체크 우회
         media = MediaIoBaseUpload(buffer, mimetype=file_obj.type, resumable=False)
         
         file_info = drive_service.files().create(
@@ -144,8 +123,7 @@ def upload_set_image_to_drive(file_obj, filename):
         ).execute()
         return file_info.get('id')
     except Exception as e:
-        # 에러 메시지를 좀 더 구체적으로 표시
-        st.error(f"업로드 실패 ({e}). 만약 'storageQuotaExceeded' 오류라면, 구글 드라이브에서 '{DRIVE_SET_FOLDER_NAME}' 폴더를 삭제한 후 다시 시도해보세요 (봇이 직접 폴더를 생성해야 합니다).")
+        st.error(f"세트 이미지 업로드 실패: {e}")
         return None
 
 @st.cache_data(ttl=600)
@@ -171,33 +149,10 @@ def get_drive_file_map():
     except Exception: pass
     return file_map
 
-# [수정] 세트 이미지 폴더 파일 매핑
+# [수정] 세트 이미지 매핑도 기존 폴더에서 조회 (파일명으로 구분되므로 문제 없음)
 @st.cache_data(ttl=600)
 def get_set_drive_file_map():
-    folder_id = get_or_create_set_drive_folder() # [변경]
-    if not folder_id: return {}
-    file_map = {}
-    try:
-        query = f"'{folder_id}' in parents and trashed=false"
-        page_token = None
-        while True:
-            response = drive_service.files().list(
-                q=query, 
-                spaces='drive', 
-                fields='nextPageToken, files(id, name)', 
-                pageToken=page_token,
-                supportsAllDrives=True, 
-                includeItemsFromAllDrives=True
-            ).execute()
-            files = response.get('files', [])
-            for f in files:
-                name_stem = os.path.splitext(f['name'])[0]
-                file_map[name_stem] = f['id']
-                file_map[f['id']] = f['id']
-            page_token = response.get('nextPageToken', None)
-            if page_token is None: break
-    except Exception: pass
-    return file_map
+    return get_drive_file_map()
 
 def download_image_by_id(file_id):
     if not file_id or not drive_service: return None
@@ -216,16 +171,16 @@ def download_image_by_id(file_id):
 @st.cache_data(ttl=3600)
 def get_image_from_drive(filename_or_id):
     if not filename_or_id: return None
-    # 1. 제품 폴더에서 찾기
+    # 모든 이미지는 이제 하나의 폴더(Looperget_Images)에 있습니다.
     fmap = get_drive_file_map()
-    if filename_or_id in fmap.values(): return download_image_by_id(filename_or_id)
     
-    # 2. 세트 폴더에서도 찾기 (ID인 경우 바로 다운로드 시도)
-    if len(filename_or_id) > 10:
-         return download_image_by_id(filename_or_id)
-
+    # 1. 파일명이 매핑에 있으면 ID로 다운로드
     stem = os.path.splitext(filename_or_id)[0]
     if stem in fmap: return download_image_by_id(fmap[stem])
+    
+    # 2. 입력값이 이미 ID인 경우 (길이로 대략 판단)
+    if len(filename_or_id) > 10:
+         return download_image_by_id(filename_or_id)
     
     return None
 
@@ -902,8 +857,8 @@ if mode == "관리자 모드":
                         # [추가] 세트 이미지 관리 기능
                         with col_img:
                             with st.expander("🖼️ 세트 이미지 관리", expanded=True):
-                                # 폴더 체크 로직 추가
-                                set_folder_id = get_or_create_set_drive_folder() # [변경] 생성 함수로 롤백
+                                # 폴더 체크 로직 추가 (기존 제품 폴더 재사용)
+                                set_folder_id = get_or_create_set_drive_folder()
                                 
                                 current_set_data = st.session_state.db["sets"][cat][tg]
                                 current_img_id = current_set_data.get("image", "")

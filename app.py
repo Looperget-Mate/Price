@@ -861,9 +861,20 @@ if mode == "관리자 모드":
                      if st.button("담기"): st.session_state.temp_set_recipe[str(sp_obj['code'])] = sq
                  
                  st.caption("구성 품목 (코드 기준)")
-                 for k, v in st.session_state.temp_set_recipe.items():
-                     disp_name = code_name_map.get(k, k) 
-                     st.text(f"- {disp_name}: {v}개")
+                 # [수정] 신규 등록 시에도 개별 항목 삭제 기능 추가
+                 if st.session_state.temp_set_recipe:
+                     for k, v in list(st.session_state.temp_set_recipe.items()):
+                         disp_name = code_name_map.get(k, k) 
+                         
+                         c_text, c_del = st.columns([4, 1])
+                         with c_text:
+                             st.text(f"- {disp_name}: {v}개")
+                         with c_del:
+                             if st.button("삭제", key=f"btn_del_new_{k}"):
+                                 del st.session_state.temp_set_recipe[k]
+                                 st.rerun()
+                 else:
+                     st.info("담긴 품목이 없습니다.")
 
                  if st.button("저장", key="btn_new_set"):
                      if cat not in st.session_state.db["sets"]: st.session_state.db["sets"][cat] = {}

@@ -100,11 +100,12 @@ def upload_image_to_drive(file_obj, filename):
     if not folder_id: return None
     try:
         file_metadata = {'name': filename, 'parents': [folder_id]}
-        media = MediaIoBaseUpload(file_obj, mimetype=file_obj.type, resumable=True)
+        # [수정] 서비스 계정 용량 에러 방지를 위해 resumable=False로 변경
+        media = MediaIoBaseUpload(file_obj, mimetype=file_obj.type, resumable=False)
         drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
         return filename
     except Exception as e:
-        st.error(f"업로드 실패: {e}")
+        st.error(f"업로드 실패 (권한 또는 용량 문제일 수 있습니다. 폴더 공유 설정을 확인하세요): {e}")
         return None
 
 # [추가] 세트 이미지 업로드 함수
@@ -113,12 +114,13 @@ def upload_set_image_to_drive(file_obj, filename):
     if not folder_id: return None
     try:
         file_metadata = {'name': filename, 'parents': [folder_id]}
-        media = MediaIoBaseUpload(file_obj, mimetype=file_obj.type, resumable=True)
+        # [수정] 서비스 계정 용량 에러 방지를 위해 resumable=False로 변경 (단일 요청 업로드)
+        media = MediaIoBaseUpload(file_obj, mimetype=file_obj.type, resumable=False)
         # 파일명 중복 시 덮어쓰거나 새로 생성 (여기선 새로 생성 후 ID 리턴)
         file_info = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
         return file_info.get('id')
     except Exception as e:
-        st.error(f"세트 이미지 업로드 실패: {e}")
+        st.error(f"세트 이미지 업로드 실패. (서비스 계정 권한 문제일 수 있습니다): {e}")
         return None
 
 @st.cache_data(ttl=600)

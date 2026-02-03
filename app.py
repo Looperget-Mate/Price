@@ -801,15 +801,46 @@ if mode == "관리자 모드":
             cset = st.session_state.db["sets"].get(cat, {})
             if cset:
                 sl = [{"세트명": k, "부품수": len(v.get("recipe", {}))} for k,v in cset.items()]
-                st.dataframe(pd.DataFrame(sl), use_container_width=True, on_select="rerun", selection_mode="single-row", key="set_table")
+                
+                # [변경] selection_mode를 multi-row로 변경
+                st.dataframe(pd.DataFrame(sl), use_container_width=True, on_select="rerun", selection_mode="multi-row", key="set_table")
+                
                 sel_rows = st.session_state.set_table.get("selection", {}).get("rows", [])
                 if sel_rows:
-                    tg = sl[sel_rows[0]]["세트명"]
-                    if st.button(f"'{tg}' 수정하기"):
-                        st.session_state.temp_set_recipe = cset[tg].get("recipe", {}).copy()
-                        st.session_state.target_set_edit = tg
-                        st.session_state.set_manage_mode = "수정" 
-                        st.rerun()
+                    # 수정 기능 (단일 선택 시에만 활성화)
+                    if len(sel_rows) == 1:
+                        tg = sl[sel_rows[0]]["세트명"]
+                        if st.button(f"✏️ '{tg}' 수정하기"):
+                            st.session_state.temp_set_recipe = cset[tg].get("recipe", {}).copy()
+                            st.session_state.target_set_edit = tg
+                            st.session_state.set_manage_mode = "수정" 
+                            st.rerun()
+                    else:
+                        st.caption("💡 수정을 하려면 1개만 선택해주세요.")
+
+                    # [추가] 다중 삭제 기능
+                    st.markdown("---")
+                    with st.expander(f"🗑️ 선택된 {len(sel_rows)}개 세트 일괄 삭제", expanded=True):
+                        st.warning(f"선택한 {len(sel_rows)}개의 세트를 정말로 삭제하시겠습니까?")
+                        del_pw = st.text_input("관리자 비밀번호 확인", type="password", key="bulk_del_pw")
+                        
+                        if st.button("🚫 일괄 삭제 실행", type="primary"):
+                            if del_pw == st.session_state.db["config"]["password"]:
+                                del_count = 0
+                                target_names = [sl[i]["세트명"] for i in sel_rows]
+                                
+                                for name in target_names:
+                                    if name in st.session_state.db["sets"][cat]:
+                                        del st.session_state.db["sets"][cat][name]
+                                        del_count += 1
+                                
+                                save_sets_to_sheet(st.session_state.db["sets"])
+                                st.success(f"{del_count}개 세트가 삭제되었습니다.")
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error("비밀번호가 일치하지 않습니다.")
+
             st.divider()
             
             if "set_manage_mode" not in st.session_state: st.session_state.set_manage_mode = "신규"

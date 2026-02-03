@@ -59,6 +59,8 @@ gc, drive_service = get_google_services()
 
 # --- 구글 드라이브 함수 ---
 DRIVE_FOLDER_NAME = "Looperget_Images"
+ADMIN_FOLDER_NAME = "Looperget_Admin"
+ADMIN_PPT_NAME = "Set_Composition_Master.pptx"
 
 def get_or_create_drive_folder():
     if not drive_service: return None
@@ -89,6 +91,7 @@ def upload_image_to_drive(file_obj, filename):
 
 @st.cache_data(ttl=600)
 def get_drive_file_map():
+    """폴더 내의 파일명 -> ID 매핑 (숫자 파일명은 5자리 코드로 정규화)"""
     folder_id = get_or_create_drive_folder()
     if not folder_id: return {}
     file_map = {}
@@ -100,6 +103,11 @@ def get_drive_file_map():
             files = response.get('files', [])
             for f in files:
                 name_stem = os.path.splitext(f['name'])[0]
+                # [수정] 파일명이 숫자로만 되어있으면 품목코드 형식(00200)으로 변환하여 매핑
+                if name_stem.isdigit():
+                    norm_name = str(name_stem).zfill(5)
+                    file_map[norm_name] = f['id']
+                # 원본 이름도 매핑 (혹시 모르니)
                 file_map[name_stem] = f['id']
             page_token = response.get('nextPageToken', None)
             if page_token is None: break
@@ -131,13 +139,52 @@ def get_image_from_drive(filename_or_id):
         return download_image_by_id(fmap[stem])
     return None
 
+# [NEW] PPT 파일 다운로드 함수
+@st.cache_data(ttl=600)
+def get_admin_ppt_content():
+    if not drive_service: return None
+    try:
+        q_folder = f"name='{ADMIN_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        res_folder = drive_service.files().list(q=q_folder, fields="files(id)").execute()
+        folders = res_folder.get('files', [])
+        if not folders: return None
+        folder_id = folders[0]['id']
+
+        q_file = f"name='{ADMIN_PPT_NAME}' and '{folder_id}' in parents and trashed=false"
+        res_file = drive_service.files().list(q=q_file, fields="files(id)").execute()
+        files = res_file.get('files', [])
+        if not files: return None
+        file_id = files[0]['id']
+
+        request = drive_service.files().get_media(fileId=file_id)
+        return request.execute()
+    except Exception:
+        return None
+
+# [NEW] 이미지 ID 결정 로직 (파일명 우선 -> DB값 차선)
+def get_best_image_id(code, db_image_val, file_map):
+    """
+    1순위: 구글 드라이브에 '품목코드.jpg'로 저장된 파일이 있으면 그 ID 사용
+    2순위: DB에 저장된 값이 유효한 ID 형태라면 그 ID 사용
+    """
+    clean_code = str(code).strip().zfill(5)
+    # 1. 파일명 매칭 시도
+    if clean_code in file_map:
+        return file_map[clean_code]
+    
+    # 2. DB 값 사용 (구글 ID는 보통 길이가 깁니다)
+    if db_image_val and len(str(db_image_val)) > 10:
+        return db_image_val
+        
+    return None
+
 def list_files_in_drive_folder():
-    """폴더 내의 모든 파일 목록 가져오기 (파일명 -> ID 매핑)"""
     return get_drive_file_map()
 
 # --- 구글 시트 함수 ---
 SHEET_NAME = "Looperget_DB"
 COL_MAP = {
+    "순번": "seq_no",
     "품목코드": "code", "카테고리": "category", "제품명": "name", "규격": "spec", "단위": "unit", 
     "1롤길이(m)": "len_per_unit", "매입단가": "price_buy", 
     "총판가1": "price_d1", "총판가2": "price_d2", "대리점가": "price_agy", 
@@ -175,6 +222,7 @@ def load_data_from_sheet():
                 if k in COL_MAP:
                     if k == "품목코드": new_rec[COL_MAP[k]] = str(v).zfill(5)
                     else: new_rec[COL_MAP[k]] = v
+            if "seq_no" not in new_rec: new_rec["seq_no"] = ""
             data["products"].append(new_rec)
     except: pass
     try:
@@ -194,7 +242,13 @@ def save_products_to_sheet(products_list):
     if not ws_prod: return
     df = pd.DataFrame(products_list)
     if "code" in df.columns: df["code"] = df["code"].astype(str).apply(lambda x: x.zfill(5))
+    if "seq_no" not in df.columns:
+        df["seq_no"] = [f"{i+1:03d}" for i in range(len(df))]
+    
     df_up = df.rename(columns=REV_COL_MAP).fillna("")
+    cols_order = [c for c in COL_MAP.keys() if c in df_up.columns]
+    df_up = df_up[cols_order]
+    
     ws_prod.clear(); ws_prod.update([df_up.columns.values.tolist()] + df_up.values.tolist())
 
 def save_sets_to_sheet(sets_dict):
@@ -303,9 +357,9 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         code = str(item.get("코드", "")).strip().zfill(5) 
         qty = int(item.get("수량", 0))
         
-        img_b64 = None
-        if code in drive_file_map:
-            img_b64 = download_image_by_id(drive_file_map[code])
+        # [수정] 이미지 ID 찾기 로직 개선 (파일명 우선 -> DB값)
+        img_id = get_best_image_id(code, item.get("image_data"), drive_file_map)
+        img_b64 = download_image_by_id(img_id)
         
         sum_qty += qty
         p1 = int(item.get("price_1", 0))
@@ -400,19 +454,16 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         
     return bytes(pdf.output())
 
-# [NEW] 엑셀 견적서 생성 함수 (이미지 중앙 정렬 & 품목정보 통합)
 def create_quote_excel(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, buyer_info):
     output = io.BytesIO()
     workbook = xlsxwriter.Workbook(output, {'in_memory': True})
     ws = workbook.add_worksheet("견적서")
     
-    # 드라이브 파일 맵 (ID -> base64 로딩용)
     drive_file_map = get_drive_file_map()
 
     # Formats
     fmt_title = workbook.add_format({'bold': True, 'font_size': 16, 'align': 'center', 'valign': 'vcenter'})
     fmt_header = workbook.add_format({'bold': True, 'bg_color': '#f0f0f0', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
-    # [수정] 줄바꿈(text_wrap) 적용
     fmt_text_wrap = workbook.add_format({'border': 1, 'valign': 'vcenter', 'text_wrap': True}) 
     fmt_text = workbook.add_format({'border': 1, 'valign': 'vcenter'})
     fmt_num = workbook.add_format({'border': 1, 'num_format': '#,##0', 'valign': 'vcenter'})
@@ -426,7 +477,6 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
     ws.write(2, 4, f"연락처: {buyer_info.get('phone', '')}")
 
     # Table Header
-    # [수정] 품목/규격/코드를 '품목정보' 하나로 통합
     headers = ["이미지", "품목정보", "단위", "수량"]
     if form_type == "basic":
         headers.extend([price_labels[0], "금액", "비고"])
@@ -436,30 +486,21 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
     for col, h in enumerate(headers):
         ws.write(4, col, h, fmt_header)
 
-    # 컬럼 너비 조정
-    ws.set_column(0, 0, 15)  # 이미지 컬럼 (약 110px)
-    ws.set_column(1, 1, 40)  # 품목정보 컬럼 (넓게)
-    ws.set_column(2, 2, 8)   # 단위
-    ws.set_column(3, 3, 8)   # 수량
+    ws.set_column(0, 0, 15)
+    ws.set_column(1, 1, 40)
+    ws.set_column(2, 2, 8)
+    ws.set_column(3, 3, 8)
 
-    # Body
     row = 5
     total_a1 = 0
     total_a2 = 0
     total_profit = 0
     
-    # 임시 파일들을 저장할 리스트 (나중에 삭제)
     temp_files = []
-
-    # 엑셀의 Row Height 단위(points)와 픽셀 변환 비율 (Approx. 1 pt = 1.33 px)
-    # Row Height 80pt => 약 106px
-    # Column Width 15 => 약 110px
-    # 이미지 타겟 사이즈를 100x100px 정도로 잡음
     TARGET_PIXEL_SIZE = 100 
     ROW_HEIGHT_PT = 80
 
     for item in final_data_list:
-        # 행 높이 설정 (이미지가 잘 보이도록)
         ws.set_row(row, ROW_HEIGHT_PT)
         
         qty = int(item.get("수량", 0))
@@ -469,64 +510,51 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
         
         code = str(item.get("코드", "")).strip().zfill(5)
         
-        # 1. 이미지 처리
-        img_b64 = None
-        if code in drive_file_map:
-            img_b64 = download_image_by_id(drive_file_map[code])
+        # [수정] 이미지 ID 찾기 로직 개선
+        img_id = get_best_image_id(code, item.get("image_data"), drive_file_map)
+        img_b64 = download_image_by_id(img_id)
             
         if img_b64:
             try:
-                # Base64 디코딩
                 img_data_str = img_b64.split(",", 1)[1] if "," in img_b64 else img_b64
                 img_bytes = base64.b64decode(img_data_str)
                 
-                # 원본 이미지 사이즈 확인 (PIL)
                 with Image.open(io.BytesIO(img_bytes)) as pil_img:
                     orig_w, orig_h = pil_img.size
                 
-                # 임시 파일 생성
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(img_bytes)
                     tmp_path = tmp.name
                     temp_files.append(tmp_path)
                 
-                # [수정] 이미지 중앙 정렬 및 꽉 차게 스케일링 계산
-                # 셀 크기(px) 대략: 110 x 106
                 cell_w_px = 110 
                 cell_h_px = 106
                 
-                # 비율 유지하면서 셀 안에 들어갈 최대 스케일 계산
                 scale_x = cell_w_px / orig_w
                 scale_y = cell_h_px / orig_h
-                scale = min(scale_x, scale_y) * 0.9 # 90% 정도 채우기 (여백)
+                scale = min(scale_x, scale_y) * 0.9 
                 
-                # 실제 그려질 크기
                 final_w = orig_w * scale
                 final_h = orig_h * scale
                 
-                # 중앙 정렬을 위한 오프셋 계산
                 offset_x = (cell_w_px - final_w) / 2
                 offset_y = (cell_h_px - final_h) / 2
                 
-                # 이미지 삽입
                 ws.insert_image(row, 0, tmp_path, {
                     'x_scale': scale, 
                     'y_scale': scale, 
                     'x_offset': offset_x, 
                     'y_offset': offset_y,
-                    'object_position': 1 # Move and size with cells
+                    'object_position': 1
                 })
             except:
                 ws.write(row, 0, "No Img", fmt_center)
         else:
             ws.write(row, 0, "", fmt_center)
 
-        # 2. 품목 정보 통합 (줄바꿈)
-        # [수정] 품목명, 규격, 코드를 줄바꿈(\n)으로 합침
         item_info_text = f"{item.get('품목', '')}\n{item.get('규격', '')}\n{item.get('코드', '')}"
-        ws.write(row, 1, item_info_text, fmt_text_wrap) # text_wrap 포맷 사용
+        ws.write(row, 1, item_info_text, fmt_text_wrap)
 
-        # 3. 나머지 데이터
         ws.write(row, 2, item.get("단위", ""), fmt_center)
         ws.write(row, 3, qty, fmt_center)
 
@@ -550,7 +578,6 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
             ws.write(row, 9, f"{rate:.1f}%", fmt_center)
         row += 1
 
-    # Services
     svc_total = 0
     if service_items:
         row += 1
@@ -558,13 +585,11 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
         row += 1
         for s in service_items:
             ws.write(row, 1, s['항목'], fmt_text)
-            # 금액 컬럼 위치 (이미지 컬럼 때문에 인덱스 조정)
             price_col = 5 if form_type == "basic" else 7
             ws.write(row, price_col, s['금액'], fmt_num)
             svc_total += s['금액']
             row += 1
 
-    # Grand Total
     row += 1
     ws.write(row, 1, "총 합계", fmt_header)
     final_sum = (total_a1 if form_type == "basic" else total_a2) + svc_total
@@ -573,7 +598,6 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
 
     workbook.close()
     
-    # 임시 파일 정리
     for f in temp_files:
         try: os.unlink(f)
         except: pass
@@ -648,17 +672,22 @@ if mode == "관리자 모드":
             with st.expander("📂 부품 데이터 직접 수정 (수정/추가/삭제)", expanded=True):
                 st.info("💡 팁: 표 안에서 직접 내용을 수정하거나, 맨 아래 행에 추가하거나, 행을 선택해 삭제(Del키)할 수 있습니다.")
                 
-                # 데이터 프레임 준비
                 df = pd.DataFrame(st.session_state.db["products"]).rename(columns=REV_COL_MAP)
                 if "이미지데이터" in df.columns: df["이미지데이터"] = df["이미지데이터"].apply(lambda x: x if x else "")
                 
-                # 편집기 표시
+                df["순번"] = [f"{i+1:03d}" for i in range(len(df))]
+                cols = list(df.columns)
+                if "순번" in cols:
+                    cols.insert(0, cols.pop(cols.index("순번")))
+                    df = df[cols]
+
                 edited_df = st.data_editor(
                     df, 
                     num_rows="dynamic", 
                     use_container_width=True, 
                     key="product_editor",
                     column_config={
+                        "순번": st.column_config.TextColumn(disabled=False, width="small"),
                         "품목코드": st.column_config.TextColumn(help="5자리 코드로 입력하세요 (예: 00100)"),
                         "매입단가": st.column_config.NumberColumn(format="%d"),
                         "총판가1": st.column_config.NumberColumn(format="%d"),
@@ -669,7 +698,6 @@ if mode == "관리자 모드":
                     }
                 )
 
-                # 저장 버튼 및 확인 로직
                 if st.button("💾 변경사항 구글시트에 반영"):
                     st.session_state.confirming_product_save = True
                 
@@ -679,15 +707,11 @@ if mode == "관리자 모드":
                     with col_yes:
                         if st.button("✅ 네, 반영합니다"):
                             try:
-                                # DataFrame을 다시 list of dict로 변환 (한글컬럼 -> 영문키)
-                                # NaN 값 처리 (빈 문자열이나 0으로)
                                 edited_df = edited_df.fillna("")
+                                edited_df.reset_index(drop=True, inplace=True)
+                                edited_df["순번"] = [f"{i+1:03d}" for i in range(len(edited_df))]
                                 new_products_list = edited_df.rename(columns=COL_MAP).to_dict('records')
-                                
-                                # 저장 함수 호출
                                 save_products_to_sheet(new_products_list)
-                                
-                                # DB 리로드
                                 st.session_state.db = load_data_from_sheet()
                                 st.success("구글 시트에 성공적으로 반영되었습니다!")
                                 st.session_state.confirming_product_save = False
@@ -704,7 +728,6 @@ if mode == "관리자 모드":
             ec1, ec2 = st.columns([1, 1])
             with ec1:
                 buf = io.BytesIO()
-                # 원본 df 다시 생성 (위에서 편집된 것 말고 저장된 것 기준)
                 org_df = pd.DataFrame(st.session_state.db["products"]).rename(columns=REV_COL_MAP)
                 with pd.ExcelWriter(buf, engine='xlsxwriter') as w: org_df.to_excel(w, index=False)
                 st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")
@@ -716,14 +739,13 @@ if mode == "관리자 모드":
                         save_products_to_sheet(ndf.to_dict('records')); st.session_state.db = load_data_from_sheet(); st.success("완료"); st.rerun()
                     except Exception as e: st.error(e)
             
-            # [복원됨] 구글 드라이브 이미지 동기화 섹션
             st.divider()
             st.markdown("##### 🔄 드라이브 이미지 일괄 동기화")
             with st.expander("구글 드라이브 폴더의 이미지와 자동 연결하기", expanded=False):
                 st.info("💡 사용법: 이미지 파일명을 '품목코드.jpg' (예: 00200.jpg)로 저장해서 구글 드라이브 'Looperget_Images' 폴더에 먼저 업로드하세요.")
                 if st.button("🔄 드라이브 이미지 자동 연결 실행", key="btn_sync_images"):
                     with st.spinner("드라이브 폴더를 검색하는 중..."):
-                        file_map = get_drive_file_map() # 최신화된 목록 가져옴
+                        file_map = get_drive_file_map() 
                         if not file_map:
                             st.warning("폴더가 비어있거나 찾을 수 없습니다.")
                         else:
@@ -731,15 +753,14 @@ if mode == "관리자 모드":
                             products = st.session_state.db["products"]
                             for p in products:
                                 code = str(p.get("code", "")).strip()
-                                # 코드가 파일명 목록에 있으면 연결
                                 if code and code in file_map:
-                                    p["image"] = file_map[code] # 파일명(확장자 포함) 저장
+                                    p["image"] = file_map[code]
                                     updated_count += 1
                             
                             if updated_count > 0:
                                 save_products_to_sheet(products)
                                 st.success(f"✅ 총 {updated_count}개의 제품 이미지를 연결했습니다!")
-                                st.session_state.db = load_data_from_sheet() # 리로드
+                                st.session_state.db = load_data_from_sheet() 
                             else:
                                 st.warning("매칭되는 이미지가 없습니다. (파일명이 품목코드와 같은지 확인하세요)")
 
@@ -761,6 +782,21 @@ if mode == "관리자 모드":
 
         with t2:
             st.subheader("세트 관리")
+            
+            ppt_data = get_admin_ppt_content()
+            if ppt_data:
+                st.download_button(
+                    label="📥 세트 구성 일람표(PPT) 다운로드",
+                    data=ppt_data,
+                    file_name="Set_Composition_Master.pptx",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    use_container_width=True
+                )
+            else:
+                st.warning("⚠️ 구글 드라이브 'Looperget_Admin' 폴더에 'Set_Composition_Master.pptx' 파일이 없습니다.")
+            
+            st.divider()
+            
             cat = st.selectbox("분류", ["주배관세트", "가지관세트", "기타자재"])
             cset = st.session_state.db["sets"].get(cat, {})
             if cset:
@@ -769,15 +805,13 @@ if mode == "관리자 모드":
                 sel_rows = st.session_state.set_table.get("selection", {}).get("rows", [])
                 if sel_rows:
                     tg = sl[sel_rows[0]]["세트명"]
-                    # [수정] 수정하기 버튼 클릭 시 모드 자동 변경 로직 추가
                     if st.button(f"'{tg}' 수정하기"):
                         st.session_state.temp_set_recipe = cset[tg].get("recipe", {}).copy()
                         st.session_state.target_set_edit = tg
-                        st.session_state.set_manage_mode = "수정" # 강제 수정 모드 전환
+                        st.session_state.set_manage_mode = "수정" 
                         st.rerun()
             st.divider()
             
-            # [수정] 라디오 버튼에 key 부여하여 상태 관리
             if "set_manage_mode" not in st.session_state: st.session_state.set_manage_mode = "신규"
             mt = st.radio("작업", ["신규", "수정"], horizontal=True, key="set_manage_mode")
             
@@ -785,7 +819,6 @@ if mode == "관리자 모드":
             if cat == "주배관세트": sub_cat = st.selectbox("하위분류", ["50mm", "40mm", "기타"], key="sub_c")
             products_obj = st.session_state.db["products"]
             
-            # [Helper] 상품 코드로 이름 찾기용 맵 (관리자 화면용)
             code_name_map = {str(p.get("code")): f"[{p.get('code')}] {p.get('name')} ({p.get('spec')})" for p in products_obj}
 
             if mt == "신규":
@@ -794,13 +827,11 @@ if mode == "관리자 모드":
                  with c1: sp_obj = st.selectbox("부품", products_obj, format_func=format_prod_label, key="nsp")
                  with c2: sq = st.number_input("수량", 1, key="nsq")
                  with c3: 
-                     # [수정] 세트 레시피 저장 키를 '코드'로 변경
                      if st.button("담기"): st.session_state.temp_set_recipe[str(sp_obj['code'])] = sq
                  
-                 # 레시피 보여주기 (코드를 이름으로 변환하여 표시)
                  st.caption("구성 품목 (코드 기준)")
                  for k, v in st.session_state.temp_set_recipe.items():
-                     disp_name = code_name_map.get(k, k) # 코드로 이름 찾기, 없으면 코드 그대로
+                     disp_name = code_name_map.get(k, k) 
                      st.text(f"- {disp_name}: {v}개")
 
                  if st.button("저장", key="btn_new_set"):
@@ -812,9 +843,7 @@ if mode == "관리자 모드":
                      tg = st.session_state.target_set_edit
                      st.info(f"편집: {tg}")
                      
-                     # [NEW] 레시피 수정 기능 (수량 변경 및 삭제)
                      st.markdown("###### 구성 품목 수정 (수량 변경 및 삭제)")
-                     # 딕셔너리를 리스트로 변환하여 순회 (RuntimeError 방지)
                      for k, v in list(st.session_state.temp_set_recipe.items()):
                          c1, c2, c3 = st.columns([5, 2, 1])
                          disp_name = code_name_map.get(k, k)
@@ -822,7 +851,6 @@ if mode == "관리자 모드":
                          with c1:
                              st.text(disp_name)
                          with c2:
-                             # 수량 변경 입력 (Key에 품목코드 포함하여 유니크하게)
                              new_qty = st.number_input(
                                  "수량", 
                                  value=int(v), 
@@ -830,10 +858,8 @@ if mode == "관리자 모드":
                                  key=f"edit_q_{k}", 
                                  label_visibility="collapsed"
                              )
-                             # 값이 변경되면 즉시 State 업데이트
                              st.session_state.temp_set_recipe[k] = new_qty
                          with c3:
-                             # 삭제 버튼
                              if st.button("삭제", key=f"del_set_item_{k}"):
                                  del st.session_state.temp_set_recipe[k]
                                  st.rerun()
@@ -846,7 +872,6 @@ if mode == "관리자 모드":
                      with c3: 
                          st.write("")
                          if st.button("담기", key="esa"): 
-                             # 추가 시에도 '코드'로 저장 (기존에 있으면 덮어쓰기됨)
                              st.session_state.temp_set_recipe[str(ap_obj['code'])] = aq
                              st.rerun()
                      
@@ -882,7 +907,6 @@ else:
         st.divider()
         sets = st.session_state.db.get("sets", {})
         
-        # [NEW] 세트 장바구니 로직 적용
         with st.expander("1. 주배관 및 가지관 세트 선택", True):
             m_sets = sets.get("주배관세트", {})
             grouped = {"50mm":{}, "40mm":{}, "기타":{}, "미분류":{}}
@@ -891,7 +915,6 @@ else:
                 if sc not in grouped: grouped[sc] = {}
                 grouped[sc][k] = v
             
-            # 탭별 렌더링
             mt1, mt2, mt3, mt4 = st.tabs(["50mm", "40mm", "기타", "전체"])
             
             def render_inputs_with_key(d, pf):
@@ -904,7 +927,6 @@ else:
                             if b64: st.image(b64, use_container_width=True)
                             else: st.markdown("No Image")
                         else: st.markdown("<div style='height:80px;background:#eee'></div>", unsafe_allow_html=True)
-                        # 개별 key 부여
                         res[n] = st.number_input(n, 0, key=f"{pf}_{n}_input")
                 return res
 
@@ -915,7 +937,6 @@ else:
             
             st.write("")
             if st.button("➕ 입력한 수량 세트 목록에 추가"):
-                # 모든 탭의 입력값을 확인하여 0보다 큰 것만 장바구니에 추가
                 all_inputs = {**inp_m_50, **inp_m_40, **inp_m_etc, **inp_m_u}
                 added_count = 0
                 for set_name, qty in all_inputs.items():
@@ -927,7 +948,6 @@ else:
                 else:
                     st.warning("수량을 입력해주세요.")
 
-        # 가지관/기타 자재도 세트라면 같은 방식 적용 (여기서는 기존 로직 유지하되 장바구니 사용)
         with st.expander("2. 가지관 및 기타 세트"):
             c1, c2 = st.tabs(["가지관", "기타자재"])
             with c1: inp_b = render_inputs_with_key(sets.get("가지관세트", {}), "b_set")
@@ -942,7 +962,6 @@ else:
                         added_count += 1
                 if added_count > 0: st.success("추가됨")
 
-        # 세트 장바구니 표시
         if st.session_state.set_cart:
             st.info("📋 선택된 세트 목록 (합산 예정)")
             st.dataframe(pd.DataFrame(st.session_state.set_cart), use_container_width=True, hide_index=True)
@@ -973,8 +992,6 @@ else:
             if not st.session_state.current_quote_name: st.error("현장명을 입력해주세요.")
             else:
                 res = {}
-                
-                # 1. 세트 장바구니 계산 (set_cart) - [수정] 코드 기반 합산
                 all_sets_db = {}
                 for cat, val in sets.items():
                     all_sets_db.update(val)
@@ -985,21 +1002,8 @@ else:
                     if s_name in all_sets_db:
                         recipe = all_sets_db[s_name].get("recipe", {})
                         for p_code_or_name, p_qty in recipe.items():
-                            # 레시피의 Key가 코드일 수도 있고 이름일 수도 있음
-                            # 하지만 결과 res는 '코드'를 Key로 쓰는 것이 안전함
-                            
-                            # 만약 키가 품목명이라면(구 데이터), 코드를 찾아야 함 -> 하지만 쉽지 않음(중복명)
-                            # 만약 키가 코드라면(신규 데이터), 그대로 사용
-                            
-                            # 여기서는 "p_code_or_name"을 그대로 키로 사용하여 합산한다.
-                            # 단, Step 2에서 PDB Lookup 시 코드와 이름 모두로 찾을 수 있게 해두었으므로
-                            # 신규 세트(코드 저장)는 코드로, 구 세트(이름 저장)는 이름으로 저장되어도
-                            # Step 2에서는 다 찾을 수 있음.
-                            # *중요*: 신규 세트는 코드로 저장되므로 50mm/40mm가 구분됨.
-                            
                             res[str(p_code_or_name)] = res.get(str(p_code_or_name), 0) + (p_qty * s_qty)
 
-                # 2. 배관 장바구니 계산 (pipe_cart) - CODE 기준
                 code_sums = {}
                 for p_item in st.session_state.pipe_cart:
                     c = p_item.get('code')
@@ -1037,7 +1041,6 @@ else:
         key_map = {"매입가":("price_buy","매입"), "총판1":("price_d1","총판1"), "총판2":("price_d2","총판2"), "대리점":("price_agy","대리점"), "단가(현장)":("price_site", "현장")}
         rows = []
         
-        # PDB Key 확장 (Name & Code)
         pdb = {}
         for p in st.session_state.db["products"]:
             pdb[p["name"]] = p
@@ -1046,7 +1049,6 @@ else:
         pk = [key_map[view][0]] if view != "소비자가" else ["price_cons"]
         
         for n, q in st.session_state.quote_items.items():
-            # n은 코드일 수도 있고 이름일 수도 있음
             inf = pdb.get(str(n), {})
             if not inf: continue
             
@@ -1079,7 +1081,6 @@ else:
                 with c_qty: aq = st.number_input("수량", 1, key="step2_add_qty")
                 with c_btn:
                     st.write("")
-                    # [수정] 추가 시에도 코드 사용 권장
                     if st.button("추가", use_container_width=True): st.session_state.quote_items[str(ap_obj['code'])] = st.session_state.quote_items.get(str(ap_obj['code']), 0) + aq; st.rerun()
 
         with col_add_cost:
@@ -1156,7 +1157,6 @@ else:
         if sel:
             fmode = "basic" if "기본" in form_type else "profit"
             
-            # [수정] PDF 및 Excel 동시 다운로드 버튼 배치
             pdf_b = create_advanced_pdf(edited.to_dict('records'), st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info)
             excel_b = create_quote_excel(edited.to_dict('records'), st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info)
             

@@ -59,7 +59,7 @@ gc, drive_service = get_google_services()
 
 # --- 구글 드라이브 함수 (제품용) ---
 DRIVE_FOLDER_NAME = "Looperget_Images"
-# [변경] 세트 이미지도 별도 폴더가 아닌, 잘 작동하는 기존 폴더를 같이 사용합니다.
+# 세트 이미지도 기존의 잘 작동하는 제품 폴더를 같이 사용합니다.
 DRIVE_SET_FOLDER_NAME = "Looperget_Images" 
 ADMIN_FOLDER_NAME = "Looperget_Admin"
 ADMIN_PPT_NAME = "Set_Composition_Master.pptx"
@@ -67,20 +67,34 @@ ADMIN_PPT_NAME = "Set_Composition_Master.pptx"
 def get_or_create_drive_folder():
     if not drive_service: return None
     try:
+        # [수정 중요] supportsAllDrives=True 추가. 
+        # 이 옵션이 있어야 공유 드라이브 등에 있는 '진짜' 폴더를 찾을 수 있습니다.
+        # 기존에는 이 옵션이 없어 봇이 폴더를 못 찾고 새로 만들었을(Duplicate) 가능성이 큽니다.
         query = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        results = drive_service.files().list(q=query, fields="files(id)").execute()
+        results = drive_service.files().list(
+            q=query, 
+            fields="files(id)", 
+            supportsAllDrives=True, 
+            includeItemsFromAllDrives=True
+        ).execute()
+        
         files = results.get('files', [])
-        if files: return files[0]['id']
+        if files: 
+            return files[0]['id']
         else:
+            # 폴더가 정말 없을 때만 생성
             file_metadata = {'name': DRIVE_FOLDER_NAME, 'mimeType': 'application/vnd.google-apps.folder'}
-            folder = drive_service.files().create(body=file_metadata, fields='id').execute()
+            folder = drive_service.files().create(
+                body=file_metadata, 
+                fields='id',
+                supportsAllDrives=True
+            ).execute()
             return folder.get('id')
     except Exception as e:
         st.error(f"드라이브 폴더 오류: {e}")
         return None
 
-# [수정] 세트 폴더 함수: 별도 폴더를 생성하지 않고 기존 제품 폴더(ID)를 반환합니다.
-# (기존 폴더는 이미 업로드 권한/용량 처리가 검증되었기 때문)
+# 세트 폴더 함수: 기존 검증된 폴더 ID 반환
 def get_or_create_set_drive_folder():
     return get_or_create_drive_folder()
 
@@ -88,31 +102,39 @@ def upload_image_to_drive(file_obj, filename):
     folder_id = get_or_create_drive_folder()
     if not folder_id: return None
     try:
-        # Streamlit 파일을 BytesIO로 변환 (안정성 확보)
+        # Streamlit 파일을 BytesIO로 변환하고 포인터 초기화
         file_content = file_obj.getvalue()
         buffer = io.BytesIO(file_content)
+        buffer.seek(0)
         
         file_metadata = {'name': filename, 'parents': [folder_id]}
         media = MediaIoBaseUpload(buffer, mimetype=file_obj.type, resumable=False)
-        drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        
+        # [수정] 업로드 시에도 supportsAllDrives=True 추가
+        drive_service.files().create(
+            body=file_metadata, 
+            media_body=media, 
+            fields='id',
+            supportsAllDrives=True
+        ).execute()
         return filename
     except Exception as e:
         st.error(f"업로드 실패: {e}")
         return None
 
 # [수정] 세트 이미지 업로드 함수
+# 기존 working function인 upload_image_to_drive의 로직을 그대로 사용하되, 
+# 결과값으로 ID를 반환하도록 조정했습니다.
 def upload_set_image_to_drive(file_obj, filename):
-    # 검증된 기존 폴더 ID를 가져옵니다.
     folder_id = get_or_create_drive_folder()
     if not folder_id: return None
     try:
-        # [중요] 파일 객체를 순수 BytesIO로 변환하여 업로드 오류 방지
         file_content = file_obj.getvalue()
         buffer = io.BytesIO(file_content)
+        buffer.seek(0)
         
         file_metadata = {'name': filename, 'parents': [folder_id]}
-        
-        # [중요] resumable=False로 설정하여 서비스 계정 용량 체크 우회
+        # resumable=False는 작은 파일 업로드 시 권한/쿼터 오류를 피하는 데 유리합니다.
         media = MediaIoBaseUpload(buffer, mimetype=file_obj.type, resumable=False)
         
         file_info = drive_service.files().create(
@@ -123,12 +145,12 @@ def upload_set_image_to_drive(file_obj, filename):
         ).execute()
         return file_info.get('id')
     except Exception as e:
-        st.error(f"세트 이미지 업로드 실패: {e}")
+        st.error(f"세트 이미지 업로드 실패 (권한/쿼터): {e}")
         return None
 
 @st.cache_data(ttl=600)
 def get_drive_file_map():
-    """폴더 내의 파일명 -> ID 매핑 (숫자 파일명은 5자리 코드로 정규화)"""
+    """폴더 내의 파일명 -> ID 매핑"""
     folder_id = get_or_create_drive_folder()
     if not folder_id: return {}
     file_map = {}
@@ -136,7 +158,16 @@ def get_drive_file_map():
         query = f"'{folder_id}' in parents and trashed=false"
         page_token = None
         while True:
-            response = drive_service.files().list(q=query, spaces='drive', fields='nextPageToken, files(id, name)', pageToken=page_token).execute()
+            # [수정] 리스트 조회 시에도 옵션 추가
+            response = drive_service.files().list(
+                q=query, 
+                spaces='drive', 
+                fields='nextPageToken, files(id, name)', 
+                pageToken=page_token,
+                supportsAllDrives=True, 
+                includeItemsFromAllDrives=True
+            ).execute()
+            
             files = response.get('files', [])
             for f in files:
                 name_stem = os.path.splitext(f['name'])[0]
@@ -149,7 +180,7 @@ def get_drive_file_map():
     except Exception: pass
     return file_map
 
-# [수정] 세트 이미지 매핑도 기존 폴더에서 조회 (파일명으로 구분되므로 문제 없음)
+# 세트 이미지 매핑도 통합된 폴더 사용
 @st.cache_data(ttl=600)
 def get_set_drive_file_map():
     return get_drive_file_map()
@@ -171,17 +202,11 @@ def download_image_by_id(file_id):
 @st.cache_data(ttl=3600)
 def get_image_from_drive(filename_or_id):
     if not filename_or_id: return None
-    # 모든 이미지는 이제 하나의 폴더(Looperget_Images)에 있습니다.
     fmap = get_drive_file_map()
-    
-    # 1. 파일명이 매핑에 있으면 ID로 다운로드
     stem = os.path.splitext(filename_or_id)[0]
     if stem in fmap: return download_image_by_id(fmap[stem])
-    
-    # 2. 입력값이 이미 ID인 경우 (길이로 대략 판단)
     if len(filename_or_id) > 10:
          return download_image_by_id(filename_or_id)
-    
     return None
 
 @st.cache_data(ttl=600)
@@ -189,13 +214,25 @@ def get_admin_ppt_content():
     if not drive_service: return None
     try:
         q_folder = f"name='{ADMIN_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        res_folder = drive_service.files().list(q=q_folder, fields="files(id)").execute()
+        res_folder = drive_service.files().list(
+            q=q_folder, 
+            fields="files(id)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True
+        ).execute()
+        
         folders = res_folder.get('files', [])
         if not folders: return None
         folder_id = folders[0]['id']
 
         q_file = f"name='{ADMIN_PPT_NAME}' and '{folder_id}' in parents and trashed=false"
-        res_file = drive_service.files().list(q=q_file, fields="files(id)").execute()
+        res_file = drive_service.files().list(
+            q=q_file, 
+            fields="files(id)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True
+        ).execute()
+        
         files = res_file.get('files', [])
         if not files: return None
         file_id = files[0]['id']

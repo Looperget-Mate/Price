@@ -67,6 +67,7 @@ ADMIN_PPT_NAME = "Set_Composition_Master.pptx"
 def get_or_create_drive_folder():
     if not drive_service: return None
     try:
+        # 기존 제품 폴더는 유지 (기존 로직)
         query = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
         results = drive_service.files().list(q=query, fields="files(id)").execute()
         files = results.get('files', [])
@@ -79,20 +80,23 @@ def get_or_create_drive_folder():
         st.error(f"드라이브 폴더 오류: {e}")
         return None
 
-# [추가] 세트 이미지용 폴더 생성/조회 함수
-def get_or_create_set_drive_folder():
+# [수정] 세트 이미지용 폴더: 생성하지 않고 검색만 수행 (사용자가 직접 생성 유도)
+def get_set_drive_folder():
     if not drive_service: return None
     try:
+        # 공유 드라이브 등 모든 위치에서 검색 (supportsAllDrives=True)
         query = f"name='{DRIVE_SET_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        results = drive_service.files().list(q=query, fields="files(id)").execute()
+        results = drive_service.files().list(
+            q=query, 
+            fields="files(id)", 
+            supportsAllDrives=True, 
+            includeItemsFromAllDrives=True
+        ).execute()
         files = results.get('files', [])
         if files: return files[0]['id']
-        else:
-            file_metadata = {'name': DRIVE_SET_FOLDER_NAME, 'mimeType': 'application/vnd.google-apps.folder'}
-            folder = drive_service.files().create(body=file_metadata, fields='id').execute()
-            return folder.get('id')
+        else: return None  # 없으면 None 반환
     except Exception as e:
-        st.error(f"세트 폴더 오류: {e}")
+        st.error(f"세트 폴더 검색 오류: {e}")
         return None
 
 def upload_image_to_drive(file_obj, filename):
@@ -100,27 +104,30 @@ def upload_image_to_drive(file_obj, filename):
     if not folder_id: return None
     try:
         file_metadata = {'name': filename, 'parents': [folder_id]}
-        # [수정] 서비스 계정 용량 에러 방지를 위해 resumable=False로 변경
         media = MediaIoBaseUpload(file_obj, mimetype=file_obj.type, resumable=False)
         drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
         return filename
     except Exception as e:
-        st.error(f"업로드 실패 (권한 또는 용량 문제일 수 있습니다. 폴더 공유 설정을 확인하세요): {e}")
+        st.error(f"업로드 실패: {e}")
         return None
 
-# [추가] 세트 이미지 업로드 함수
+# [수정] 세트 이미지 업로드 함수 (공유 드라이브 지원 추가)
 def upload_set_image_to_drive(file_obj, filename):
-    folder_id = get_or_create_set_drive_folder()
+    folder_id = get_set_drive_folder() # [변경] 검색 함수 사용
     if not folder_id: return None
     try:
         file_metadata = {'name': filename, 'parents': [folder_id]}
-        # [수정] 서비스 계정 용량 에러 방지를 위해 resumable=False로 변경 (단일 요청 업로드)
         media = MediaIoBaseUpload(file_obj, mimetype=file_obj.type, resumable=False)
-        # 파일명 중복 시 덮어쓰거나 새로 생성 (여기선 새로 생성 후 ID 리턴)
-        file_info = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        # supportsAllDrives=True 추가하여 공유 드라이브 권한 문제 완화
+        file_info = drive_service.files().create(
+            body=file_metadata, 
+            media_body=media, 
+            fields='id', 
+            supportsAllDrives=True
+        ).execute()
         return file_info.get('id')
     except Exception as e:
-        st.error(f"세트 이미지 업로드 실패. (서비스 계정 권한 문제일 수 있습니다): {e}")
+        st.error(f"세트 이미지 업로드 실패. 권한을 확인해주세요: {e}")
         return None
 
 @st.cache_data(ttl=600)
@@ -146,24 +153,29 @@ def get_drive_file_map():
     except Exception: pass
     return file_map
 
-# [추가] 세트 이미지 폴더 파일 매핑
+# [수정] 세트 이미지 폴더 파일 매핑 (공유 드라이브 지원)
 @st.cache_data(ttl=600)
 def get_set_drive_file_map():
-    folder_id = get_or_create_set_drive_folder()
+    folder_id = get_set_drive_folder() # [변경]
     if not folder_id: return {}
     file_map = {}
     try:
         query = f"'{folder_id}' in parents and trashed=false"
         page_token = None
         while True:
-            response = drive_service.files().list(q=query, spaces='drive', fields='nextPageToken, files(id, name)', pageToken=page_token).execute()
+            response = drive_service.files().list(
+                q=query, 
+                spaces='drive', 
+                fields='nextPageToken, files(id, name)', 
+                pageToken=page_token,
+                supportsAllDrives=True, 
+                includeItemsFromAllDrives=True
+            ).execute()
             files = response.get('files', [])
             for f in files:
-                # 세트 이미지는 파일명보다는 ID로 직접 관리할 것이므로 ID 매핑이 중요하지만,
-                # 만약 이름으로 찾을 경우를 위해 매핑
                 name_stem = os.path.splitext(f['name'])[0]
                 file_map[name_stem] = f['id']
-                file_map[f['id']] = f['id'] # ID로도 찾을 수 있게
+                file_map[f['id']] = f['id']
             page_token = response.get('nextPageToken', None)
             if page_token is None: break
     except Exception: pass
@@ -191,7 +203,7 @@ def get_image_from_drive(filename_or_id):
     if filename_or_id in fmap.values(): return download_image_by_id(filename_or_id)
     
     # 2. 세트 폴더에서도 찾기 (ID인 경우 바로 다운로드 시도)
-    if len(filename_or_id) > 10: # 구글 드라이브 ID 형태라고 가정
+    if len(filename_or_id) > 10:
          return download_image_by_id(filename_or_id)
 
     stem = os.path.splitext(filename_or_id)[0]
@@ -872,34 +884,43 @@ if mode == "관리자 모드":
                         # [추가] 세트 이미지 관리 기능
                         with col_img:
                             with st.expander("🖼️ 세트 이미지 관리", expanded=True):
-                                current_set_data = st.session_state.db["sets"][cat][tg]
-                                current_img_id = current_set_data.get("image", "")
+                                # 폴더 체크 로직 추가
+                                set_folder_id = get_set_drive_folder()
                                 
-                                if current_img_id:
-                                    st.image(get_image_from_drive(current_img_id), caption="현재 등록된 이미지", use_container_width=True)
-                                    if st.button("🗑️ 이미지 삭제", key=f"del_img_{tg}"):
-                                        st.session_state.db["sets"][cat][tg]["image"] = ""
-                                        save_sets_to_sheet(st.session_state.db["sets"])
-                                        st.success("이미지가 삭제되었습니다.")
-                                        st.rerun()
+                                if not set_folder_id:
+                                    st.error("⚠️ 구글 드라이브에 'Looperget_Set_Images' 폴더가 없습니다.")
+                                    st.warning("1. 구글 드라이브에 'Looperget_Set_Images' 폴더를 직접 만들어주세요.")
+                                    sa_email = st.secrets["gcp_service_account"]["client_email"]
+                                    st.warning(f"2. 해당 폴더를 아래 이메일과 '편집자' 권한으로 공유해주세요.\n\n{sa_email}")
                                 else:
-                                    st.info("등록된 이미지가 없습니다.")
-                                
-                                set_img_file = st.file_uploader("이미지 업로드/변경", type=["png", "jpg", "jpeg"], key=f"uploader_{tg}")
-                                if set_img_file:
-                                    if st.button("💾 이미지 저장", key=f"save_img_{tg}"):
-                                        with st.spinner("이미지 업로드 중..."):
-                                            # 파일명: 세트명_이미지.jpg (한글 등 호환을 위해 세트명 사용)
-                                            file_ext = set_img_file.name.split('.')[-1]
-                                            new_filename = f"{tg}_image.{file_ext}"
-                                            new_img_id = upload_set_image_to_drive(set_img_file, new_filename)
-                                            
-                                            if new_img_id:
-                                                st.session_state.db["sets"][cat][tg]["image"] = new_img_id
-                                                save_sets_to_sheet(st.session_state.db["sets"])
-                                                st.success("이미지가 등록되었습니다!")
-                                                time.sleep(1)
-                                                st.rerun()
+                                    current_set_data = st.session_state.db["sets"][cat][tg]
+                                    current_img_id = current_set_data.get("image", "")
+                                    
+                                    if current_img_id:
+                                        st.image(get_image_from_drive(current_img_id), caption="현재 등록된 이미지", use_container_width=True)
+                                        if st.button("🗑️ 이미지 삭제", key=f"del_img_{tg}"):
+                                            st.session_state.db["sets"][cat][tg]["image"] = ""
+                                            save_sets_to_sheet(st.session_state.db["sets"])
+                                            st.success("이미지가 삭제되었습니다.")
+                                            st.rerun()
+                                    else:
+                                        st.info("등록된 이미지가 없습니다.")
+                                    
+                                    set_img_file = st.file_uploader("이미지 업로드/변경", type=["png", "jpg", "jpeg"], key=f"uploader_{tg}")
+                                    if set_img_file:
+                                        if st.button("💾 이미지 저장", key=f"save_img_{tg}"):
+                                            with st.spinner("이미지 업로드 중..."):
+                                                # 파일명: 세트명_이미지.jpg (한글 등 호환을 위해 세트명 사용)
+                                                file_ext = set_img_file.name.split('.')[-1]
+                                                new_filename = f"{tg}_image.{file_ext}"
+                                                new_img_id = upload_set_image_to_drive(set_img_file, new_filename)
+                                                
+                                                if new_img_id:
+                                                    st.session_state.db["sets"][cat][tg]["image"] = new_img_id
+                                                    save_sets_to_sheet(st.session_state.db["sets"])
+                                                    st.success("이미지가 등록되었습니다!")
+                                                    time.sleep(1)
+                                                    st.rerun()
 
                     else:
                         st.caption("💡 수정 또는 이미지 관리를 하려면 1개만 선택해주세요.")

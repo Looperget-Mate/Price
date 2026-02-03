@@ -59,8 +59,6 @@ gc, drive_service = get_google_services()
 
 # --- 구글 드라이브 함수 ---
 DRIVE_FOLDER_NAME = "Looperget_Images"
-ADMIN_FOLDER_NAME = "Looperget_Admin"
-ADMIN_PPT_NAME = "Set_Composition_Master.pptx"
 
 def get_or_create_drive_folder():
     if not drive_service: return None
@@ -133,33 +131,6 @@ def get_image_from_drive(filename_or_id):
         return download_image_by_id(fmap[stem])
     return None
 
-# [NEW] PPT 파일 다운로드 함수
-@st.cache_data(ttl=600)
-def get_admin_ppt_content():
-    if not drive_service: return None
-    try:
-        # 1. 관리자 폴더 찾기
-        q_folder = f"name='{ADMIN_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        res_folder = drive_service.files().list(q=q_folder, fields="files(id)").execute()
-        folders = res_folder.get('files', [])
-        
-        if not folders: return None
-        folder_id = folders[0]['id']
-
-        # 2. PPT 파일 찾기
-        q_file = f"name='{ADMIN_PPT_NAME}' and '{folder_id}' in parents and trashed=false"
-        res_file = drive_service.files().list(q=q_file, fields="files(id)").execute()
-        files = res_file.get('files', [])
-        
-        if not files: return None
-        file_id = files[0]['id']
-
-        # 3. 파일 다운로드
-        request = drive_service.files().get_media(fileId=file_id)
-        return request.execute()
-    except Exception:
-        return None
-
 def list_files_in_drive_folder():
     """폴더 내의 모든 파일 목록 가져오기 (파일명 -> ID 매핑)"""
     return get_drive_file_map()
@@ -167,7 +138,6 @@ def list_files_in_drive_folder():
 # --- 구글 시트 함수 ---
 SHEET_NAME = "Looperget_DB"
 COL_MAP = {
-    "순번": "seq_no",
     "품목코드": "code", "카테고리": "category", "제품명": "name", "규격": "spec", "단위": "unit", 
     "1롤길이(m)": "len_per_unit", "매입단가": "price_buy", 
     "총판가1": "price_d1", "총판가2": "price_d2", "대리점가": "price_agy", 
@@ -205,7 +175,6 @@ def load_data_from_sheet():
                 if k in COL_MAP:
                     if k == "품목코드": new_rec[COL_MAP[k]] = str(v).zfill(5)
                     else: new_rec[COL_MAP[k]] = v
-            if "seq_no" not in new_rec: new_rec["seq_no"] = ""
             data["products"].append(new_rec)
     except: pass
     try:
@@ -225,15 +194,7 @@ def save_products_to_sheet(products_list):
     if not ws_prod: return
     df = pd.DataFrame(products_list)
     if "code" in df.columns: df["code"] = df["code"].astype(str).apply(lambda x: x.zfill(5))
-    
-    if "seq_no" not in df.columns:
-        df["seq_no"] = [f"{i+1:03d}" for i in range(len(df))]
-    
     df_up = df.rename(columns=REV_COL_MAP).fillna("")
-    
-    cols_order = [c for c in COL_MAP.keys() if c in df_up.columns]
-    df_up = df_up[cols_order]
-    
     ws_prod.clear(); ws_prod.update([df_up.columns.values.tolist()] + df_up.values.tolist())
 
 def save_sets_to_sheet(sets_dict):
@@ -691,16 +652,6 @@ if mode == "관리자 모드":
                 df = pd.DataFrame(st.session_state.db["products"]).rename(columns=REV_COL_MAP)
                 if "이미지데이터" in df.columns: df["이미지데이터"] = df["이미지데이터"].apply(lambda x: x if x else "")
                 
-                # [NEW] 순번(001, 002...) 자동 생성 및 열 순서 재배치
-                # 데이터프레임 순서(index)대로 순번 재생성
-                df["순번"] = [f"{i+1:03d}" for i in range(len(df))]
-                
-                # 컬럼 순서 재배치: '순번'을 맨 앞으로
-                cols = list(df.columns)
-                if "순번" in cols:
-                    cols.insert(0, cols.pop(cols.index("순번")))
-                    df = df[cols]
-
                 # 편집기 표시
                 edited_df = st.data_editor(
                     df, 
@@ -708,7 +659,6 @@ if mode == "관리자 모드":
                     use_container_width=True, 
                     key="product_editor",
                     column_config={
-                        "순번": st.column_config.TextColumn(disabled=False, width="small"), # 표시용
                         "품목코드": st.column_config.TextColumn(help="5자리 코드로 입력하세요 (예: 00100)"),
                         "매입단가": st.column_config.NumberColumn(format="%d"),
                         "총판가1": st.column_config.NumberColumn(format="%d"),
@@ -732,11 +682,6 @@ if mode == "관리자 모드":
                                 # DataFrame을 다시 list of dict로 변환 (한글컬럼 -> 영문키)
                                 # NaN 값 처리 (빈 문자열이나 0으로)
                                 edited_df = edited_df.fillna("")
-                                
-                                # [중요] 저장 전에 순번 다시 재정렬 (삭제/추가 반영)
-                                edited_df.reset_index(drop=True, inplace=True)
-                                edited_df["순번"] = [f"{i+1:03d}" for i in range(len(edited_df))]
-                                
                                 new_products_list = edited_df.rename(columns=COL_MAP).to_dict('records')
                                 
                                 # 저장 함수 호출
@@ -816,22 +761,6 @@ if mode == "관리자 모드":
 
         with t2:
             st.subheader("세트 관리")
-            
-            # [NEW] PPT Download Button
-            ppt_data = get_admin_ppt_content()
-            if ppt_data:
-                st.download_button(
-                    label="📥 세트 구성 일람표(PPT) 다운로드",
-                    data=ppt_data,
-                    file_name="Set_Composition_Master.pptx",
-                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                    use_container_width=True
-                )
-            else:
-                st.warning("⚠️ 구글 드라이브 'Looperget_Admin' 폴더에 'Set_Composition_Master.pptx' 파일이 없습니다.")
-            
-            st.divider()
-            
             cat = st.selectbox("분류", ["주배관세트", "가지관세트", "기타자재"])
             cset = st.session_state.db["sets"].get(cat, {})
             if cset:

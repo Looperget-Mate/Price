@@ -1605,31 +1605,65 @@ else:
         if sel: sel = sorted(sel, key=lambda x: price_rank.get(x, 6))
         pkey = {"매입단가":"price_buy", "총판가1":"price_d1", "총판가2":"price_d2", "대리점가":"price_agy", "소비자가":"price_cons", "단가(현장)":"price_site"}
         
-        if not st.session_state.step3_ready:
+        # [수정] 옵션 변경 시 데이터 재로딩을 위한 로직 추가
+        if "last_sel" not in st.session_state: st.session_state.last_sel = []
+        
+        # 선택된 단가가 바뀌었는지 확인
+        selectors_changed = (st.session_state.last_sel != sel)
+        
+        # 첫 진입이거나 옵션이 바뀌었다면 가격 데이터 갱신
+        if not st.session_state.step3_ready or selectors_changed:
             pdb = {}
             for p in st.session_state.db["products"]:
                 pdb[p["name"]] = p
                 if p.get("code"): pdb[str(p["code"])] = p
             
             pk = [pkey[l] for l in sel] if sel else ["price_cons"]
-            fdata = []
-            for n, q in st.session_state.quote_items.items():
-                inf = pdb.get(str(n), {})
-                if not inf: continue
-                d = {
-                    "품목": inf.get("name", n), 
-                    "규격": inf.get("spec", ""), 
-                    "코드": inf.get("code", ""), 
-                    "단위": inf.get("unit", "EA"), 
-                    "수량": int(q), 
-                    "image_data": inf.get("image")
-                }
-                d["price_1"] = int(inf.get(pk[0], 0))
-                if len(pk)>1: d["price_2"] = int(inf.get(pk[1], 0))
-                fdata.append(d)
             
-            st.session_state.final_edit_df = pd.DataFrame(fdata)
-            st.session_state.step3_ready = True
+            # 1. 첫 진입일 때: 전체 데이터 생성
+            if not st.session_state.step3_ready:
+                fdata = []
+                for n, q in st.session_state.quote_items.items():
+                    inf = pdb.get(str(n), {})
+                    if not inf: continue
+                    d = {
+                        "품목": inf.get("name", n), 
+                        "규격": inf.get("spec", ""), 
+                        "코드": inf.get("code", ""), 
+                        "단위": inf.get("unit", "EA"), 
+                        "수량": int(q), 
+                        "image_data": inf.get("image")
+                    }
+                    d["price_1"] = int(inf.get(pk[0], 0))
+                    if len(pk)>1: d["price_2"] = int(inf.get(pk[1], 0))
+                    else: d["price_2"] = 0
+                    fdata.append(d)
+                st.session_state.final_edit_df = pd.DataFrame(fdata)
+                st.session_state.step3_ready = True
+            
+            # 2. 옵션만 바뀌었을 때: 기존 수량 유지하고 가격만 업데이트
+            elif selectors_changed and st.session_state.final_edit_df is not None and not st.session_state.final_edit_df.empty:
+                def update_prices_in_row(row):
+                    code = str(row.get("코드", "")).strip().zfill(5)
+                    name = str(row.get("품목", ""))
+                    item = pdb.get(code)
+                    if not item: item = pdb.get(name)
+                    
+                    # DB에 있는 제품이면 가격 업데이트
+                    if item:
+                        p1 = int(item.get(pk[0], 0))
+                        p2 = int(item.get(pk[1], 0)) if len(pk) > 1 else 0
+                        return pd.Series([p1, p2])
+                    else:
+                        # DB에 없는(사용자 추가) 제품이면 기존 값 유지
+                        return pd.Series([row.get("price_1", 0), row.get("price_2", 0)])
+
+                new_prices = st.session_state.final_edit_df.apply(update_prices_in_row, axis=1)
+                st.session_state.final_edit_df["price_1"] = new_prices[0]
+                st.session_state.final_edit_df["price_2"] = new_prices[1]
+
+            st.session_state.last_sel = sel
+            st.session_state.files_ready = False # 옵션이 바뀌었으니 파일 다시 생성해야 함
 
         st.markdown("---")
         
@@ -1637,11 +1671,12 @@ else:
         disp_cols = ["품목", "규격", "코드", "단위", "수량", "price_1"]
         if len(pk) > 1: disp_cols.append("price_2")
         
+        # 컬럼 존재 여부 확인 (방어 코드)
         for c in disp_cols:
             if c not in st.session_state.final_edit_df.columns:
                 st.session_state.final_edit_df[c] = 0 if "price" in c or "수량" in c else ""
 
-        # [수정] on_change 추가: 데이터 수정 시 생성된 파일 무효화 (버튼 숨김)
+        # 데이터 수정 시 파일 생성 버튼 다시 활성화
         def on_data_change():
             st.session_state.files_ready = False
 
@@ -1665,7 +1700,6 @@ else:
         st.session_state.final_edit_df = edited
 
         if sel:
-            # [수정] 파일 생성 버튼 분리 로직 적용
             st.write("")
             if st.button("📄 견적서 파일 생성하기 (PDF/Excel)", type="primary", use_container_width=True):
                 with st.spinner("파일을 생성하고 있습니다... (이미지 다운로드 및 변환 중)"):

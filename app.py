@@ -305,7 +305,7 @@ class PDF(FPDF):
         self.set_y(-20)
         footer_font = 'Helvetica'; footer_style = 'B'
         if os.path.exists(FONT_REGULAR):
-            footer_font = 'NanumGothic'
+            self.add_font('NanumGothic', '', FONT_REGULAR)
             if os.path.exists(FONT_BOLD): footer_style = 'B'
             else: footer_style = ''
         self.set_font(footer_font, footer_style, 12)
@@ -652,7 +652,7 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
         
     return output.getvalue()
 
-def create_composition_pdf(set_cart, pipe_cart, quote_items, db_products, db_sets, quote_name):
+def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db_sets, quote_name):
     drive_file_map = get_drive_file_map()
     pdf = PDF()
     pdf.set_auto_page_break(False)
@@ -664,9 +664,9 @@ def create_composition_pdf(set_cart, pipe_cart, quote_items, db_products, db_set
     b_style = 'B' if has_bold else ''
     
     baseline_counts = {}
-    
     all_sets_db = {}
     for cat, val in db_sets.items(): all_sets_db.update(val)
+    
     for item in set_cart:
         recipe = all_sets_db.get(item['name'], {}).get("recipe", {})
         for p_code, p_qty in recipe.items():
@@ -684,11 +684,36 @@ def create_composition_pdf(set_cart, pipe_cart, quote_items, db_products, db_set
             qty = math.ceil(total_len / unit_len)
             baseline_counts[str(p_code)] = baseline_counts.get(str(p_code), 0) + qty
 
-    additional_items = {}
-    for code, total_qty in quote_items.items():
-        base_qty = baseline_counts.get(str(code), 0)
-        diff = total_qty - base_qty
-        if diff > 0: additional_items[code] = diff
+    # 수기 품목(코드가 없는 경우) 및 추가 자재 처리
+    additional_items_list = []
+    temp_baseline = baseline_counts.copy()
+
+    for item in final_data_list:
+        code = str(item.get("코드", "")).strip().zfill(5) if item.get("코드") else ""
+        try: total_qty = int(float(item.get("수량", 0)))
+        except: total_qty = 0
+        name = item.get("품목", "")
+        spec = item.get("규격", "")
+        img_data = item.get("image_data", "")
+
+        if code and code in temp_baseline:
+            base_qty = temp_baseline[code]
+            if total_qty > base_qty:
+                diff = total_qty - base_qty
+                additional_items_list.append({
+                    "name": name, "spec": spec, "qty": diff, 
+                    "code": code, "image": img_data
+                })
+                temp_baseline[code] = total_qty
+            else:
+                temp_baseline[code] -= total_qty
+        else:
+            # 수기 품목이거나 세트/배관에 포함되지 않은 단독 품목
+            if total_qty > 0:
+                additional_items_list.append({
+                    "name": name, "spec": spec, "qty": total_qty, 
+                    "code": code, "image": img_data
+                })
 
     pdf.set_font(font_name, b_style, 16)
     pdf.cell(0, 15, "자재 구성 명세서 (Material Composition Report)", align='C', new_x="LMARGIN", new_y="NEXT")
@@ -700,19 +725,26 @@ def create_composition_pdf(set_cart, pipe_cart, quote_items, db_products, db_set
         if pdf.get_y() + h_needed > 270:
             pdf.add_page()
 
+    # 1. 부속 세트 구성
     pdf.set_fill_color(220, 220, 220)
     pdf.set_font(font_name, b_style, 12)
     pdf.cell(0, 10, "1. 부속 세트 구성 (Fitting Sets)", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
     
     pdf.set_font(font_name, '', 10)
-    row_h = 35 # [수정] 이미지 확대에 맞춰 행 높이 증가 (30 -> 35)
+    row_h = 35 
     header_h = 8
     
+    # [수정] 칸 너비 조정 (IMG 35->50, Name 85->70)
+    col_w_img = 50
+    col_w_name = 70
+    col_w_type = 40
+    col_w_qty = 30
+    
     pdf.set_fill_color(240, 240, 240)
-    pdf.cell(35, header_h, "IMG", border=1, align='C', fill=True) 
-    pdf.cell(85, header_h, "세트명 (Set Name)", border=1, align='C', fill=True)
-    pdf.cell(40, header_h, "구분", border=1, align='C', fill=True)
-    pdf.cell(30, header_h, "수량", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(col_w_img, header_h, "IMG", border=1, align='C', fill=True) 
+    pdf.cell(col_w_name, header_h, "세트명 (Set Name)", border=1, align='C', fill=True)
+    pdf.cell(col_w_type, header_h, "구분", border=1, align='C', fill=True)
+    pdf.cell(col_w_qty, header_h, "수량", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
 
     for item in set_cart:
         check_page_break(row_h)
@@ -729,25 +761,27 @@ def create_composition_pdf(set_cart, pipe_cart, quote_items, db_products, db_set
         img_b64 = download_image_by_id(img_id)
         
         x, y = pdf.get_x(), pdf.get_y()
-        pdf.cell(35, row_h, "", border=1)
+        pdf.cell(col_w_img, row_h, "", border=1)
         if img_b64:
             try:
                 img_data = img_b64.split(",", 1)[1]
                 img_bytes = base64.b64decode(img_data)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(img_bytes); tmp_path = tmp.name
-                # [수정] 이미지 크기 확대 (w: 25->37.5, h: 25->30)
-                pdf.image(tmp_path, x=x+5, y=y+2.5, w=37.5, h=30)
+                
+                # 이미지 중앙 정렬 (x + (50 - 37.5)/2)
+                pdf.image(tmp_path, x=x+6.25, y=y+2.5, w=37.5, h=30)
                 os.unlink(tmp_path)
             except: pass
             
-        pdf.set_xy(x+35, y)
-        pdf.cell(85, row_h, name, border=1, align='L')
-        pdf.cell(40, row_h, stype, border=1, align='C')
-        pdf.cell(30, row_h, str(qty), border=1, align='C', new_x="LMARGIN", new_y="NEXT")
+        pdf.set_xy(x+col_w_img, y)
+        pdf.cell(col_w_name, row_h, name, border=1, align='L')
+        pdf.cell(col_w_type, row_h, stype, border=1, align='C')
+        pdf.cell(col_w_qty, row_h, str(qty), border=1, align='C', new_x="LMARGIN", new_y="NEXT")
     
     pdf.ln(5)
 
+    # 2. 배관 물량
     pdf.set_font(font_name, b_style, 12)
     pdf.set_fill_color(220, 220, 220)
     check_page_break(20)
@@ -798,7 +832,8 @@ def create_composition_pdf(set_cart, pipe_cart, quote_items, db_products, db_set
 
     pdf.ln(5)
 
-    if additional_items:
+    # 3. 추가 자재 (수기 품목 포함)
+    if additional_items_list:
         pdf.set_font(font_name, b_style, 12)
         pdf.set_fill_color(220, 220, 220)
         check_page_break(20)
@@ -810,12 +845,13 @@ def create_composition_pdf(set_cart, pipe_cart, quote_items, db_products, db_set
         pdf.cell(130, header_h, "품목정보 (Name/Spec)", border=1, align='C', fill=True)
         pdf.cell(40, header_h, "추가 수량", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
 
-        for code, qty in additional_items.items():
+        for item in additional_items_list:
             check_page_break(15)
-            prod_info = next((item for item in db_products if str(item["code"]) == str(code)), None)
-            name = prod_info.get('name', code) if prod_info else code
-            spec = prod_info.get('spec', '-') if prod_info else '-'
-            img_val = prod_info.get('image') if prod_info else None
+            name = item['name']
+            spec = item['spec'] if item['spec'] else '-'
+            qty = item['qty']
+            code = item.get('code')
+            img_val = item.get('image')
             
             img_id = get_best_image_id(code, img_val, drive_file_map)
             img_b64 = download_image_by_id(img_id)
@@ -838,10 +874,11 @@ def create_composition_pdf(set_cart, pipe_cart, quote_items, db_products, db_set
         
         pdf.ln(5)
 
+    # 4. 전체 자재 산출 목록 (수기 품목 포함)
     pdf.set_font(font_name, b_style, 12)
     pdf.set_fill_color(220, 220, 220)
     check_page_break(20)
-    idx_num = "4" if additional_items else "3"
+    idx_num = "4" if additional_items_list else "3"
     pdf.cell(0, 10, f"{idx_num}. 전체 자재 산출 목록 (Total Components)", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
     
     pdf.set_font(font_name, '', 10)
@@ -850,12 +887,16 @@ def create_composition_pdf(set_cart, pipe_cart, quote_items, db_products, db_set
     pdf.cell(130, header_h, "품목정보 (Name/Spec)", border=1, align='C', fill=True)
     pdf.cell(40, header_h, "총 수량", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
 
-    for code, qty in quote_items.items():
+    for item in final_data_list:
+        try: qty = int(float(item.get("수량", 0)))
+        except: qty = 0
+        if qty == 0: continue
+
         check_page_break(15)
-        prod_info = next((item for item in db_products if str(item["code"]) == str(code)), None)
-        name = prod_info.get('name', code) if prod_info else code
-        spec = prod_info.get('spec', '-') if prod_info else '-'
-        img_val = prod_info.get('image') if prod_info else None
+        name = item.get("품목", "")
+        spec = item.get("규격", "-")
+        code = item.get("코드", "")
+        img_val = item.get("image_data")
         
         img_id = get_best_image_id(code, img_val, drive_file_map)
         img_b64 = download_image_by_id(img_id)
@@ -878,7 +919,7 @@ def create_composition_pdf(set_cart, pipe_cart, quote_items, db_products, db_set
 
     return bytes(pdf.output())
 
-def create_composition_excel(set_cart, pipe_cart, quote_items, db_products, db_sets, quote_name):
+def create_composition_excel(set_cart, pipe_cart, final_data_list, db_products, db_sets, quote_name):
     output = io.BytesIO()
     workbook = xlsxwriter.Workbook(output, {'in_memory': True})
     drive_file_map = get_drive_file_map()
@@ -905,10 +946,28 @@ def create_composition_excel(set_cart, pipe_cart, quote_items, db_products, db_s
             if unit_len <= 0: unit_len = 4
             baseline_counts[str(p_code)] = baseline_counts.get(str(p_code), 0) + math.ceil(total_len / unit_len)
 
-    additional_items = {}
-    for code, total_qty in quote_items.items():
-        diff = total_qty - baseline_counts.get(str(code), 0)
-        if diff > 0: additional_items[code] = diff
+    additional_items_list = []
+    temp_baseline = baseline_counts.copy()
+
+    for item in final_data_list:
+        code = str(item.get("코드", "")).strip().zfill(5) if item.get("코드") else ""
+        try: total_qty = int(float(item.get("수량", 0)))
+        except: total_qty = 0
+        name = item.get("품목", "")
+        spec = item.get("규격", "")
+        img_data = item.get("image_data", "")
+
+        if code and code in temp_baseline:
+            base_qty = temp_baseline[code]
+            if total_qty > base_qty:
+                diff = total_qty - base_qty
+                additional_items_list.append({"name": name, "spec": spec, "qty": diff, "code": code, "image": img_data})
+                temp_baseline[code] = total_qty
+            else:
+                temp_baseline[code] -= total_qty
+        else:
+            if total_qty > 0:
+                additional_items_list.append({"name": name, "spec": spec, "qty": total_qty, "code": code, "image": img_data})
 
     def insert_scaled_image(ws, row, col, img_b64):
         if not img_b64: 
@@ -999,7 +1058,7 @@ def create_composition_excel(set_cart, pipe_cart, quote_items, db_products, db_s
         ws2.write(row, 3, rolls, fmt_center)
         row += 1
 
-    if additional_items:
+    if additional_items_list:
         ws_add = workbook.add_worksheet("추가자재")
         ws_add.write(0, 0, "이미지", fmt_header)
         ws_add.write(0, 1, "품목명", fmt_header)
@@ -1009,17 +1068,15 @@ def create_composition_excel(set_cart, pipe_cart, quote_items, db_products, db_s
         ws_add.set_column(1, 1, 30)
         
         row = 1
-        for code, qty in additional_items.items():
+        for item in additional_items_list:
             ws_add.set_row(row, 80)
-            prod_info = next((item for item in db_products if str(item["code"]) == str(code)), None)
-            name = prod_info.get('name', code) if prod_info else code
-            spec = prod_info.get('spec', '-') if prod_info else '-'
-            img_val = prod_info.get('image') if prod_info else None
+            img_val = item.get('image')
+            code = item.get('code')
             
             insert_scaled_image(ws_add, row, 0, download_image_by_id(get_best_image_id(code, img_val, drive_file_map)))
-            ws_add.write(row, 1, name, fmt_left)
-            ws_add.write(row, 2, spec, fmt_center)
-            ws_add.write(row, 3, qty, fmt_center)
+            ws_add.write(row, 1, item['name'], fmt_left)
+            ws_add.write(row, 2, item['spec'], fmt_center)
+            ws_add.write(row, 3, item['qty'], fmt_center)
             row += 1
 
     ws3 = workbook.add_worksheet("전체자재")
@@ -1031,16 +1088,18 @@ def create_composition_excel(set_cart, pipe_cart, quote_items, db_products, db_s
     ws3.set_column(1, 1, 30)
 
     row = 1
-    for code, qty in quote_items.items():
+    for item in final_data_list:
+        try: qty = int(float(item.get("수량", 0)))
+        except: qty = 0
+        if qty == 0: continue
+        
         ws3.set_row(row, 80)
-        prod_info = next((item for item in db_products if str(item["code"]) == str(code)), None)
-        name = prod_info.get('name', code) if prod_info else code
-        spec = prod_info.get('spec', '-') if prod_info else '-'
-        img_val = prod_info.get('image') if prod_info else None
+        code = item.get("코드", "")
+        img_val = item.get("image_data")
         
         insert_scaled_image(ws3, row, 0, download_image_by_id(get_best_image_id(code, img_val, drive_file_map)))
-        ws3.write(row, 1, name, fmt_left)
-        ws3.write(row, 2, spec, fmt_center)
+        ws3.write(row, 1, item.get("품목", ""), fmt_left)
+        ws3.write(row, 2, item.get("규격", "-"), fmt_center)
         ws3.write(row, 3, qty, fmt_center)
         row += 1
 
@@ -1737,8 +1796,10 @@ else:
                     
                     st.session_state.gen_pdf = create_advanced_pdf(safe_data, st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info)
                     st.session_state.gen_excel = create_quote_excel(safe_data, st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info)
-                    st.session_state.gen_comp_pdf = create_composition_pdf(st.session_state.set_cart, st.session_state.pipe_cart, st.session_state.quote_items, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
-                    st.session_state.gen_comp_excel = create_composition_excel(st.session_state.set_cart, st.session_state.pipe_cart, st.session_state.quote_items, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
+                    
+                    # [수정] create_composition_pdf/excel 호출 시 st.session_state.quote_items 대신 safe_data(수기 품목 포함됨) 전달
+                    st.session_state.gen_comp_pdf = create_composition_pdf(st.session_state.set_cart, st.session_state.pipe_cart, safe_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
+                    st.session_state.gen_comp_excel = create_composition_excel(st.session_state.set_cart, st.session_state.pipe_cart, safe_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
                     
                     st.session_state.files_ready = True
                 st.rerun()

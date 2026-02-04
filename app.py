@@ -670,6 +670,305 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
         
     return output.getvalue()
 
+# [추가] 자재 구성 명세서 PDF 생성 함수
+def create_composition_pdf(set_cart, pipe_cart, quote_items, db_products, db_sets, quote_name):
+    drive_file_map = get_drive_file_map()
+    pdf = PDF()
+    pdf.set_auto_page_break(False)
+    pdf.add_page()
+    
+    has_font = os.path.exists(FONT_REGULAR)
+    has_bold = os.path.exists(FONT_BOLD)
+    font_name = 'NanumGothic' if has_font else 'Helvetica'
+    b_style = 'B' if has_bold else ''
+    
+    # 타이틀
+    pdf.set_font(font_name, b_style, 16)
+    pdf.cell(0, 15, "자재 구성 명세서 (Material Composition Report)", align='C', new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font(font_name, '', 10)
+    pdf.cell(0, 8, f"현장명: {quote_name}", align='R', new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(5)
+
+    def check_page_break(h_needed):
+        if pdf.get_y() + h_needed > 270:
+            pdf.add_page()
+
+    # --- A. 부속 세트별 ---
+    pdf.set_fill_color(220, 220, 220)
+    pdf.set_font(font_name, b_style, 12)
+    pdf.cell(0, 10, "1. 부속 세트 구성 (Fitting Sets)", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+    
+    pdf.set_font(font_name, '', 10)
+    header_h = 8
+    pdf.set_fill_color(240, 240, 240)
+    pdf.cell(20, header_h, "IMG", border=1, align='C', fill=True)
+    pdf.cell(100, header_h, "세트명 (Set Name)", border=1, align='C', fill=True)
+    pdf.cell(40, header_h, "구분", border=1, align='C', fill=True)
+    pdf.cell(30, header_h, "수량", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
+
+    for item in set_cart:
+        check_page_break(15)
+        name = item.get('name')
+        qty = item.get('qty')
+        stype = item.get('type')
+        
+        # 세트 이미지 찾기
+        img_id = None
+        # DB에서 찾기
+        for cat, sets in db_sets.items():
+            if name in sets:
+                img_id = sets[name].get('image')
+                break
+        
+        img_b64 = download_image_by_id(img_id)
+        
+        x, y = pdf.get_x(), pdf.get_y()
+        pdf.cell(20, 15, "", border=1)
+        if img_b64:
+            try:
+                img_data = img_b64.split(",", 1)[1]
+                img_bytes = base64.b64decode(img_data)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                    tmp.write(img_bytes); tmp_path = tmp.name
+                pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
+                os.unlink(tmp_path)
+            except: pass
+            
+        pdf.set_xy(x+20, y)
+        pdf.cell(100, 15, name, border=1, align='L')
+        pdf.cell(40, 15, stype, border=1, align='C')
+        pdf.cell(30, 15, str(qty), border=1, align='C', new_x="LMARGIN", new_y="NEXT")
+    
+    pdf.ln(5)
+
+    # --- B. 배관별 ---
+    pdf.set_font(font_name, b_style, 12)
+    pdf.set_fill_color(220, 220, 220)
+    check_page_break(20)
+    pdf.cell(0, 10, "2. 배관 물량 (Pipe Quantities)", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+    
+    pdf.set_font(font_name, '', 10)
+    pdf.set_fill_color(240, 240, 240)
+    pdf.cell(20, header_h, "IMG", border=1, align='C', fill=True)
+    pdf.cell(100, header_h, "품목명 (Product Name)", border=1, align='C', fill=True)
+    pdf.cell(40, header_h, "총 길이(m)", border=1, align='C', fill=True)
+    pdf.cell(30, header_h, "롤 수(EA)", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
+
+    # 배관 집계
+    pipe_summary = {}
+    for p in pipe_cart:
+        code = p.get('code')
+        if not code: continue
+        if code not in pipe_summary:
+            pipe_summary[code] = {'len': 0, 'name': p.get('name'), 'spec': p.get('spec')}
+        pipe_summary[code]['len'] += p.get('len', 0)
+
+    for code, info in pipe_summary.items():
+        check_page_break(15)
+        
+        # 롤 수 계산
+        prod_info = next((item for item in db_products if str(item["code"]) == str(code)), None)
+        unit_len = 4 # 기본값
+        img_val = ""
+        if prod_info:
+            unit_len = prod_info.get("len_per_unit", 4)
+            if unit_len <= 0: unit_len = 4
+            img_val = prod_info.get("image")
+            
+        rolls = math.ceil(info['len'] / unit_len)
+        
+        img_id = get_best_image_id(code, img_val, drive_file_map)
+        img_b64 = download_image_by_id(img_id)
+
+        x, y = pdf.get_x(), pdf.get_y()
+        pdf.cell(20, 15, "", border=1)
+        if img_b64:
+            try:
+                img_data = img_b64.split(",", 1)[1]
+                img_bytes = base64.b64decode(img_data)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                    tmp.write(img_bytes); tmp_path = tmp.name
+                pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
+                os.unlink(tmp_path)
+            except: pass
+            
+        pdf.set_xy(x+20, y)
+        pdf.cell(100, 15, f"{info['name']} ({info['spec']})", border=1, align='L')
+        pdf.cell(40, 15, f"{info['len']} m", border=1, align='C')
+        pdf.cell(30, 15, f"{rolls} 롤", border=1, align='C', new_x="LMARGIN", new_y="NEXT")
+
+    pdf.ln(5)
+
+    # --- C. 전체 자재 목록 (추가자재 포함) ---
+    pdf.set_font(font_name, b_style, 12)
+    pdf.set_fill_color(220, 220, 220)
+    check_page_break(20)
+    pdf.cell(0, 10, "3. 전체 자재 산출 목록 (Total Components)", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+    
+    pdf.set_font(font_name, '', 10)
+    pdf.set_fill_color(240, 240, 240)
+    pdf.cell(20, header_h, "IMG", border=1, align='C', fill=True)
+    pdf.cell(130, header_h, "품목정보 (Name/Spec)", border=1, align='C', fill=True)
+    pdf.cell(40, header_h, "수량", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
+
+    # quote_items 순회
+    for code, qty in quote_items.items():
+        check_page_break(15)
+        
+        prod_info = next((item for item in db_products if str(item["code"]) == str(code)), None)
+        name = prod_info.get('name', code) if prod_info else code
+        spec = prod_info.get('spec', '-') if prod_info else '-'
+        img_val = prod_info.get('image') if prod_info else None
+        
+        img_id = get_best_image_id(code, img_val, drive_file_map)
+        img_b64 = download_image_by_id(img_id)
+
+        x, y = pdf.get_x(), pdf.get_y()
+        pdf.cell(20, 15, "", border=1)
+        if img_b64:
+            try:
+                img_data = img_b64.split(",", 1)[1]
+                img_bytes = base64.b64decode(img_data)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                    tmp.write(img_bytes); tmp_path = tmp.name
+                pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
+                os.unlink(tmp_path)
+            except: pass
+            
+        pdf.set_xy(x+20, y)
+        pdf.cell(130, 15, f"{name} ({spec})", border=1, align='L')
+        pdf.cell(40, 15, f"{int(qty)} EA", border=1, align='C', new_x="LMARGIN", new_y="NEXT")
+
+    return bytes(pdf.output())
+
+# [추가] 자재 구성 명세서 엑셀 생성 함수
+def create_composition_excel(set_cart, pipe_cart, quote_items, db_products, db_sets, quote_name):
+    output = io.BytesIO()
+    workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+    drive_file_map = get_drive_file_map()
+    
+    fmt_header = workbook.add_format({'bold': True, 'bg_color': '#f0f0f0', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
+    fmt_center = workbook.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'})
+    fmt_left = workbook.add_format({'border': 1, 'align': 'left', 'valign': 'vcenter'})
+
+    # Sheet 1: Sets
+    ws1 = workbook.add_worksheet("부속세트")
+    ws1.write(0, 0, "이미지", fmt_header)
+    ws1.write(0, 1, "세트명", fmt_header)
+    ws1.write(0, 2, "구분", fmt_header)
+    ws1.write(0, 3, "수량", fmt_header)
+    ws1.set_column(0, 0, 15)
+    ws1.set_column(1, 1, 30)
+    
+    row = 1
+    for item in set_cart:
+        ws1.set_row(row, 80)
+        name = item.get('name')
+        
+        img_id = None
+        for cat, sets in db_sets.items():
+            if name in sets:
+                img_id = sets[name].get('image')
+                break
+        
+        img_b64 = download_image_by_id(img_id)
+        if img_b64:
+            try:
+                img_data = img_b64.split(",", 1)[1]
+                img_bytes = base64.b64decode(img_data)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                    tmp.write(img_bytes); tmp_path = tmp.name
+                ws1.insert_image(row, 0, tmp_path, {'x_scale': 0.5, 'y_scale': 0.5, 'object_position': 1})
+            except: ws1.write(row, 0, "", fmt_center)
+        else: ws1.write(row, 0, "", fmt_center)
+        
+        ws1.write(row, 1, name, fmt_left)
+        ws1.write(row, 2, item.get('type'), fmt_center)
+        ws1.write(row, 3, item.get('qty'), fmt_center)
+        row += 1
+
+    # Sheet 2: Pipes
+    ws2 = workbook.add_worksheet("배관물량")
+    ws2.write(0, 0, "이미지", fmt_header)
+    ws2.write(0, 1, "품목명", fmt_header)
+    ws2.write(0, 2, "총길이(m)", fmt_header)
+    ws2.write(0, 3, "롤수", fmt_header)
+    ws2.set_column(0, 0, 15)
+    ws2.set_column(1, 1, 30)
+
+    pipe_summary = {}
+    for p in pipe_cart:
+        code = p.get('code')
+        if not code: continue
+        if code not in pipe_summary:
+            pipe_summary[code] = {'len': 0, 'name': p.get('name'), 'spec': p.get('spec')}
+        pipe_summary[code]['len'] += p.get('len', 0)
+
+    row = 1
+    for code, info in pipe_summary.items():
+        ws2.set_row(row, 80)
+        prod_info = next((item for item in db_products if str(item["code"]) == str(code)), None)
+        unit_len = prod_info.get("len_per_unit", 4) if prod_info else 4
+        if unit_len <= 0: unit_len = 4
+        rolls = math.ceil(info['len'] / unit_len)
+        img_val = prod_info.get("image") if prod_info else None
+        
+        img_id = get_best_image_id(code, img_val, drive_file_map)
+        img_b64 = download_image_by_id(img_id)
+        
+        if img_b64:
+            try:
+                img_data = img_b64.split(",", 1)[1]
+                img_bytes = base64.b64decode(img_data)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                    tmp.write(img_bytes); tmp_path = tmp.name
+                ws2.insert_image(row, 0, tmp_path, {'x_scale': 0.5, 'y_scale': 0.5, 'object_position': 1})
+            except: ws2.write(row, 0, "", fmt_center)
+        else: ws2.write(row, 0, "", fmt_center)
+
+        ws2.write(row, 1, f"{info['name']} ({info['spec']})", fmt_left)
+        ws2.write(row, 2, info['len'], fmt_center)
+        ws2.write(row, 3, rolls, fmt_center)
+        row += 1
+
+    # Sheet 3: Total
+    ws3 = workbook.add_worksheet("전체자재")
+    ws3.write(0, 0, "이미지", fmt_header)
+    ws3.write(0, 1, "품목명", fmt_header)
+    ws3.write(0, 2, "규격", fmt_header)
+    ws3.write(0, 3, "수량", fmt_header)
+    ws3.set_column(0, 0, 15)
+    ws3.set_column(1, 1, 30)
+
+    row = 1
+    for code, qty in quote_items.items():
+        ws3.set_row(row, 80)
+        prod_info = next((item for item in db_products if str(item["code"]) == str(code)), None)
+        name = prod_info.get('name', code) if prod_info else code
+        spec = prod_info.get('spec', '-') if prod_info else '-'
+        img_val = prod_info.get('image') if prod_info else None
+        
+        img_id = get_best_image_id(code, img_val, drive_file_map)
+        img_b64 = download_image_by_id(img_id)
+        
+        if img_b64:
+            try:
+                img_data = img_b64.split(",", 1)[1]
+                img_bytes = base64.b64decode(img_data)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                    tmp.write(img_bytes); tmp_path = tmp.name
+                ws3.insert_image(row, 0, tmp_path, {'x_scale': 0.5, 'y_scale': 0.5, 'object_position': 1})
+            except: ws3.write(row, 0, "", fmt_center)
+        else: ws3.write(row, 0, "", fmt_center)
+
+        ws3.write(row, 1, name, fmt_left)
+        ws3.write(row, 2, spec, fmt_center)
+        ws3.write(row, 3, qty, fmt_center)
+        row += 1
+
+    workbook.close()
+    return output.getvalue()
+
 # ==========================================
 # 3. 메인 로직
 # ==========================================
@@ -1342,11 +1641,24 @@ else:
             pdf_b = create_advanced_pdf(edited.to_dict('records'), st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info)
             excel_b = create_quote_excel(edited.to_dict('records'), st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info)
             
+            # [추가] 자재구성명세서 생성
+            comp_pdf = create_composition_pdf(st.session_state.set_cart, st.session_state.pipe_cart, st.session_state.quote_items, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
+            comp_excel = create_composition_excel(st.session_state.set_cart, st.session_state.pipe_cart, st.session_state.quote_items, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
+
             col_pdf, col_xls = st.columns(2)
             with col_pdf:
-                st.download_button("📥 PDF 다운로드", pdf_b, f"quote_{st.session_state.current_quote_name}.pdf", "application/pdf", type="primary", use_container_width=True)
+                st.download_button("📥 견적서 PDF", pdf_b, f"quote_{st.session_state.current_quote_name}.pdf", "application/pdf", type="primary", use_container_width=True)
             with col_xls:
-                st.download_button("📊 엑셀 다운로드", excel_b, f"quote_{st.session_state.current_quote_name}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                st.download_button("📊 견적서 엑셀", excel_b, f"quote_{st.session_state.current_quote_name}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            
+            st.write("")
+            st.markdown("##### 📂 자재 구성 명세서 다운로드")
+            c_comp_pdf, c_comp_xls = st.columns(2)
+            with c_comp_pdf:
+                st.download_button("📥 자재명세 PDF", comp_pdf, f"composition_{st.session_state.current_quote_name}.pdf", "application/pdf", use_container_width=True)
+            with c_comp_xls:
+                st.download_button("📊 자재명세 엑셀", comp_excel, f"composition_{st.session_state.current_quote_name}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
         
         c1, c2 = st.columns(2)
         with c1: 

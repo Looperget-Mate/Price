@@ -1066,6 +1066,13 @@ if "auth_price" not in st.session_state: st.session_state.auth_price = False
 if "final_edit_df" not in st.session_state: st.session_state.final_edit_df = None
 if "step3_ready" not in st.session_state: st.session_state.step3_ready = False
 
+# [신규] 생성된 파일 저장용 상태 변수 초기화
+if "files_ready" not in st.session_state: st.session_state.files_ready = False
+if "gen_pdf" not in st.session_state: st.session_state.gen_pdf = None
+if "gen_excel" not in st.session_state: st.session_state.gen_excel = None
+if "gen_comp_pdf" not in st.session_state: st.session_state.gen_comp_pdf = None
+if "gen_comp_excel" not in st.session_state: st.session_state.gen_comp_excel = None
+
 DEFAULT_DATA = {"config": {"password": "1234"}, "products":[], "sets":{}}
 if not st.session_state.db: st.session_state.db = DEFAULT_DATA
 if "config" not in st.session_state.db: st.session_state.db["config"] = {"password": "1234"}
@@ -1083,7 +1090,7 @@ with st.sidebar:
     with c2:
         if st.button("✨ 초기화"):
             st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.pipe_cart = []; st.session_state.set_cart = []; st.session_state.quote_step = 1
-            st.session_state.current_quote_name = ""; st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}; st.session_state.step3_ready=False; st.rerun()
+            st.session_state.current_quote_name = ""; st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}; st.session_state.step3_ready=False; st.session_state.files_ready = False; st.rerun()
     st.divider()
     h_list = list(st.session_state.history.keys())[::-1]
     if h_list:
@@ -1095,6 +1102,7 @@ with st.sidebar:
             st.session_state.buyer_info = d.get("buyer", {"manager": "", "phone": "", "addr": ""})
             st.session_state.current_quote_name = sel_h
             st.session_state.step3_ready = False
+            st.session_state.files_ready = False
             st.rerun()
     st.divider()
     mode = st.radio("모드", ["견적 작성", "관리자 모드"])
@@ -1493,7 +1501,7 @@ else:
                         if unit_len <= 0: unit_len = 4
                         qty = math.ceil(total_len / unit_len)
                         res[str(p_code)] = res.get(str(p_code), 0) + qty
-                st.session_state.quote_items = res; st.session_state.quote_step = 2; st.session_state.step3_ready=False; st.rerun()
+                st.session_state.quote_items = res; st.session_state.quote_step = 2; st.session_state.step3_ready=False; st.session_state.files_ready = False; st.rerun()
 
     elif st.session_state.quote_step == 2:
         st.subheader("STEP 2. 내용 검토")
@@ -1564,6 +1572,7 @@ else:
         if st.button("최종 확정 (STEP 3)", type="primary", use_container_width=True): 
             st.session_state.quote_step = 3
             st.session_state.step3_ready = False
+            st.session_state.files_ready = False
             st.rerun()
 
     elif st.session_state.quote_step == 3:
@@ -1596,7 +1605,6 @@ else:
         if sel: sel = sorted(sel, key=lambda x: price_rank.get(x, 6))
         pkey = {"매입단가":"price_buy", "총판가1":"price_d1", "총판가2":"price_d2", "대리점가":"price_agy", "소비자가":"price_cons", "단가(현장)":"price_site"}
         
-        # [수정] STEP 3 데이터 초기화 (처음 진입 시만 실행)
         if not st.session_state.step3_ready:
             pdb = {}
             for p in st.session_state.db["products"]:
@@ -1620,26 +1628,26 @@ else:
                 if len(pk)>1: d["price_2"] = int(inf.get(pk[1], 0))
                 fdata.append(d)
             
-            # DataFrame으로 변환 후 세션에 저장
             st.session_state.final_edit_df = pd.DataFrame(fdata)
             st.session_state.step3_ready = True
 
         st.markdown("---")
         
-        # [수정] 데이터 에디터 (수정, 추가, 삭제 가능)
         pk = [pkey[l] for l in sel] if sel else ["price_cons"]
         disp_cols = ["품목", "규격", "코드", "단위", "수량", "price_1"]
         if len(pk) > 1: disp_cols.append("price_2")
         
-        # 현재 세션의 DF를 에디터에 표시
-        # 주의: 컬럼이 없을 수도 있으니 방어 코드
         for c in disp_cols:
             if c not in st.session_state.final_edit_df.columns:
                 st.session_state.final_edit_df[c] = 0 if "price" in c or "수량" in c else ""
 
+        # [수정] on_change 추가: 데이터 수정 시 생성된 파일 무효화 (버튼 숨김)
+        def on_data_change():
+            st.session_state.files_ready = False
+
         edited = st.data_editor(
             st.session_state.final_edit_df[disp_cols], 
-            num_rows="dynamic", # 행 추가/삭제 허용
+            num_rows="dynamic",
             use_container_width=True, 
             hide_index=True,
             column_config={
@@ -1650,44 +1658,52 @@ else:
                 "수량": st.column_config.NumberColumn(step=1, required=True),
                 "price_1": st.column_config.NumberColumn(label=sel[0] if sel else "단가", format="%d", required=True),
                 "price_2": st.column_config.NumberColumn(label=sel[1] if len(sel)>1 else "", format="%d")
-            }
+            },
+            on_change=on_data_change
         )
         
-        # [수정] 에디터의 변경사항을 세션에 반영 (다른 위젯 동작 시 유지되도록)
         st.session_state.final_edit_df = edited
 
         if sel:
-            fmode = "basic" if "기본" in form_type else "profit"
-            
-            # [수정] PDF/Excel 생성 시 None 값 방지 (fillna)
-            safe_data = edited.fillna(0).to_dict('records')
-            
-            pdf_b = create_advanced_pdf(safe_data, st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info)
-            excel_b = create_quote_excel(safe_data, st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info)
-            
-            # 자재구성명세서 생성
-            comp_pdf = create_composition_pdf(st.session_state.set_cart, st.session_state.pipe_cart, st.session_state.quote_items, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
-            comp_excel = create_composition_excel(st.session_state.set_cart, st.session_state.pipe_cart, st.session_state.quote_items, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
-
-            col_pdf, col_xls = st.columns(2)
-            with col_pdf:
-                st.download_button("📥 견적서 PDF", pdf_b, f"quote_{st.session_state.current_quote_name}.pdf", "application/pdf", type="primary", use_container_width=True)
-            with col_xls:
-                st.download_button("📊 견적서 엑셀", excel_b, f"quote_{st.session_state.current_quote_name}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-            
+            # [수정] 파일 생성 버튼 분리 로직 적용
             st.write("")
-            st.markdown("##### 📂 자재 구성 명세서 다운로드")
-            c_comp_pdf, c_comp_xls = st.columns(2)
-            with c_comp_pdf:
-                st.download_button("📥 자재명세 PDF", comp_pdf, f"composition_{st.session_state.current_quote_name}.pdf", "application/pdf", use_container_width=True)
-            with c_comp_xls:
-                st.download_button("📊 자재명세 엑셀", comp_excel, f"composition_{st.session_state.current_quote_name}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            if st.button("📄 견적서 파일 생성하기 (PDF/Excel)", type="primary", use_container_width=True):
+                with st.spinner("파일을 생성하고 있습니다... (이미지 다운로드 및 변환 중)"):
+                    fmode = "basic" if "기본" in form_type else "profit"
+                    safe_data = edited.fillna(0).to_dict('records')
+                    
+                    st.session_state.gen_pdf = create_advanced_pdf(safe_data, st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info)
+                    st.session_state.gen_excel = create_quote_excel(safe_data, st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info)
+                    st.session_state.gen_comp_pdf = create_composition_pdf(st.session_state.set_cart, st.session_state.pipe_cart, st.session_state.quote_items, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
+                    st.session_state.gen_comp_excel = create_composition_excel(st.session_state.set_cart, st.session_state.pipe_cart, st.session_state.quote_items, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
+                    
+                    st.session_state.files_ready = True
+                st.rerun()
+
+            if st.session_state.files_ready:
+                st.success("파일 생성이 완료되었습니다! 아래 버튼을 눌러 다운로드하세요.")
+                col_pdf, col_xls = st.columns(2)
+                with col_pdf:
+                    st.download_button("📥 견적서 PDF", st.session_state.gen_pdf, f"quote_{st.session_state.current_quote_name}.pdf", "application/pdf", type="primary", use_container_width=True)
+                with col_xls:
+                    st.download_button("📊 견적서 엑셀", st.session_state.gen_excel, f"quote_{st.session_state.current_quote_name}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                
+                st.write("")
+                st.markdown("##### 📂 자재 구성 명세서 다운로드")
+                c_comp_pdf, c_comp_xls = st.columns(2)
+                with c_comp_pdf:
+                    st.download_button("📥 자재명세 PDF", st.session_state.gen_comp_pdf, f"composition_{st.session_state.current_quote_name}.pdf", "application/pdf", use_container_width=True)
+                with c_comp_xls:
+                    st.download_button("📊 자재명세 엑셀", st.session_state.gen_comp_excel, f"composition_{st.session_state.current_quote_name}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            else:
+                st.info("👆 위 버튼을 눌러 파일을 생성해주세요. (데이터 수정 시 다시 생성해야 합니다)")
 
         c1, c2 = st.columns(2)
         with c1: 
             if st.button("⬅️ 수정 (이전 단계)"): 
                 st.session_state.quote_step = 2
                 st.session_state.step3_ready = False
+                st.session_state.files_ready = False
                 st.rerun()
         with c2:
             if st.button("🔄 처음으로"): 
@@ -1699,4 +1715,5 @@ else:
                 st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}
                 st.session_state.current_quote_name = ""
                 st.session_state.step3_ready = False
+                st.session_state.files_ready = False
                 st.rerun()

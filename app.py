@@ -705,7 +705,7 @@ def create_composition_pdf(set_cart, pipe_cart, quote_items, db_products, db_set
     pdf.cell(0, 10, "1. 부속 세트 구성 (Fitting Sets)", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
     
     pdf.set_font(font_name, '', 10)
-    row_h = 30
+    row_h = 35 # [수정] 이미지 확대에 맞춰 행 높이 증가 (30 -> 35)
     header_h = 8
     
     pdf.set_fill_color(240, 240, 240)
@@ -736,7 +736,8 @@ def create_composition_pdf(set_cart, pipe_cart, quote_items, db_products, db_set
                 img_bytes = base64.b64decode(img_data)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(img_bytes); tmp_path = tmp.name
-                pdf.image(tmp_path, x=x+5, y=y+2.5, w=25, h=25)
+                # [수정] 이미지 크기 확대 (w: 25->37.5, h: 25->30)
+                pdf.image(tmp_path, x=x+5, y=y+2.5, w=37.5, h=30)
                 os.unlink(tmp_path)
             except: pass
             
@@ -1680,6 +1681,33 @@ else:
         # 데이터 수정 시 파일 생성 버튼 다시 활성화
         def on_data_change():
             st.session_state.files_ready = False
+
+        # [신규] 수기 품목 추가 기능
+        with st.expander("➕ 수기 품목 추가 (DB 미등록 품목)", expanded=False):
+            c1, c2, c3, c4, c5 = st.columns([3, 2, 1, 1, 2])
+            m_name = c1.text_input("품목명 (필수)", key="m_name")
+            m_spec = c2.text_input("규격", key="m_spec")
+            m_unit = c3.text_input("단위", "EA", key="m_unit")
+            m_qty = c4.number_input("수량", 1, key="m_qty")
+            m_price = c5.number_input("단가", 0, key="m_price")
+            
+            if st.button("리스트에 추가", key="btn_add_manual"):
+                if m_name:
+                    new_row = {
+                        "품목": m_name, 
+                        "규격": m_spec, 
+                        "코드": "", 
+                        "단위": m_unit, 
+                        "수량": m_qty, 
+                        "price_1": m_price, 
+                        "price_2": 0, 
+                        "image_data": ""
+                    }
+                    st.session_state.final_edit_df = pd.concat([st.session_state.final_edit_df, pd.DataFrame([new_row])], ignore_index=True)
+                    st.session_state.files_ready = False
+                    st.rerun()
+                else:
+                    st.warning("품목명을 입력해주세요.")
 
         edited = st.data_editor(
             st.session_state.final_edit_df[disp_cols], 

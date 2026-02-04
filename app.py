@@ -1189,6 +1189,7 @@ if mode == "관리자 모드":
                 st.info("💡 사용법: 이미지 파일명을 '품목코드.jpg' (예: 00200.jpg)로 저장해서 구글 드라이브 'Looperget_Images' 폴더에 먼저 업로드하세요.")
                 if st.button("🔄 드라이브 이미지 자동 연결 실행", key="btn_sync_images"):
                     with st.spinner("드라이브 폴더를 검색하는 중..."):
+                        get_drive_file_map.clear() # [수정] 캐시 초기화 추가
                         file_map = get_drive_file_map() 
                         if not file_map:
                             st.warning("폴더가 비어있거나 찾을 수 없습니다.")

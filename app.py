@@ -329,10 +329,14 @@ class PDF(FPDF):
             self.set_font('Helvetica', 'I', 8)
         self.cell(0, 5, f'Page {self.page_no()}', align='C')
 
+# [수정] PDF 생성 함수 - 페이지 넘김 및 헤더 반복 기능 개선
 def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, buyer_info):
     drive_file_map = get_drive_file_map()
     pdf = PDF()
+    # [중요] 자동 페이지 넘김을 끄고 수동으로 제어하여 레이아웃 깨짐 방지
+    pdf.set_auto_page_break(False) 
     pdf.add_page()
+    
     has_font = os.path.exists(FONT_REGULAR)
     has_bold = os.path.exists(FONT_BOLD)
     font_name = 'NanumGothic' if has_font else 'Helvetica'
@@ -360,38 +364,50 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         pdf.ln(h_line)
     pdf.ln(5)
 
-    pdf.set_fill_color(240, 240, 240)
-    pdf.set_font(font_name, b_style, 10)
-    h_height = 10
-    pdf.cell(15, h_height, "IMG", border=1, align='C', fill=True)
-    pdf.cell(45, h_height, "품목정보 (명/규격/코드)", border=1, align='C', fill=True) 
-    pdf.cell(10, h_height, "단위", border=1, align='C', fill=True)
-    pdf.cell(12, h_height, "수량", border=1, align='C', fill=True)
+    # [중요] 테이블 헤더를 그리는 내부 함수 (페이지 넘김 시 재사용)
+    def draw_table_header():
+        pdf.set_fill_color(240, 240, 240)
+        pdf.set_font(font_name, b_style, 10)
+        h_height = 10
+        pdf.cell(15, h_height, "IMG", border=1, align='C', fill=True)
+        pdf.cell(45, h_height, "품목정보 (명/규격/코드)", border=1, align='C', fill=True) 
+        pdf.cell(10, h_height, "단위", border=1, align='C', fill=True)
+        pdf.cell(12, h_height, "수량", border=1, align='C', fill=True)
 
-    if form_type == "basic":
-        pdf.cell(35, h_height, f"{price_labels[0]}", border=1, align='C', fill=True)
-        pdf.cell(35, h_height, "금액", border=1, align='C', fill=True)
-        pdf.cell(38, h_height, "비고", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
-    else:
-        l1, l2 = price_labels[0], price_labels[1]
-        pdf.set_font(font_name, '', 8)
-        pdf.cell(18, h_height, f"{l1}", border=1, align='C', fill=True)
-        pdf.cell(22, h_height, "금액", border=1, align='C', fill=True)
-        pdf.cell(18, h_height, f"{l2}", border=1, align='C', fill=True)
-        pdf.cell(22, h_height, "금액", border=1, align='C', fill=True)
-        pdf.cell(15, h_height, "이익", border=1, align='C', fill=True)
-        pdf.cell(13, h_height, "율(%)", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
-        pdf.set_font(font_name, '', 9)
+        if form_type == "basic":
+            pdf.cell(35, h_height, f"{price_labels[0]}", border=1, align='C', fill=True)
+            pdf.cell(35, h_height, "금액", border=1, align='C', fill=True)
+            pdf.cell(38, h_height, "비고", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
+        else:
+            l1, l2 = price_labels[0], price_labels[1]
+            pdf.set_font(font_name, '', 8)
+            pdf.cell(18, h_height, f"{l1}", border=1, align='C', fill=True)
+            pdf.cell(22, h_height, "금액", border=1, align='C', fill=True)
+            pdf.cell(18, h_height, f"{l2}", border=1, align='C', fill=True)
+            pdf.cell(22, h_height, "금액", border=1, align='C', fill=True)
+            pdf.cell(15, h_height, "이익", border=1, align='C', fill=True)
+            pdf.cell(13, h_height, "율(%)", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font(font_name, '', 9)
+
+    # 첫 페이지 헤더 출력
+    draw_table_header()
 
     sum_qty = 0; sum_a1 = 0; sum_a2 = 0; sum_profit = 0
 
     for item in final_data_list:
+        h = 15
+        
+        # [중요] 페이지 하단 공간 체크 및 페이지 넘김 처리 (260mm는 Footer 여백 고려)
+        if pdf.get_y() > 260:
+            pdf.add_page()
+            draw_table_header() # 새 페이지에 헤더 다시 그리기
+
+        x, y = pdf.get_x(), pdf.get_y()
         name = item.get("품목", "")
         spec = item.get("규격", "-")
         code = str(item.get("코드", "")).strip().zfill(5) 
         qty = int(item.get("수량", 0))
         
-        # [수정] 이미지 ID 찾기 로직 개선 (파일명 우선 -> DB값)
         img_id = get_best_image_id(code, item.get("image_data"), drive_file_map)
         img_b64 = download_image_by_id(img_id)
         
@@ -407,8 +423,6 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
             sum_a2 += a2; profit = a2 - a1; sum_profit += profit
             rate = (profit / a2 * 100) if a2 else 0
 
-        h = 15; x, y = pdf.get_x(), pdf.get_y()
-        
         pdf.cell(15, h, "", border=1)
         if img_b64:
             try:
@@ -444,6 +458,11 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
             pdf.cell(13, h, f"{rate:.1f}%", border=1, align='C')
             pdf.set_font(font_name, '', 9); pdf.ln()
 
+    # 합계 행 출력 전 공간 체크
+    if pdf.get_y() + 10 > 260:
+        pdf.add_page()
+        draw_table_header()
+
     pdf.set_fill_color(230, 230, 230); pdf.set_font(font_name, b_style, 9)
     pdf.cell(15+45+10, 10, "소 계 (Sub Total)", border=1, align='C', fill=True)
     pdf.cell(12, 10, f"{sum_qty:,}", border=1, align='C', fill=True)
@@ -462,13 +481,26 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
 
     svc_total = 0
     if service_items:
-        pdf.ln(2); pdf.set_fill_color(255, 255, 224)
+        # 추가 비용 출력 전 공간 체크
+        if pdf.get_y() + (len(service_items) * 6) + 10 > 260:
+             pdf.add_page()
+             # 추가 비용만 따로 넘어갈 때는 테이블 헤더가 굳이 필요 없을 수 있으나, 일관성을 위해 그리지 않거나 제목만 표시
+             pdf.ln(2)
+        else:
+             pdf.ln(2)
+             
+        pdf.set_fill_color(255, 255, 224)
         pdf.cell(190, 6, " [ 추가 비용 ] ", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
         for s in service_items:
             svc_total += s['금액']; pdf.cell(155, 6, s['항목'], border=1)
             pdf.cell(35, 6, f"{s['금액']:,} 원", border=1, align='R', new_x="LMARGIN", new_y="NEXT")
 
     pdf.ln(5); pdf.set_font(font_name, b_style, 12)
+    
+    # 하단 총계 및 안내문 공간 체크
+    if pdf.get_y() + 30 > 270:
+        pdf.add_page()
+    
     pdf.cell(0, 5, "1. 견적 유효기간: 견적일로부터 15일 이내", ln=True, align='R')
     pdf.cell(0, 5, "2. 출고: 결재 완료 후 즉시 또는 7일 이내", ln=True, align='R')
     pdf.ln(2)

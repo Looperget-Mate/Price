@@ -24,12 +24,17 @@ from googleapiclient.http import MediaIoBaseUpload
 st.set_page_config(layout="wide", page_title="Looperget Pro Manager JP V1.1")
 
 # ==========================================
+# [위치 이동] 기본 데이터 정의 (에러 방지용)
+# ==========================================
+DEFAULT_DATA = {"config": {"password": "1234"}, "products":[], "sets":{}}
+
+# ==========================================
 # 1. 설정 및 구글 연동 유틸리티 (일본어 폰트 설정)
 # ==========================================
 FONT_REGULAR = "NotoSansJP-Regular.ttf"
 FONT_BOLD = "NotoSansJP-Bold.ttf"
 
-# NotoSansJP 폰트 다운로드 경로 (존재하지 않을 경우 다운로드)
+# NotoSansJP 폰트 다운로드 경로
 FONT_URL = "https://github.com/google/fonts/raw/main/ofl/notosansjp/NotoSansJP-Regular.ttf"
 FONT_BOLD_URL = "https://github.com/google/fonts/raw/main/ofl/notosansjp/NotoSansJP-Bold.ttf"
 
@@ -148,7 +153,6 @@ def get_best_image_id(code, db_image_val, file_map):
 
 # --- 구글 시트 함수 (일본어 컬럼 매핑) ---
 SHEET_NAME = "Looperget_DB"
-# 일본어 데이터베이스 매핑
 COL_MAP = {
     "순번": "seq_no",
     "품목코드": "code", 
@@ -265,7 +269,7 @@ def format_prod_label(option):
     return str(option)
 
 # ==========================================
-# 2. PDF 및 Excel 생성 엔진 (일본어 대응 + 정수화)
+# 2. PDF 및 Excel 생성 엔진
 # ==========================================
 class PDF(FPDF):
     def header(self):
@@ -327,7 +331,6 @@ def create_jp_pdf(final_data_list, service_items, quote_name, quote_date, form_t
             pdf.cell(35, h_height, "金額 (¥)", border=1, align='C', fill=True)
             pdf.cell(38, h_height, "備考", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
         else:
-            # 이익 분석 양식
             l1, l2 = price_labels[0], price_labels[1]
             pdf.set_font(font_name, '', 8)
             pdf.cell(18, h_height, f"{l1}", border=1, align='C', fill=True)
@@ -360,7 +363,6 @@ def create_jp_pdf(final_data_list, service_items, quote_name, quote_date, form_t
         
         sum_qty += qty
         
-        # [정수화] 단가 및 합계는 무조건 int 처리
         try: p1 = int(float(item.get("price_1", 0)))
         except: p1 = 0
         a1 = int(p1 * qty)
@@ -418,7 +420,6 @@ def create_jp_pdf(final_data_list, service_items, quote_name, quote_date, form_t
     pdf.cell(15+50+10, 10, "小 計 (Sub Total)", border=1, align='C', fill=True)
     pdf.cell(12, 10, f"{sum_qty:,}", border=1, align='C', fill=True)
     
-    # 소계 정수 처리
     sum_a1 = int(sum_a1)
     sum_a2 = int(sum_a2)
     sum_profit = int(sum_profit)
@@ -484,7 +485,7 @@ def create_jp_excel(final_data_list, service_items, quote_name, quote_date, form
     fmt_title = workbook.add_format({'bold': True, 'font_size': 16, 'align': 'center', 'valign': 'vcenter'})
     fmt_header = workbook.add_format({'bold': True, 'bg_color': '#f0f0f0', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
     fmt_text = workbook.add_format({'border': 1, 'valign': 'vcenter'})
-    fmt_num = workbook.add_format({'border': 1, 'num_format': '#,##0', 'valign': 'vcenter'}) # 정수 포맷
+    fmt_num = workbook.add_format({'border': 1, 'num_format': '#,##0', 'valign': 'vcenter'})
     fmt_center = workbook.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'})
 
     ws.merge_range('A1:F1', '御 見 積 書', fmt_title)
@@ -524,7 +525,7 @@ def create_jp_excel(final_data_list, service_items, quote_name, quote_date, form
         
         if img_b64:
             try:
-                img_data_str = img_b64.split(",", 1)[1]
+                img_data_str = img_b64.split(",", 1)[1] if "," in img_b64 else img_b64
                 img_bytes = base64.b64decode(img_data_str)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(img_bytes); tmp_path = tmp.name; temp_files.append(tmp_path)
@@ -604,7 +605,6 @@ if "files_ready" not in st.session_state: st.session_state.files_ready = False
 if "gen_pdf" not in st.session_state: st.session_state.gen_pdf = None
 if "gen_excel" not in st.session_state: st.session_state.gen_excel = None
 
-DEFAULT_DATA = {"config": {"password": "1234"}, "products":[], "sets":{}}
 if not st.session_state.db: st.session_state.db = DEFAULT_DATA
 
 st.title("💧 Looperget Pro Manager JP (Cloud)")

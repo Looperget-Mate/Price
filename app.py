@@ -211,7 +211,9 @@ COL_MAP = {
     "1롤길이(m)": "len_per_unit", "매입단가": "price_buy", 
     "총판가1": "price_d1", "총판가2": "price_d2", "대리점가": "price_agy", 
     "소비자가": "price_cons", "단가(현장)": "price_site", 
-    "이미지데이터": "image"
+    "이미지데이터": "image",
+    # [추가] 일본 수출 분석을 위한 컬럼 매핑
+    "신정공급가": "price_supply_jp"
 }
 REV_COL_MAP = {v: k for k, v in COL_MAP.items()}
 
@@ -230,12 +232,18 @@ def init_db():
     except: ws_prod = sh.add_worksheet(title="Products", rows=100, cols=20)
     try: ws_sets = sh.worksheet("Sets")
     except: ws_sets = sh.add_worksheet(title="Sets", rows=100, cols=10)
+    # [추가] Quotes_JP 시트 없으면 생성 시도 (데이터 로드 시 에러 방지)
+    try: ws_jp = sh.worksheet("Quotes_JP")
+    except: 
+        try: ws_jp = sh.add_worksheet(title="Quotes_JP", rows=100, cols=10); ws_jp.append_row(["견적명", "날짜", "항목JSON"])
+        except: pass
+        
     return ws_prod, ws_sets
 
 def load_data_from_sheet():
     ws_prod, ws_sets = init_db()
     if not ws_prod: return DEFAULT_DATA
-    data = {"config": {"password": "1234"}, "products": [], "sets": {}}
+    data = {"config": {"password": "1234"}, "products": [], "sets": {}, "jp_quotes": []}
     try:
         prod_records = ws_prod.get_all_records()
         for rec in prod_records:
@@ -257,6 +265,13 @@ def load_data_from_sheet():
             except: rcp = {}
             data["sets"][cat][name] = {"recipe": rcp, "image": rec.get("이미지파일명"), "sub_cat": rec.get("하위분류")}
     except: pass
+    # [추가] 일본 견적 데이터 로드
+    try:
+        sh = gc.open(SHEET_NAME)
+        ws_jp = sh.worksheet("Quotes_JP")
+        data["jp_quotes"] = ws_jp.get_all_records()
+    except: pass
+    
     return data
 
 def save_products_to_sheet(products_list):
@@ -1165,7 +1180,8 @@ with st.sidebar:
             st.session_state.files_ready = False
             st.rerun()
     st.divider()
-    mode = st.radio("모드", ["견적 작성", "관리자 모드"])
+    # [추가] 사이드바 메뉴에 '일본 수출 분석' 추가
+    mode = st.radio("모드", ["견적 작성", "관리자 모드", "🇯🇵 일본 수출 분석"])
 
 if mode == "관리자 모드":
     st.header("🛠 관리자 모드")
@@ -1203,6 +1219,7 @@ if mode == "관리자 모드":
                         "대리점가": st.column_config.NumberColumn(format="%d"),
                         "소비자가": st.column_config.NumberColumn(format="%d"),
                         "단가(현장)": st.column_config.NumberColumn(format="%d"),
+                        "신정공급가": st.column_config.NumberColumn(format="%d", help="일본 수출용 공급가"), # [추가]
                     }
                 )
                 if st.button("💾 변경사항 구글시트에 반영"):
@@ -1449,6 +1466,114 @@ if mode == "관리자 모드":
                          st.session_state.target_set_edit = None
                          st.success("삭제되었습니다."); time.sleep(1); st.rerun()
         with t3: st.write("설정")
+
+# [추가] 일본 수출 분석 모드
+elif mode == "🇯🇵 일본 수출 분석":
+    st.header("🇯🇵 일본 수출 견적 수익성 분석")
+    st.caption("일본 현지 앱에서 저장된 견적 데이터를 불러와 예상 수익을 분석합니다.")
+    
+    if st.button("🔄 데이터 새로고침"):
+        st.session_state.db = load_data_from_sheet()
+        st.rerun()
+
+    jp_quotes = st.session_state.db.get("jp_quotes", [])
+    
+    if not jp_quotes:
+        st.warning("저장된 일본 견적 데이터가 없습니다. (Google Sheet: 'Quotes_JP')")
+    else:
+        # 견적 목록 생성
+        # 가정: Quotes_JP 시트 컬럼은 ['견적명', '날짜', '항목JSON'] 형태라고 가정
+        df_quotes = pd.DataFrame(jp_quotes)
+        if "견적명" in df_quotes.columns:
+            selected_quote_idx = st.selectbox(
+                "분석할 견적을 선택하세요", 
+                range(len(df_quotes)), 
+                format_func=lambda i: f"[{df_quotes.iloc[i].get('날짜','')}] {df_quotes.iloc[i].get('견적명','')}"
+            )
+            
+            if selected_quote_idx is not None:
+                target_quote = df_quotes.iloc[selected_quote_idx]
+                items_json_str = str(target_quote.get("항목JSON", "{}"))
+                try:
+                    items_dict = json.loads(items_json_str)
+                except:
+                    items_dict = {}
+                    st.error("항목 데이터 형식이 올바르지 않습니다.")
+
+                if items_dict:
+                    st.divider()
+                    st.subheader(f"📊 분석 결과: {target_quote.get('견적명')}")
+                    
+                    # 분석 로직 수행
+                    analysis_rows = []
+                    total_revenue = 0 # 매출 (신정공급가 기준)
+                    total_cost = 0    # 원가 (매입단가 기준)
+                    
+                    # DB 매핑 준비
+                    db_map = {str(p.get("code")).strip(): p for p in st.session_state.db["products"]}
+                    
+                    for code, qty in items_dict.items():
+                        qty = int(qty)
+                        prod = db_map.get(str(code).strip())
+                        
+                        if prod:
+                            name = prod.get("name", "")
+                            spec = prod.get("spec", "")
+                            # 신정공급가 (매출)
+                            price_supply = int(prod.get("price_supply_jp", 0) or 0)
+                            # 매입단가 (원가)
+                            price_buy = int(prod.get("price_buy", 0) or 0)
+                            
+                            revenue = price_supply * qty
+                            cost = price_buy * qty
+                            profit = revenue - cost
+                            
+                            total_revenue += revenue
+                            total_cost += cost
+                            
+                            analysis_rows.append({
+                                "품목코드": code,
+                                "품목명": name,
+                                "규격": spec,
+                                "수량": qty,
+                                "공급가(JP)": price_supply,
+                                "매입가": price_buy,
+                                "예상매출": revenue,
+                                "예상원가": cost,
+                                "예상이익": profit
+                            })
+                        else:
+                            # DB에 없는 품목
+                            analysis_rows.append({
+                                "품목코드": code,
+                                "품목명": "미등록 품목",
+                                "규격": "-",
+                                "수량": qty,
+                                "공급가(JP)": 0,
+                                "매입가": 0,
+                                "예상매출": 0,
+                                "예상원가": 0,
+                                "예상이익": 0
+                            })
+
+                    # 요약 지표 출력
+                    total_profit = total_revenue - total_cost
+                    profit_margin = (total_profit / total_revenue * 100) if total_revenue > 0 else 0
+                    
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("총 매출 (공급가)", f"{total_revenue:,} 원")
+                    m2.metric("총 원가 (매입가)", f"{total_cost:,} 원")
+                    m3.metric("예상 이익금", f"{total_profit:,} 원", delta_color="normal")
+                    m4.metric("이익률", f"{profit_margin:.1f} %")
+                    
+                    st.markdown("---")
+                    st.write("###### 상세 내역")
+                    st.dataframe(pd.DataFrame(analysis_rows), use_container_width=True, hide_index=True)
+                    
+                else:
+                    st.info("견적에 포함된 품목이 없습니다.")
+        else:
+            st.error("데이터 형식이 올바르지 않습니다. (Quotes_JP 시트 확인 필요)")
 
 else:
     st.markdown(f"### 📝 현장명: **{st.session_state.current_quote_name if st.session_state.current_quote_name else '(제목 없음)'}**")

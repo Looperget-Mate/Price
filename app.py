@@ -205,14 +205,16 @@ def list_files_in_drive_folder():
 
 # --- 구글 시트 함수 ---
 SHEET_NAME = "Looperget_DB"
+# [수정] 요청된 컬럼 순서 및 추가 항목 반영 (대리점가 분리, 농협 추가)
 COL_MAP = {
     "순번": "seq_no",
     "품목코드": "code", "카테고리": "category", "제품명": "name", "규격": "spec", "단위": "unit", 
     "1롤길이(m)": "len_per_unit", "매입단가": "price_buy", 
-    "총판가1": "price_d1", "총판가2": "price_d2", "대리점가": "price_agy", 
+    "총판가1": "price_d1", "총판가2": "price_d2", 
+    "대리점가1": "price_agy1", "대리점가2": "price_agy2", # [변경] 대리점가 -> 대리점가1, 2
+    "계통농협": "price_nh_sys", "지역농협": "price_nh_loc", # [추가]
     "소비자가": "price_cons", "단가(현장)": "price_site", 
     "이미지데이터": "image",
-    # [추가] 일본 수출 분석을 위한 컬럼 매핑
     "신정공급가": "price_supply_jp"
 }
 REV_COL_MAP = {v: k for k, v in COL_MAP.items()}
@@ -232,7 +234,6 @@ def init_db():
     except: ws_prod = sh.add_worksheet(title="Products", rows=100, cols=20)
     try: ws_sets = sh.worksheet("Sets")
     except: ws_sets = sh.add_worksheet(title="Sets", rows=100, cols=10)
-    # [추가] Quotes_JP 시트 없으면 생성 시도 (데이터 로드 시 에러 방지)
     try: ws_jp = sh.worksheet("Quotes_JP")
     except: 
         try: ws_jp = sh.add_worksheet(title="Quotes_JP", rows=100, cols=10); ws_jp.append_row(["견적명", "날짜", "항목JSON"])
@@ -265,7 +266,6 @@ def load_data_from_sheet():
             except: rcp = {}
             data["sets"][cat][name] = {"recipe": rcp, "image": rec.get("이미지파일명"), "sub_cat": rec.get("하위분류")}
     except: pass
-    # [추가] 일본 견적 데이터 로드
     try:
         sh = gc.open(SHEET_NAME)
         ws_jp = sh.worksheet("Quotes_JP")
@@ -1198,13 +1198,25 @@ if mode == "관리자 모드":
             st.markdown("##### 🔍 제품 및 엑셀 관리")
             with st.expander("📂 부품 데이터 직접 수정 (수정/추가/삭제)", expanded=True):
                 st.info("💡 팁: 표 안에서 직접 내용을 수정하거나, 맨 아래 행에 추가하거나, 행을 선택해 삭제(Del키)할 수 있습니다.")
-                df = pd.DataFrame(st.session_state.db["products"]).rename(columns=REV_COL_MAP)
+                
+                # [수정] 관리자 모드 데이터 로딩 및 보정 로직
+                df = pd.DataFrame(st.session_state.db["products"])
+                
+                # 기존 데이터에 새 컬럼이 없을 경우를 대비해 기본값 채우기 (에러 방지)
+                for key_val in COL_MAP.values():
+                    if key_val not in df.columns:
+                        df[key_val] = 0 if "price" in key_val or "len" in key_val else ""
+
+                df = df.rename(columns=REV_COL_MAP)
                 if "이미지데이터" in df.columns: df["이미지데이터"] = df["이미지데이터"].apply(lambda x: x if x else "")
                 df["순번"] = [f"{i+1:03d}" for i in range(len(df))]
-                cols = list(df.columns)
-                if "순번" in cols:
-                    cols.insert(0, cols.pop(cols.index("순번")))
-                    df = df[cols]
+                
+                # 컬럼 순서 재배열 (COL_MAP 순서대로)
+                desired_order = list(COL_MAP.keys())
+                # 데이터프레임에 존재하는 컬럼만 추려서 순서 맞춤
+                final_cols = [c for c in desired_order if c in df.columns]
+                df = df[final_cols]
+
                 edited_df = st.data_editor(
                     df, 
                     num_rows="dynamic", 
@@ -1216,10 +1228,14 @@ if mode == "관리자 모드":
                         "매입단가": st.column_config.NumberColumn(format="%d"),
                         "총판가1": st.column_config.NumberColumn(format="%d"),
                         "총판가2": st.column_config.NumberColumn(format="%d"),
-                        "대리점가": st.column_config.NumberColumn(format="%d"),
+                        # [변경] 컬럼 설정 업데이트
+                        "대리점가1": st.column_config.NumberColumn(format="%d"),
+                        "대리점가2": st.column_config.NumberColumn(format="%d"),
+                        "계통농협": st.column_config.NumberColumn(format="%d"),
+                        "지역농협": st.column_config.NumberColumn(format="%d"),
                         "소비자가": st.column_config.NumberColumn(format="%d"),
                         "단가(현장)": st.column_config.NumberColumn(format="%d"),
-                        "신정공급가": st.column_config.NumberColumn(format="%d", help="일본 수출용 공급가"), # [추가]
+                        "신정공급가": st.column_config.NumberColumn(format="%d", help="일본 수출용 공급가"),
                     }
                 )
                 if st.button("💾 변경사항 구글시트에 반영"):
@@ -1694,8 +1710,9 @@ else:
         if st.button("⬅️ 1단계(물량수정)로 돌아가기"):
             st.session_state.quote_step = 1
             st.rerun()
+        # [수정] 단가 옵션 업데이트
         view_opts = ["소비자가"]
-        if st.session_state.auth_price: view_opts += ["단가(현장)", "매입가", "총판1", "총판2", "대리점"]
+        if st.session_state.auth_price: view_opts += ["단가(현장)", "매입가", "총판1", "총판2", "대리점1", "대리점2", "계통농협", "지역농협"]
         c_lock, c_view = st.columns([1, 2])
         with c_lock:
             if not st.session_state.auth_price:
@@ -1705,7 +1722,14 @@ else:
                     else: st.error("오류")
             else: st.success("🔓 원가 조회 가능")
         with c_view: view = st.radio("단가 보기", view_opts, horizontal=True)
-        key_map = {"매입가":("price_buy","매입"), "총판1":("price_d1","총판1"), "총판2":("price_d2","총판2"), "대리점":("price_agy","대리점"), "단가(현장)":("price_site", "현장")}
+        # [수정] 키 매핑 업데이트
+        key_map = {
+            "매입가":("price_buy","매입"), 
+            "총판1":("price_d1","총판1"), "총판2":("price_d2","총판2"), 
+            "대리점1":("price_agy1","대리점1"), "대리점2":("price_agy2","대리점2"),
+            "계통농협":("price_nh_sys","계통"), "지역농협":("price_nh_loc","지역"),
+            "단가(현장)":("price_site", "현장")
+        }
         rows = []
         pdb = {}
         for p in st.session_state.db["products"]:
@@ -1770,7 +1794,8 @@ else:
         with c_opt1: form_type = st.radio("양식", ["기본 양식", "이익 분석 양식"])
         with c_opt2:
             basic_opts = ["소비자가", "단가(현장)"]
-            admin_opts = ["매입단가", "총판가1", "총판가2", "대리점가"]
+            # [수정] 어드민 옵션 업데이트
+            admin_opts = ["매입단가", "총판가1", "총판가2", "대리점가1", "대리점가2", "계통농협", "지역농협"]
             opts = basic_opts + (admin_opts if st.session_state.auth_price else [])
             if "이익" in form_type and not st.session_state.auth_price:
                 st.warning("🔒 원가 정보를 보려면 비밀번호를 입력하세요.")
@@ -1787,9 +1812,15 @@ else:
         if "기본" in form_type and len(sel) != 1: st.warning("출력할 단가를 1개 선택해주세요."); st.stop()
         if "이익" in form_type and len(sel) < 2: st.warning("비교할 단가를 2개 선택해주세요."); st.stop()
 
-        price_rank = {"매입단가": 0, "총판가1": 1, "총판가2": 2, "대리점가": 3, "단가(현장)": 4, "소비자가": 5}
-        if sel: sel = sorted(sel, key=lambda x: price_rank.get(x, 6))
-        pkey = {"매입단가":"price_buy", "총판가1":"price_d1", "총판가2":"price_d2", "대리점가":"price_agy", "소비자가":"price_cons", "단가(현장)":"price_site"}
+        # [수정] 정렬 순서 및 키 매핑 업데이트
+        price_rank = {"매입단가": 0, "총판가1": 1, "총판가2": 2, "대리점가1": 3, "대리점가2": 4, "계통농협": 5, "지역농협": 6, "단가(현장)": 7, "소비자가": 8}
+        if sel: sel = sorted(sel, key=lambda x: price_rank.get(x, 9))
+        pkey = {
+            "매입단가":"price_buy", "총판가1":"price_d1", "총판가2":"price_d2", 
+            "대리점가1":"price_agy1", "대리점가2":"price_agy2",
+            "계통농협":"price_nh_sys", "지역농협":"price_nh_loc",
+            "소비자가":"price_cons", "단가(현장)":"price_site"
+        }
         
         # [수정] 옵션 변경 시 데이터 재로딩을 위한 로직 추가
         if "last_sel" not in st.session_state: st.session_state.last_sel = []

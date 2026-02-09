@@ -1266,7 +1266,22 @@ if mode == "관리자 모드":
             ec1, ec2 = st.columns([1, 1])
             with ec1:
                 buf = io.BytesIO()
-                org_df = pd.DataFrame(st.session_state.db["products"]).rename(columns=REV_COL_MAP)
+                # [수정] 현재 정의된 컬럼 구조(COL_MAP)대로 엑셀 생성
+                org_df = pd.DataFrame(st.session_state.db["products"])
+                
+                # 누락된 키 보정 (관리자 모드 에디터와 동일 로직)
+                for eng_key in COL_MAP.values():
+                    if eng_key not in org_df.columns:
+                        # 가격이나 길이 정보는 0, 나머지는 빈 문자열
+                        val = 0 if ("price" in eng_key or "len" in eng_key) else ""
+                        org_df[eng_key] = val
+                
+                org_df = org_df.rename(columns=REV_COL_MAP)
+                
+                # 순서 강제 지정
+                final_cols = [k for k in COL_MAP.keys() if k in org_df.columns]
+                org_df = org_df[final_cols]
+                
                 with pd.ExcelWriter(buf, engine='xlsxwriter') as w: org_df.to_excel(w, index=False)
                 st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")
             with ec2:

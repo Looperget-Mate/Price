@@ -1763,12 +1763,19 @@ else:
                 row["이익"] = row["합계"] - row[f"{l}합계"]
                 row["율(%)"] = (row["이익"]/row["합계"]*100) if row["합계"] else 0
             rows.append(row)
-        df = pd.DataFrame(rows)
+        
+        # [수정] 빈 데이터프레임 처리 (선택 항목 없을 때 오류 방지)
         disp = ["품목", "규격", "수량"]
         if view == "소비자가": disp += ["소비자가", "합계"]
         else: 
             l = key_map[view][1]
             disp += [f"{l}단가", f"{l}합계", "소비자가", "합계", "이익", "율(%)"]
+            
+        if rows:
+            df = pd.DataFrame(rows)
+        else:
+            df = pd.DataFrame(columns=disp)
+            
         st.dataframe(df[disp], use_container_width=True, hide_index=True)
         st.divider()
         col_add_part, col_add_cost = st.columns([1, 1])

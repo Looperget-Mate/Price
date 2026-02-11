@@ -336,20 +336,19 @@ class PDF(FPDF):
         self.set_font(header_font, '', 9)
 
     def footer(self):
-        self.set_y(-25) # [수정] 높이 조정
+        self.set_y(-25) 
         footer_font = 'Helvetica'; footer_style = 'B'
         if os.path.exists(FONT_REGULAR):
             footer_font = 'NanumGothic'
             if os.path.exists(FONT_BOLD): footer_style = 'B'
             else: footer_style = ''
         self.set_font(footer_font, footer_style, 12)
-        # [수정] 하단 회사명 및 웹사이트 주소 변경
         self.cell(0, 5, "주식회사 신진켐텍", align='C', ln=True)
         self.set_font(footer_font, '', 9)
         self.cell(0, 5, "www.sjct.kr", align='C', ln=True)
         self.cell(0, 5, f'Page {self.page_no()}', align='C')
 
-def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, buyer_info, remarks): # [수정] remarks 추가
+def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, buyer_info, remarks):
     drive_file_map = get_drive_file_map()
     pdf = PDF()
     pdf.set_auto_page_break(False) 
@@ -373,7 +372,6 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     pdf.cell(half_w, h_line, "  [공급자]", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
     pdf.set_font(font_name, '', 9)
     
-    # [수정] 팩스 번호 변경
     buy_lines = [f" 상호(현장): {quote_name}", f" 담당자: {buyer_info.get('manager', '')}", f" 연락처: {buyer_info.get('phone', '')}", f" 주소: {buyer_info.get('addr', '')}", ""]
     sell_lines = [" 상호: 주식회사 신진켐텍", " 대표자: 박형석 (인)", " 주소: 경기도 이천시 부발읍 황무로 1859-157", " 전화: 031-638-1809 / 팩스: 031-635-1801", " 이메일: support@sjct.kr / 홈페이지: www.sjct.kr"]
     for b, s in zip(buy_lines, sell_lines):
@@ -517,7 +515,6 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     if pdf.get_y() + 30 > 270:
         pdf.add_page()
     
-    # [수정] 고정 텍스트 대신 remarks 변수 출력 (multi_cell)
     pdf.multi_cell(0, 5, remarks, align='R')
     pdf.ln(2)
 
@@ -536,7 +533,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         
     return bytes(pdf.output())
 
-def create_quote_excel(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, buyer_info, remarks): # [수정] remarks 추가
+def create_quote_excel(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, buyer_info, remarks):
     output = io.BytesIO()
     workbook = xlsxwriter.Workbook(output, {'in_memory': True})
     ws = workbook.add_worksheet("견적서")
@@ -677,7 +674,6 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
     col_idx = 5 if form_type == "basic" else 7
     ws.write(row, col_idx, final_sum, fmt_num)
 
-    # [수정] 특약사항 추가 (Excel)
     row += 2
     ws.write(row, 1, "특약사항 및 비고", fmt_header)
     row += 1
@@ -723,7 +719,6 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
             qty = math.ceil(total_len / unit_len)
             baseline_counts[str(p_code)] = baseline_counts.get(str(p_code), 0) + qty
 
-    # 수기 품목(코드가 없는 경우) 및 추가 자재 처리
     additional_items_list = []
     temp_baseline = baseline_counts.copy()
 
@@ -747,7 +742,6 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
             else:
                 temp_baseline[code] -= total_qty
         else:
-            # 수기 품목이거나 세트/배관에 포함되지 않은 단독 품목
             if total_qty > 0:
                 additional_items_list.append({
                     "name": name, "spec": spec, "qty": total_qty, 
@@ -773,7 +767,6 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
     row_h = 35 
     header_h = 8
     
-    # [수정] 칸 너비 조정 (IMG 35->50, Name 85->70)
     col_w_img = 50
     col_w_name = 70
     col_w_type = 40
@@ -808,7 +801,6 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(img_bytes); tmp_path = tmp.name
                 
-                # 이미지 중앙 정렬 (x + (50 - 37.5)/2)
                 pdf.image(tmp_path, x=x+6.25, y=y+2.5, w=37.5, h=30)
                 os.unlink(tmp_path)
             except: pass
@@ -1097,7 +1089,8 @@ def create_composition_excel(set_cart, pipe_cart, final_data_list, db_products, 
         ws2.write(row, 3, rolls, fmt_center)
         row += 1
 
-    if additional_items:
+    # [수정] Correct variable reference for Excel logic
+    if additional_items_list:
         ws_add = workbook.add_worksheet("추가자재")
         ws_add.write(0, 0, "이미지", fmt_header)
         ws_add.write(0, 1, "품목명", fmt_header)
@@ -1107,17 +1100,15 @@ def create_composition_excel(set_cart, pipe_cart, final_data_list, db_products, 
         ws_add.set_column(1, 1, 30)
         
         row = 1
-        for code, qty in additional_items.items():
+        for item in additional_items_list:
             ws_add.set_row(row, 80)
-            prod_info = next((item for item in db_products if str(item["code"]) == str(code)), None)
-            name = prod_info.get('name', code) if prod_info else code
-            spec = prod_info.get('spec', '-') if prod_info else '-'
-            img_val = prod_info.get('image') if prod_info else None
+            img_val = item.get('image')
+            code = item.get('code')
             
             insert_scaled_image(ws_add, row, 0, download_image_by_id(get_best_image_id(code, img_val, drive_file_map)))
-            ws_add.write(row, 1, name, fmt_left)
-            ws_add.write(row, 2, spec, fmt_center)
-            ws_add.write(row, 3, qty, fmt_center)
+            ws_add.write(row, 1, item['name'], fmt_left)
+            ws_add.write(row, 2, item['spec'], fmt_center)
+            ws_add.write(row, 3, item['qty'], fmt_center)
             row += 1
 
     ws3 = workbook.add_worksheet("전체자재")
@@ -1129,16 +1120,18 @@ def create_composition_excel(set_cart, pipe_cart, final_data_list, db_products, 
     ws3.set_column(1, 1, 30)
 
     row = 1
-    for code, qty in quote_items.items():
+    for item in final_data_list:
+        try: qty = int(float(item.get("수량", 0)))
+        except: qty = 0
+        if qty == 0: continue
+        
         ws3.set_row(row, 80)
-        prod_info = next((item for item in db_products if str(item["code"]) == str(code)), None)
-        name = prod_info.get('name', code) if prod_info else code
-        spec = prod_info.get('spec', '-') if prod_info else '-'
-        img_val = prod_info.get('image') if prod_info else None
+        code = item.get("코드", "")
+        img_val = item.get("image_data")
         
         insert_scaled_image(ws3, row, 0, download_image_by_id(get_best_image_id(code, img_val, drive_file_map)))
-        ws3.write(row, 1, name, fmt_left)
-        ws3.write(row, 2, spec, fmt_center)
+        ws3.write(row, 1, item.get("품목", ""), fmt_left)
+        ws3.write(row, 2, item.get("규격", "-"), fmt_center)
         ws3.write(row, 3, qty, fmt_center)
         row += 1
 
@@ -2072,12 +2065,34 @@ else:
                     fmode = "basic" if "기본" in form_type else "profit"
                     safe_data = edited.fillna(0).to_dict('records')
                     
-                    st.session_state.gen_pdf = create_advanced_pdf(safe_data, st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info, st.session_state.quote_remarks) # [수정] remarks 전달
-                    st.session_state.gen_excel = create_quote_excel(safe_data, st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info, st.session_state.quote_remarks) # [수정] remarks 전달
+                    # [수정] 견적서 생성 시 정렬 로직 적용
+                    # 1. 단가 >= 20,000인 품목 (고가순 정렬)
+                    # 2. 그 외 품목 (가나다순 정렬)
+                    high_value_items = []
+                    normal_items = []
                     
-                    # [수정] create_composition_pdf/excel 호출 시 st.session_state.quote_items 대신 safe_data(수기 품목 포함됨) 전달
-                    st.session_state.gen_comp_pdf = create_composition_pdf(st.session_state.set_cart, st.session_state.pipe_cart, safe_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
-                    st.session_state.gen_comp_excel = create_composition_excel(st.session_state.set_cart, st.session_state.pipe_cart, safe_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
+                    for item in safe_data:
+                        try: price = int(float(item.get('price_1', 0)))
+                        except: price = 0
+                        
+                        if price >= 20000:
+                            high_value_items.append(item)
+                        else:
+                            normal_items.append(item)
+                            
+                    # 정렬 수행
+                    high_value_items.sort(key=lambda x: int(float(x.get('price_1', 0))), reverse=True)
+                    normal_items.sort(key=lambda x: str(x.get('품목', '')))
+                    
+                    # 리스트 병합
+                    sorted_final_data = high_value_items + normal_items
+                    
+                    st.session_state.gen_pdf = create_advanced_pdf(sorted_final_data, st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info, st.session_state.quote_remarks)
+                    st.session_state.gen_excel = create_quote_excel(sorted_final_data, st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info, st.session_state.quote_remarks)
+                    
+                    # [수정] create_composition_pdf/excel 호출 시 st.session_state.quote_items 대신 safe_data(수기 품목 포함됨) 전달 -> 정렬된 데이터 사용 (선택사항이나 일관성을 위해)
+                    st.session_state.gen_comp_pdf = create_composition_pdf(st.session_state.set_cart, st.session_state.pipe_cart, sorted_final_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
+                    st.session_state.gen_comp_excel = create_composition_excel(st.session_state.set_cart, st.session_state.pipe_cart, sorted_final_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
                     
                     st.session_state.files_ready = True
                 st.rerun()

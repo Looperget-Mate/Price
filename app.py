@@ -205,14 +205,13 @@ def list_files_in_drive_folder():
 
 # --- 구글 시트 함수 ---
 SHEET_NAME = "Looperget_DB"
-# [수정] 요청된 컬럼 순서 및 추가 항목 반영 (대리점가 분리, 농협 추가)
 COL_MAP = {
     "순번": "seq_no",
     "품목코드": "code", "카테고리": "category", "제품명": "name", "규격": "spec", "단위": "unit", 
     "1롤길이(m)": "len_per_unit", "매입단가": "price_buy", 
     "총판가1": "price_d1", "총판가2": "price_d2", 
-    "대리점가1": "price_agy1", "대리점가2": "price_agy2", # [변경] 대리점가 -> 대리점가1, 2
-    "계통농협": "price_nh_sys", "지역농협": "price_nh_loc", # [추가]
+    "대리점가1": "price_agy1", "대리점가2": "price_agy2", 
+    "계통농협": "price_nh_sys", "지역농협": "price_nh_loc", 
     "소비자가": "price_cons", "단가(현장)": "price_site", 
     "이미지데이터": "image",
     "신정공급가": "price_supply_jp"
@@ -238,13 +237,19 @@ def init_db():
     except: 
         try: ws_jp = sh.add_worksheet(title="Quotes_JP", rows=100, cols=10); ws_jp.append_row(["견적명", "날짜", "항목JSON"])
         except: pass
+    
+    # [추가] Quotes_KR 시트 생성/연결
+    try: ws_kr = sh.worksheet("Quotes_KR")
+    except:
+        try: ws_kr = sh.add_worksheet(title="Quotes_KR", rows=100, cols=10); ws_kr.append_row(['날짜', '현장명', '담당자', '총액', '데이터JSON'])
+        except: pass
         
     return ws_prod, ws_sets
 
 def load_data_from_sheet():
     ws_prod, ws_sets = init_db()
     if not ws_prod: return DEFAULT_DATA
-    data = {"config": {"password": "1234"}, "products": [], "sets": {}, "jp_quotes": []}
+    data = {"config": {"password": "1234"}, "products": [], "sets": {}, "jp_quotes": [], "kr_quotes": []}
     try:
         prod_records = ws_prod.get_all_records()
         for rec in prod_records:
@@ -270,6 +275,13 @@ def load_data_from_sheet():
         sh = gc.open(SHEET_NAME)
         ws_jp = sh.worksheet("Quotes_JP")
         data["jp_quotes"] = ws_jp.get_all_records()
+    except: pass
+    
+    # [추가] 한국 견적 데이터 로드
+    try:
+        sh = gc.open(SHEET_NAME)
+        ws_kr = sh.worksheet("Quotes_KR")
+        data["kr_quotes"] = ws_kr.get_all_records()
     except: pass
     
     return data
@@ -300,6 +312,17 @@ def save_sets_to_sheet(sets_dict):
 def format_prod_label(option):
     if isinstance(option, dict): return f"[{option.get('code','00000')}] {option.get('name','')} ({option.get('spec','-')})"
     return str(option)
+
+# [추가] 구글 시트에 견적 저장하는 헬퍼 함수
+def save_quote_to_sheet(timestamp, q_name, manager, total, json_data):
+    if not gc: return False
+    try:
+        sh = gc.open(SHEET_NAME)
+        ws_kr = sh.worksheet("Quotes_KR")
+        ws_kr.append_row([str(timestamp), str(q_name), str(manager), int(total), json_data])
+        return True
+    except Exception as e:
+        return False
 
 # ==========================================
 # 2. PDF 및 Excel 생성 엔진
@@ -1160,25 +1183,81 @@ with st.sidebar:
     c1, c2 = st.columns(2)
     with c1:
         if st.button("💾 임시저장"):
-            st.session_state.history[q_name] = {"items": st.session_state.quote_items, "services": st.session_state.services, "pipe_cart": st.session_state.pipe_cart, "set_cart": st.session_state.set_cart, "step": st.session_state.quote_step, "buyer": st.session_state.buyer_info}
-            st.session_state.current_quote_name = q_name; st.success("저장됨")
+            # [수정] 구글 시트 저장 로직 (Quotes_KR)
+            if not q_name:
+                st.error("현장명을 입력해주세요.")
+            else:
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                # 견적 내용 전체 JSON 직렬화
+                save_data = {
+                    "items": st.session_state.quote_items,
+                    "services": st.session_state.services,
+                    "pipe_cart": st.session_state.pipe_cart,
+                    "set_cart": st.session_state.set_cart,
+                    "step": st.session_state.quote_step,
+                    "buyer": st.session_state.buyer_info
+                }
+                
+                # 예상 총액 계산 (단순 합산)
+                est_total = 0
+                pdb = {str(p.get("code")).strip(): p for p in st.session_state.db["products"]}
+                for code, qty in st.session_state.quote_items.items():
+                    prod = pdb.get(str(code).strip())
+                    if prod:
+                        est_total += int(prod.get("price_cons", 0) or 0) * int(qty)
+                
+                json_str = json.dumps(save_data, ensure_ascii=False)
+                
+                if save_quote_to_sheet(timestamp, q_name, st.session_state.buyer_info.get("manager", ""), est_total, json_str):
+                    st.session_state.db = load_data_from_sheet() # 목록 갱신
+                    st.session_state.current_quote_name = q_name
+                    st.success("구글 시트에 저장되었습니다.")
+                else:
+                    st.error("저장 실패 (네트워크 오류)")
+
     with c2:
         if st.button("✨ 초기화"):
             st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.pipe_cart = []; st.session_state.set_cart = []; st.session_state.quote_step = 1
             st.session_state.current_quote_name = ""; st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}; st.session_state.step3_ready=False; st.session_state.files_ready = False; st.rerun()
     st.divider()
-    h_list = list(st.session_state.history.keys())[::-1]
-    if h_list:
-        sel_h = st.selectbox("불러오기", h_list)
+    
+    # [수정] 구글 시트 데이터 기반 불러오기
+    kr_quotes = st.session_state.db.get("kr_quotes", [])
+    if kr_quotes:
+        # 역순 정렬 (최신순)
+        df_kr = pd.DataFrame(kr_quotes).iloc[::-1]
+        
+        # Selectbox 라벨 포맷: [날짜] 현장명 (담당자)
+        sel_idx = st.selectbox(
+            "불러오기 (구글 시트)", 
+            range(len(df_kr)), 
+            format_func=lambda i: f"[{df_kr.iloc[i].get('날짜','')}] {df_kr.iloc[i].get('현장명','')} ({df_kr.iloc[i].get('담당자','')})"
+        )
+        
         if st.button("📂 로드"):
-            d = st.session_state.history[sel_h]
-            st.session_state.quote_items = d["items"]; st.session_state.services = d["services"]; st.session_state.pipe_cart = d.get("pipe_cart", []); st.session_state.set_cart = d.get("set_cart", [])
-            st.session_state.quote_step = d.get("step", 2)
-            st.session_state.buyer_info = d.get("buyer", {"manager": "", "phone": "", "addr": ""})
-            st.session_state.current_quote_name = sel_h
-            st.session_state.step3_ready = False
-            st.session_state.files_ready = False
-            st.rerun()
+            try:
+                target_row = df_kr.iloc[sel_idx]
+                json_str = target_row.get("데이터JSON", "{}")
+                d = json.loads(json_str)
+                
+                st.session_state.quote_items = d.get("items", {})
+                st.session_state.services = d.get("services", [])
+                st.session_state.pipe_cart = d.get("pipe_cart", [])
+                st.session_state.set_cart = d.get("set_cart", [])
+                st.session_state.quote_step = d.get("step", 2)
+                st.session_state.buyer_info = d.get("buyer", {"manager": "", "phone": "", "addr": ""})
+                st.session_state.current_quote_name = target_row.get("현장명", "")
+                
+                st.session_state.step3_ready = False
+                st.session_state.files_ready = False
+                st.success(f"'{st.session_state.current_quote_name}' 불러오기 완료!")
+                time.sleep(0.5)
+                st.rerun()
+            except Exception as e:
+                st.error(f"불러오기 실패: {e}")
+    else:
+        st.info("저장된 견적이 없습니다.")
+        
     st.divider()
     # [추가] 사이드바 메뉴에 '일본 수출 분석' 추가
     mode = st.radio("모드", ["견적 작성", "관리자 모드", "🇯🇵 일본 수출 분석"])
@@ -1198,13 +1277,25 @@ if mode == "관리자 모드":
             st.markdown("##### 🔍 제품 및 엑셀 관리")
             with st.expander("📂 부품 데이터 직접 수정 (수정/추가/삭제)", expanded=True):
                 st.info("💡 팁: 표 안에서 직접 내용을 수정하거나, 맨 아래 행에 추가하거나, 행을 선택해 삭제(Del키)할 수 있습니다.")
-                df = pd.DataFrame(st.session_state.db["products"]).rename(columns=REV_COL_MAP)
+                
+                # [수정] 관리자 모드 데이터 로딩 및 보정 로직
+                df = pd.DataFrame(st.session_state.db["products"])
+                
+                # 기존 데이터에 새 컬럼이 없을 경우를 대비해 기본값 채우기 (에러 방지)
+                for key_val in COL_MAP.values():
+                    if key_val not in df.columns:
+                        df[key_val] = 0 if "price" in key_val or "len" in key_val else ""
+
+                df = df.rename(columns=REV_COL_MAP)
                 if "이미지데이터" in df.columns: df["이미지데이터"] = df["이미지데이터"].apply(lambda x: x if x else "")
                 df["순번"] = [f"{i+1:03d}" for i in range(len(df))]
-                cols = list(df.columns)
-                if "순번" in cols:
-                    cols.insert(0, cols.pop(cols.index("순번")))
-                    df = df[cols]
+                
+                # 컬럼 순서 재배열 (COL_MAP 순서대로)
+                desired_order = list(COL_MAP.keys())
+                # 데이터프레임에 존재하는 컬럼만 추려서 순서 맞춤
+                final_cols = [c for c in desired_order if c in df.columns]
+                df = df[final_cols]
+
                 edited_df = st.data_editor(
                     df, 
                     num_rows="dynamic", 
@@ -1216,10 +1307,14 @@ if mode == "관리자 모드":
                         "매입단가": st.column_config.NumberColumn(format="%d"),
                         "총판가1": st.column_config.NumberColumn(format="%d"),
                         "총판가2": st.column_config.NumberColumn(format="%d"),
-                        "대리점가": st.column_config.NumberColumn(format="%d"),
+                        # [변경] 컬럼 설정 업데이트
+                        "대리점가1": st.column_config.NumberColumn(format="%d"),
+                        "대리점가2": st.column_config.NumberColumn(format="%d"),
+                        "계통농협": st.column_config.NumberColumn(format="%d"),
+                        "지역농협": st.column_config.NumberColumn(format="%d"),
                         "소비자가": st.column_config.NumberColumn(format="%d"),
                         "단가(현장)": st.column_config.NumberColumn(format="%d"),
-                        "신정공급가": st.column_config.NumberColumn(format="%d", help="일본 수출용 공급가"), # [추가]
+                        "신정공급가": st.column_config.NumberColumn(format="%d", help="일본 수출용 공급가"),
                     }
                 )
                 if st.button("💾 변경사항 구글시트에 반영"):
@@ -1250,7 +1345,22 @@ if mode == "관리자 모드":
             ec1, ec2 = st.columns([1, 1])
             with ec1:
                 buf = io.BytesIO()
-                org_df = pd.DataFrame(st.session_state.db["products"]).rename(columns=REV_COL_MAP)
+                # [수정] 현재 정의된 컬럼 구조(COL_MAP)대로 엑셀 생성
+                org_df = pd.DataFrame(st.session_state.db["products"])
+                
+                # 누락된 키 보정 (관리자 모드 에디터와 동일 로직)
+                for eng_key in COL_MAP.values():
+                    if eng_key not in org_df.columns:
+                        # 가격이나 길이 정보는 0, 나머지는 빈 문자열
+                        val = 0 if ("price" in eng_key or "len" in eng_key) else ""
+                        org_df[eng_key] = val
+                
+                org_df = org_df.rename(columns=REV_COL_MAP)
+                
+                # 순서 강제 지정
+                final_cols = [k for k in COL_MAP.keys() if k in org_df.columns]
+                org_df = org_df[final_cols]
+                
                 with pd.ExcelWriter(buf, engine='xlsxwriter') as w: org_df.to_excel(w, index=False)
                 st.download_button("엑셀 다운로드", buf.getvalue(), "products.xlsx")
             with ec2:

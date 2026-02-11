@@ -238,7 +238,6 @@ def init_db():
         try: ws_jp = sh.add_worksheet(title="Quotes_JP", rows=100, cols=10); ws_jp.append_row(["견적명", "날짜", "항목JSON"])
         except: pass
     
-    # [추가] Quotes_KR 시트 생성/연결
     try: ws_kr = sh.worksheet("Quotes_KR")
     except:
         try: ws_kr = sh.add_worksheet(title="Quotes_KR", rows=100, cols=10); ws_kr.append_row(['날짜', '현장명', '담당자', '총액', '데이터JSON'])
@@ -276,8 +275,6 @@ def load_data_from_sheet():
         ws_jp = sh.worksheet("Quotes_JP")
         data["jp_quotes"] = ws_jp.get_all_records()
     except: pass
-    
-    # [추가] 한국 견적 데이터 로드
     try:
         sh = gc.open(SHEET_NAME)
         ws_kr = sh.worksheet("Quotes_KR")
@@ -313,7 +310,6 @@ def format_prod_label(option):
     if isinstance(option, dict): return f"[{option.get('code','00000')}] {option.get('name','')} ({option.get('spec','-')})"
     return str(option)
 
-# [추가] 구글 시트에 견적 저장하는 헬퍼 함수
 def save_quote_to_sheet(timestamp, q_name, manager, total, json_data):
     if not gc: return False
     try:
@@ -340,22 +336,20 @@ class PDF(FPDF):
         self.set_font(header_font, '', 9)
 
     def footer(self):
-        self.set_y(-20)
+        self.set_y(-25) # [수정] 높이 조정
         footer_font = 'Helvetica'; footer_style = 'B'
         if os.path.exists(FONT_REGULAR):
-            self.add_font('NanumGothic', '', FONT_REGULAR)
+            footer_font = 'NanumGothic'
             if os.path.exists(FONT_BOLD): footer_style = 'B'
             else: footer_style = ''
         self.set_font(footer_font, footer_style, 12)
-        if footer_font == 'NanumGothic':
-            self.cell(0, 8, "주식회사 신진켐텍", align='C', ln=True)
-            self.set_font('NanumGothic', '', 8)
-        else:
-            self.cell(0, 8, "SHIN JIN CHEMTECH Co., Ltd.", align='C', ln=True)
-            self.set_font('Helvetica', 'I', 8)
+        # [수정] 하단 회사명 및 웹사이트 주소 변경
+        self.cell(0, 5, "주식회사 신진켐텍", align='C', ln=True)
+        self.set_font(footer_font, '', 9)
+        self.cell(0, 5, "www.sjct.kr", align='C', ln=True)
         self.cell(0, 5, f'Page {self.page_no()}', align='C')
 
-def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, buyer_info):
+def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, buyer_info, remarks): # [수정] remarks 추가
     drive_file_map = get_drive_file_map()
     pdf = PDF()
     pdf.set_auto_page_break(False) 
@@ -379,8 +373,9 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     pdf.cell(half_w, h_line, "  [공급자]", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
     pdf.set_font(font_name, '', 9)
     
+    # [수정] 팩스 번호 변경
     buy_lines = [f" 상호(현장): {quote_name}", f" 담당자: {buyer_info.get('manager', '')}", f" 연락처: {buyer_info.get('phone', '')}", f" 주소: {buyer_info.get('addr', '')}", ""]
-    sell_lines = [" 상호: 주식회사 신진켐텍", " 대표자: 박형석 (인)", " 주소: 경기도 이천시 부발읍 황무로 1859-157", " 전화: 031-638-1809 / 팩스: 031-638-1810", " 이메일: support@sjct.kr / 홈페이지: www.sjct.kr"]
+    sell_lines = [" 상호: 주식회사 신진켐텍", " 대표자: 박형석 (인)", " 주소: 경기도 이천시 부발읍 황무로 1859-157", " 전화: 031-638-1809 / 팩스: 031-635-1801", " 이메일: support@sjct.kr / 홈페이지: www.sjct.kr"]
     for b, s in zip(buy_lines, sell_lines):
         cur_y = pdf.get_y()
         pdf.set_xy(x_start, cur_y); pdf.cell(half_w, h_line, " " + b, border=1)
@@ -522,8 +517,8 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     if pdf.get_y() + 30 > 270:
         pdf.add_page()
     
-    pdf.cell(0, 5, "1. 견적 유효기간: 견적일로부터 15일 이내", ln=True, align='R')
-    pdf.cell(0, 5, "2. 출고: 결재 완료 후 즉시 또는 7일 이내", ln=True, align='R')
+    # [수정] 고정 텍스트 대신 remarks 변수 출력 (multi_cell)
+    pdf.multi_cell(0, 5, remarks, align='R')
     pdf.ln(2)
 
     if form_type == "basic":
@@ -541,7 +536,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         
     return bytes(pdf.output())
 
-def create_quote_excel(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, buyer_info):
+def create_quote_excel(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, buyer_info, remarks): # [수정] remarks 추가
     output = io.BytesIO()
     workbook = xlsxwriter.Workbook(output, {'in_memory': True})
     ws = workbook.add_worksheet("견적서")
@@ -681,6 +676,12 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
     final_sum = (total_a1 if form_type == "basic" else total_a2) + svc_total
     col_idx = 5 if form_type == "basic" else 7
     ws.write(row, col_idx, final_sum, fmt_num)
+
+    # [수정] 특약사항 추가 (Excel)
+    row += 2
+    ws.write(row, 1, "특약사항 및 비고", fmt_header)
+    row += 1
+    ws.write(row, 1, remarks, fmt_text_wrap)
 
     workbook.close()
     
@@ -1096,7 +1097,7 @@ def create_composition_excel(set_cart, pipe_cart, final_data_list, db_products, 
         ws2.write(row, 3, rolls, fmt_center)
         row += 1
 
-    if additional_items_list:
+    if additional_items:
         ws_add = workbook.add_worksheet("추가자재")
         ws_add.write(0, 0, "이미지", fmt_header)
         ws_add.write(0, 1, "품목명", fmt_header)
@@ -1106,15 +1107,17 @@ def create_composition_excel(set_cart, pipe_cart, final_data_list, db_products, 
         ws_add.set_column(1, 1, 30)
         
         row = 1
-        for item in additional_items_list:
+        for code, qty in additional_items.items():
             ws_add.set_row(row, 80)
-            img_val = item.get('image')
-            code = item.get('code')
+            prod_info = next((item for item in db_products if str(item["code"]) == str(code)), None)
+            name = prod_info.get('name', code) if prod_info else code
+            spec = prod_info.get('spec', '-') if prod_info else '-'
+            img_val = prod_info.get('image') if prod_info else None
             
             insert_scaled_image(ws_add, row, 0, download_image_by_id(get_best_image_id(code, img_val, drive_file_map)))
-            ws_add.write(row, 1, item['name'], fmt_left)
-            ws_add.write(row, 2, item['spec'], fmt_center)
-            ws_add.write(row, 3, item['qty'], fmt_center)
+            ws_add.write(row, 1, name, fmt_left)
+            ws_add.write(row, 2, spec, fmt_center)
+            ws_add.write(row, 3, qty, fmt_center)
             row += 1
 
     ws3 = workbook.add_worksheet("전체자재")
@@ -1126,18 +1129,16 @@ def create_composition_excel(set_cart, pipe_cart, final_data_list, db_products, 
     ws3.set_column(1, 1, 30)
 
     row = 1
-    for item in final_data_list:
-        try: qty = int(float(item.get("수량", 0)))
-        except: qty = 0
-        if qty == 0: continue
-        
+    for code, qty in quote_items.items():
         ws3.set_row(row, 80)
-        code = item.get("코드", "")
-        img_val = item.get("image_data")
+        prod_info = next((item for item in db_products if str(item["code"]) == str(code)), None)
+        name = prod_info.get('name', code) if prod_info else code
+        spec = prod_info.get('spec', '-') if prod_info else '-'
+        img_val = prod_info.get('image') if prod_info else None
         
         insert_scaled_image(ws3, row, 0, download_image_by_id(get_best_image_id(code, img_val, drive_file_map)))
-        ws3.write(row, 1, item.get("품목", ""), fmt_left)
-        ws3.write(row, 2, item.get("규격", "-"), fmt_center)
+        ws3.write(row, 1, name, fmt_left)
+        ws3.write(row, 2, spec, fmt_center)
         ws3.write(row, 3, qty, fmt_center)
         row += 1
 
@@ -1171,6 +1172,10 @@ if "gen_excel" not in st.session_state: st.session_state.gen_excel = None
 if "gen_comp_pdf" not in st.session_state: st.session_state.gen_comp_pdf = None
 if "gen_comp_excel" not in st.session_state: st.session_state.gen_comp_excel = None
 
+# [추가] 특약사항 상태 초기화
+if "quote_remarks" not in st.session_state: 
+    st.session_state.quote_remarks = "1. 견적 유효기간: 견적일로부터 15일 이내\n2. 출고: 결재 완료 후 즉시 또는 7일 이내"
+
 DEFAULT_DATA = {"config": {"password": "1234"}, "products":[], "sets":{}}
 if not st.session_state.db: st.session_state.db = DEFAULT_DATA
 if "config" not in st.session_state.db: st.session_state.db["config"] = {"password": "1234"}
@@ -1195,7 +1200,8 @@ with st.sidebar:
                     "pipe_cart": st.session_state.pipe_cart,
                     "set_cart": st.session_state.set_cart,
                     "step": st.session_state.quote_step,
-                    "buyer": st.session_state.buyer_info
+                    "buyer": st.session_state.buyer_info,
+                    "remarks": st.session_state.quote_remarks # [추가] 특약사항 저장
                 }
                 
                 # 예상 총액 계산 (단순 합산)
@@ -1218,7 +1224,10 @@ with st.sidebar:
     with c2:
         if st.button("✨ 초기화"):
             st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.pipe_cart = []; st.session_state.set_cart = []; st.session_state.quote_step = 1
-            st.session_state.current_quote_name = ""; st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}; st.session_state.step3_ready=False; st.session_state.files_ready = False; st.rerun()
+            st.session_state.current_quote_name = ""; st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}; st.session_state.step3_ready=False; st.session_state.files_ready = False
+            # [추가] 초기화 시 특약사항도 기본값으로 복구
+            st.session_state.quote_remarks = "1. 견적 유효기간: 견적일로부터 15일 이내\n2. 출고: 결재 완료 후 즉시 또는 7일 이내"
+            st.rerun()
     st.divider()
     
     # [수정] 구글 시트 데이터 기반 불러오기
@@ -1246,6 +1255,8 @@ with st.sidebar:
                 st.session_state.set_cart = d.get("set_cart", [])
                 st.session_state.quote_step = d.get("step", 2)
                 st.session_state.buyer_info = d.get("buyer", {"manager": "", "phone": "", "addr": ""})
+                # [추가] 특약사항 불러오기 (없으면 기본값)
+                st.session_state.quote_remarks = d.get("remarks", "1. 견적 유효기간: 견적일로부터 15일 이내\n2. 출고: 결재 완료 후 즉시 또는 7일 이내")
                 st.session_state.current_quote_name = target_row.get("현장명", "")
                 
                 st.session_state.step3_ready = False
@@ -2061,8 +2072,8 @@ else:
                     fmode = "basic" if "기본" in form_type else "profit"
                     safe_data = edited.fillna(0).to_dict('records')
                     
-                    st.session_state.gen_pdf = create_advanced_pdf(safe_data, st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info)
-                    st.session_state.gen_excel = create_quote_excel(safe_data, st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info)
+                    st.session_state.gen_pdf = create_advanced_pdf(safe_data, st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info, st.session_state.quote_remarks) # [수정] remarks 전달
+                    st.session_state.gen_excel = create_quote_excel(safe_data, st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info, st.session_state.quote_remarks) # [수정] remarks 전달
                     
                     # [수정] create_composition_pdf/excel 호출 시 st.session_state.quote_items 대신 safe_data(수기 품목 포함됨) 전달
                     st.session_state.gen_comp_pdf = create_composition_pdf(st.session_state.set_cart, st.session_state.pipe_cart, safe_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
@@ -2088,6 +2099,17 @@ else:
                     st.download_button("📊 자재명세 엑셀", st.session_state.gen_comp_excel, f"composition_{st.session_state.current_quote_name}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
             else:
                 st.info("👆 위 버튼을 눌러 파일을 생성해주세요. (데이터 수정 시 다시 생성해야 합니다)")
+        
+        # [수정] 특약사항 입력 필드 추가
+        st.write("")
+        st.markdown("##### 📝 특약사항 및 비고 (수정 가능)")
+        st.session_state.quote_remarks = st.text_area(
+            "특약사항", 
+            value=st.session_state.quote_remarks, 
+            height=100, 
+            label_visibility="collapsed"
+        )
+
 
         c1, c2 = st.columns(2)
         with c1: 

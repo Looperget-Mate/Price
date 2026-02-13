@@ -719,6 +719,7 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
             qty = math.ceil(total_len / unit_len)
             baseline_counts[str(p_code)] = baseline_counts.get(str(p_code), 0) + qty
 
+    # 수기 품목(코드가 없는 경우) 및 추가 자재 처리
     additional_items_list = []
     temp_baseline = baseline_counts.copy()
 
@@ -742,6 +743,7 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
             else:
                 temp_baseline[code] -= total_qty
         else:
+            # 수기 품목이거나 세트/배관에 포함되지 않은 단독 품목
             if total_qty > 0:
                 additional_items_list.append({
                     "name": name, "spec": spec, "qty": total_qty, 
@@ -1089,7 +1091,6 @@ def create_composition_excel(set_cart, pipe_cart, final_data_list, db_products, 
         ws2.write(row, 3, rolls, fmt_center)
         row += 1
 
-    # [수정] Correct variable reference for Excel logic
     if additional_items_list:
         ws_add = workbook.add_worksheet("추가자재")
         ws_add.write(0, 0, "이미지", fmt_header)
@@ -1264,7 +1265,7 @@ with st.sidebar:
         
     st.divider()
     # [추가] 사이드바 메뉴에 '일본 수출 분석' 추가
-    mode = st.radio("모드", ["견적 작성", "관리자 모드", "🇯🇵 일본 수출 분석"])
+    mode = st.radio("모드", ["견적 작성", "관리자 모드", "🇯濒 일본 수출 분석"])
 
 if mode == "관리자 모드":
     st.header("🛠 관리자 모드")
@@ -1906,7 +1907,9 @@ else:
         st.markdown("##### 🖨️ 출력 옵션")
         c_date, c_opt1, c_opt2 = st.columns([1, 1, 1])
         with c_date: q_date = st.date_input("견적일", datetime.datetime.now())
-        with c_opt1: form_type = st.radio("양식", ["기본 양식", "이익 분석 양식"])
+        with c_opt1: 
+            form_type = st.radio("양식", ["기본 양식", "이익 분석 양식"])
+            print_mode = st.radio("출력 형태", ["개별 품목 나열 (기존)", "세트 단위 묶음 (신규)"]) # [추가] 출력 형태 선택
         with c_opt2:
             basic_opts = ["소비자가", "단가(현장)"]
             # [수정] 어드민 옵션 업데이트
@@ -2065,34 +2068,99 @@ else:
                     fmode = "basic" if "기본" in form_type else "profit"
                     safe_data = edited.fillna(0).to_dict('records')
                     
-                    # [수정] 견적서 생성 시 정렬 로직 적용
-                    # 1. 단가 >= 20,000인 품목 (고가순 정렬)
-                    # 2. 그 외 품목 (가나다순 정렬)
-                    high_value_items = []
-                    normal_items = []
-                    
-                    for item in safe_data:
-                        try: price = int(float(item.get('price_1', 0)))
-                        except: price = 0
+                    def sort_items(item_list):
+                        high = [x for x in item_list if int(float(x.get('price_1', 0))) >= 20000]
+                        norm = [x for x in item_list if int(float(x.get('price_1', 0))) < 20000]
+                        high.sort(key=lambda x: int(float(x.get('price_1', 0))), reverse=True)
+                        norm.sort(key=lambda x: str(x.get('품목', '')))
+                        return high + norm
+
+                    # 개별 품목 기준 정렬 데이터 (자재명세서용)
+                    individual_sorted_data = sort_items(safe_data)
+
+                    # [추가] 세트 단위 묶음 로직
+                    if print_mode == "세트 단위 묶음 (신규)":
+                        comp_pool = {}
+                        comp_price1 = {}
+                        comp_price2 = {}
                         
-                        if price >= 20000:
-                            high_value_items.append(item)
-                        else:
-                            normal_items.append(item)
+                        for item in safe_data:
+                            match_key = str(item.get("코드", "")).strip().zfill(5)
+                            if not match_key or match_key == "00000":
+                                match_key = str(item.get("품목", "")).strip()
                             
-                    # 정렬 수행
-                    high_value_items.sort(key=lambda x: int(float(x.get('price_1', 0))), reverse=True)
-                    normal_items.sort(key=lambda x: str(x.get('품목', '')))
-                    
-                    # 리스트 병합
-                    sorted_final_data = high_value_items + normal_items
+                            qty = int(float(item.get("수량", 0)))
+                            comp_pool[match_key] = comp_pool.get(match_key, 0) + qty
+                            comp_price1[match_key] = int(float(item.get("price_1", 0)))
+                            comp_price2[match_key] = int(float(item.get("price_2", 0)))
+
+                        set_items_out = []
+                        all_sets_db = {}
+                        for cat, val in st.session_state.db.get("sets", {}).items(): 
+                            all_sets_db.update(val)
+                            
+                        for s_item in st.session_state.set_cart:
+                            s_name = s_item['name']
+                            s_qty = s_item['qty']
+                            if s_qty <= 0: continue
+                            
+                            s_price1 = 0
+                            s_price2 = 0
+                            s_img = ""
+                            
+                            if s_name in all_sets_db:
+                                recipe = all_sets_db[s_name].get("recipe", {})
+                                s_img = all_sets_db[s_name].get("image", "")
+                                
+                                for p_code_or_name, p_qty_per_set in recipe.items():
+                                    p_key = str(p_code_or_name).strip().zfill(5)
+                                    if p_key not in comp_pool:
+                                        p_key = str(p_code_or_name).strip()
+                                        
+                                    p1 = comp_price1.get(p_key, 0)
+                                    p2 = comp_price2.get(p_key, 0)
+                                    
+                                    s_price1 += (p1 * p_qty_per_set)
+                                    s_price2 += (p2 * p_qty_per_set)
+                                    
+                                    if p_key in comp_pool:
+                                        comp_pool[p_key] -= (p_qty_per_set * s_qty)
+                                        
+                            set_items_out.append({
+                                "품목": s_name,
+                                "규격": "세트",
+                                "코드": s_name, 
+                                "단위": "SET",
+                                "수량": s_qty,
+                                "price_1": s_price1,
+                                "price_2": s_price2,
+                                "image_data": s_img
+                            })
+                            
+                        rem_items_out = []
+                        for item in safe_data:
+                            match_key = str(item.get("코드", "")).strip().zfill(5)
+                            if not match_key or match_key == "00000":
+                                match_key = str(item.get("품목", "")).strip()
+                                
+                            rem_qty = comp_pool.get(match_key, 0)
+                            if rem_qty > 0:
+                                new_item = item.copy()
+                                new_item["수량"] = rem_qty
+                                rem_items_out.append(new_item)
+                                comp_pool[match_key] = 0 # Prevent duplicate addition
+                        
+                        # 세트 그룹과 남은 부품 그룹을 각각 정렬 후 병합
+                        sorted_final_data = sort_items(set_items_out) + sort_items(rem_items_out)
+                    else:
+                        sorted_final_data = individual_sorted_data
                     
                     st.session_state.gen_pdf = create_advanced_pdf(sorted_final_data, st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info, st.session_state.quote_remarks)
                     st.session_state.gen_excel = create_quote_excel(sorted_final_data, st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info, st.session_state.quote_remarks)
                     
-                    # [수정] create_composition_pdf/excel 호출 시 st.session_state.quote_items 대신 safe_data(수기 품목 포함됨) 전달 -> 정렬된 데이터 사용 (선택사항이나 일관성을 위해)
-                    st.session_state.gen_comp_pdf = create_composition_pdf(st.session_state.set_cart, st.session_state.pipe_cart, sorted_final_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
-                    st.session_state.gen_comp_excel = create_composition_excel(st.session_state.set_cart, st.session_state.pipe_cart, sorted_final_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
+                    # 자재명세서는 항상 개별 품목 기준(individual_sorted_data)으로 처리
+                    st.session_state.gen_comp_pdf = create_composition_pdf(st.session_state.set_cart, st.session_state.pipe_cart, individual_sorted_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
+                    st.session_state.gen_comp_excel = create_composition_excel(st.session_state.set_cart, st.session_state.pipe_cart, individual_sorted_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
                     
                     st.session_state.files_ready = True
                 st.rerun()

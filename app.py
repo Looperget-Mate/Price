@@ -338,14 +338,20 @@ def save_products_to_sheet(products_list):
     
     ws_prod.clear(); ws_prod.update([df_up.columns.values.tolist()] + df_up.values.tolist())
 
+# [최적화 패치 2] 구글 API 호출 최소화를 위해 init_db() 호출 없이 바로 업데이트 수행
 def save_sets_to_sheet(sets_dict):
-    _, ws_sets = init_db()
-    if not ws_sets: return
-    rows = [["세트명", "카테고리", "하위분류", "이미지파일명", "레시피JSON"]]
-    for cat, items in sets_dict.items():
-        for name, info in items.items():
-            rows.append([name, cat, info.get("sub_cat", ""), info.get("image", ""), json.dumps(info.get("recipe", {}), ensure_ascii=False)])
-    ws_sets.clear(); ws_sets.update(rows)
+    if not gc: return
+    try:
+        sh = gc.open(SHEET_NAME)
+        ws_sets = sh.worksheet("Sets")
+        rows = [["세트명", "카테고리", "하위분류", "이미지파일명", "레시피JSON"]]
+        for cat, items in sets_dict.items():
+            for name, info in items.items():
+                rows.append([name, cat, info.get("sub_cat", ""), info.get("image", ""), json.dumps(info.get("recipe", {}), ensure_ascii=False)])
+        ws_sets.clear()
+        ws_sets.update(rows)
+    except Exception as e:
+        st.error(f"세트 저장 오류: {e}")
 
 def format_prod_label(option):
     if isinstance(option, dict): return f"[{option.get('code','00000')}] {option.get('name','')} ({option.get('spec','-')})"
@@ -1577,67 +1583,97 @@ if st.session_state.app_authenticated:
                 if cat == "주배관세트": sub_cat = st.selectbox("하위분류", ["50mm", "40mm", "기타"], key="sub_c")
                 products_obj = st.session_state.db["products"]
                 code_name_map = {str(p.get("code")): f"[{p.get('code')}] {p.get('name')} ({p.get('spec')})" for p in products_obj}
+                
+                # [최적화 1] 세트 구성품 수정 UI를 data_editor로 교체
                 if mt == "신규":
-                     nn = st.text_input("세트명")
-                     c1, c2, c3 = st.columns([3,2,1])
-                     with c1: sp_obj = st.selectbox("부품", products_obj, format_func=format_prod_label, key="nsp")
-                     with c2: sq = st.number_input("수량", 1, key="nsq")
-                     with c3: 
-                         if st.button("담기"): st.session_state.temp_set_recipe[str(sp_obj['code'])] = sq
-                     st.caption("구성 품목 (코드 기준)")
-                     if st.session_state.temp_set_recipe:
-                         for k, v in list(st.session_state.temp_set_recipe.items()):
-                             disp_name = code_name_map.get(k, k) 
-                             c_text, c_del = st.columns([4, 1])
-                             with c_text:
-                                 st.text(f"- {disp_name}: {v}개")
-                             with c_del:
-                                 if st.button("삭제", key=f"btn_del_new_{k}"):
-                                     del st.session_state.temp_set_recipe[k]
-                                     st.rerun()
-                     else:
-                         st.info("담긴 품목이 없습니다.")
-                     if st.button("저장", key="btn_new_set"):
-                         if cat not in st.session_state.db["sets"]: st.session_state.db["sets"][cat] = {}
-                         st.session_state.db["sets"][cat][nn] = {"recipe": st.session_state.temp_set_recipe, "image": "", "sub_cat": sub_cat}
-                         save_sets_to_sheet(st.session_state.db["sets"]); st.session_state.temp_set_recipe={}; st.success("저장")
+                    nn = st.text_input("세트명")
+                    c1, c2, c3 = st.columns([3,2,1])
+                    with c1: sp_obj = st.selectbox("부품", products_obj, format_func=format_prod_label, key="nsp")
+                    with c2: sq = st.number_input("수량", 1, key="nsq")
+                    with c3: 
+                        if st.button("담기"): st.session_state.temp_set_recipe[str(sp_obj['code'])] = sq
+                    st.caption("구성 품목 (수량 수정 및 행 삭제 가능)")
+                    
+                    if st.session_state.temp_set_recipe:
+                        recipe_list = []
+                        for k, v in st.session_state.temp_set_recipe.items():
+                            recipe_list.append({"품목코드": str(k), "품목명": code_name_map.get(str(k), str(k)), "수량": int(v)})
+                        
+                        edited_recipe = st.data_editor(
+                            pd.DataFrame(recipe_list),
+                            num_rows="dynamic",
+                            width="stretch",
+                            hide_index=True,
+                            disabled=["품목코드", "품목명"],
+                            key="recipe_editor_new"
+                        )
+                        
+                        new_recipe = {}
+                        for _, row in edited_recipe.iterrows():
+                            c = str(row.get("품목코드", "")).strip()
+                            try: q = int(row.get("수량", 0))
+                            except: q = 0
+                            if c and q > 0:
+                                new_recipe[c] = q
+                        st.session_state.temp_set_recipe = new_recipe
+                    else:
+                        st.info("담긴 품목이 없습니다.")
+                    
+                    if st.button("저장", key="btn_new_set"):
+                        if cat not in st.session_state.db["sets"]: st.session_state.db["sets"][cat] = {}
+                        st.session_state.db["sets"][cat][nn] = {"recipe": st.session_state.temp_set_recipe, "image": "", "sub_cat": sub_cat}
+                        save_sets_to_sheet(st.session_state.db["sets"]); st.session_state.temp_set_recipe={}; st.success("저장")
                 else:
-                     if "target_set_edit" in st.session_state and st.session_state.target_set_edit:
-                         tg = st.session_state.target_set_edit
-                         st.info(f"편집: {tg}")
-                         st.markdown("###### 구성 품목 수정 (수량 변경 및 삭제)")
-                         for k, v in list(st.session_state.temp_set_recipe.items()):
-                             c1, c2, c3 = st.columns([5, 2, 1])
-                             disp_name = code_name_map.get(k, k)
-                             with c1:
-                                 st.text(disp_name)
-                             with c2:
-                                 new_qty = st.number_input("수량", value=int(v), step=1, key=f"edit_q_{k}", label_visibility="collapsed")
-                                 st.session_state.temp_set_recipe[k] = new_qty
-                             with c3:
-                                 if st.button("삭제", key=f"del_set_item_{k}"):
-                                     del st.session_state.temp_set_recipe[k]
-                                     st.rerun()
-                         st.divider()
-                         st.markdown("###### ➕ 품목 추가")
-                         c1, c2, c3 = st.columns([3,2,1])
-                         with c1: ap_obj = st.selectbox("추가할 부품", products_obj, format_func=format_prod_label, key="esp")
-                         with c2: aq = st.number_input("추가 수량", 1, key="esq")
-                         with c3: 
-                             st.write("")
-                             if st.button("담기", key="esa"): 
-                                 st.session_state.temp_set_recipe[str(ap_obj['code'])] = aq
-                                 st.rerun()
-                         if st.button("수정 내용 저장", type="primary"):
-                             st.session_state.db["sets"][cat][tg]["recipe"] = st.session_state.temp_set_recipe
-                             save_sets_to_sheet(st.session_state.db["sets"])
-                             st.success("수정되었습니다.")
-                         st.write("")
-                         if st.button(f"🗑️ '{tg}' 세트 영구 삭제", key="btn_del_set"):
-                             del st.session_state.db["sets"][cat][tg]
-                             save_sets_to_sheet(st.session_state.db["sets"])
-                             st.session_state.target_set_edit = None
-                             st.success("삭제되었습니다."); time.sleep(1); st.rerun()
+                    if "target_set_edit" in st.session_state and st.session_state.target_set_edit:
+                        tg = st.session_state.target_set_edit
+                        st.info(f"편집: {tg}")
+                        st.markdown("###### 구성 품목 수정 (수량 변경 및 삭제)")
+                        
+                        if st.session_state.temp_set_recipe:
+                            recipe_list = []
+                            for k, v in st.session_state.temp_set_recipe.items():
+                                recipe_list.append({"품목코드": str(k), "품목명": code_name_map.get(str(k), str(k)), "수량": int(v)})
+                            
+                            edited_recipe = st.data_editor(
+                                pd.DataFrame(recipe_list),
+                                num_rows="dynamic",
+                                width="stretch",
+                                hide_index=True,
+                                disabled=["품목코드", "품목명"],
+                                key="recipe_editor_edit"
+                            )
+                            
+                            new_recipe = {}
+                            for _, row in edited_recipe.iterrows():
+                                c = str(row.get("품목코드", "")).strip()
+                                try: q = int(row.get("수량", 0))
+                                except: q = 0
+                                if c and q > 0:
+                                    new_recipe[c] = q
+                            st.session_state.temp_set_recipe = new_recipe
+                        else:
+                            st.info("담긴 품목이 없습니다.")
+                        
+                        st.divider()
+                        st.markdown("###### ➕ 품목 추가")
+                        c1, c2, c3 = st.columns([3,2,1])
+                        with c1: ap_obj = st.selectbox("추가할 부품", products_obj, format_func=format_prod_label, key="esp")
+                        with c2: aq = st.number_input("추가 수량", 1, key="esq")
+                        with c3: 
+                            st.write("")
+                            if st.button("담기", key="esa"): 
+                                st.session_state.temp_set_recipe[str(ap_obj['code'])] = aq
+                                st.rerun()
+                        if st.button("수정 내용 저장", type="primary"):
+                            st.session_state.db["sets"][cat][tg]["recipe"] = st.session_state.temp_set_recipe
+                            save_sets_to_sheet(st.session_state.db["sets"])
+                            st.success("수정되었습니다.")
+                        st.write("")
+                        if st.button(f"🗑️ '{tg}' 세트 영구 삭제", key="btn_del_set"):
+                            del st.session_state.db["sets"][cat][tg]
+                            save_sets_to_sheet(st.session_state.db["sets"])
+                            st.session_state.target_set_edit = None
+                            st.success("삭제되었습니다."); time.sleep(1); st.rerun()
             with t3: st.write("설정")
 
     elif mode == "🇯🇵 일본 수출 분석":

@@ -190,16 +190,18 @@ def get_drive_file_map():
 def get_set_drive_file_map():
     return get_drive_file_map()
 
+# [수정 패치 1] 메모리 누수 방지 (with 구문 및 img.close() 사용)
 def download_image_by_id(file_id):
     if not file_id or not drive_service: return None
     try:
         request = drive_service.files().get_media(fileId=file_id)
         downloader = request.execute()
-        img = Image.open(io.BytesIO(downloader))
-        img = img.convert('RGB')
-        img.thumbnail((300, 225))
-        buffer = io.BytesIO()
-        img.save(buffer, format="JPEG")
+        with Image.open(io.BytesIO(downloader)) as img:
+            img_rgb = img.convert('RGB')
+            img_rgb.thumbnail((300, 225))
+            buffer = io.BytesIO()
+            img_rgb.save(buffer, format="JPEG")
+            img_rgb.close()
         return f"data:image/jpeg;base64,{base64.b64encode(buffer.getvalue()).decode()}"
     except Exception:
         return None
@@ -485,10 +487,13 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
             try:
                 img_data_str = img_b64.split(",", 1)[1] if "," in img_b64 else img_b64
                 img_bytes = base64.b64decode(img_data_str)
+                # [수정 패치 1]
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(img_bytes); tmp_path = tmp.name
+                    tmp.write(img_bytes)
+                    tmp_path = tmp.name
                 pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
-                os.unlink(tmp_path)
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
             except: pass
 
         pdf.set_xy(x+15, y); pdf.cell(45, h, "", border=1) 
@@ -612,7 +617,7 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
     total_a2 = 0
     total_profit = 0
     
-    temp_files = []
+    temp_files = [] # [수정 패치 1] Temp file 리스트 보관
     ROW_HEIGHT_PT = 80
 
     for item in final_data_list:
@@ -635,8 +640,10 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
                 img_data_str = img_b64.split(",", 1)[1] if "," in img_b64 else img_b64
                 img_bytes = base64.b64decode(img_data_str)
                 
+                # [수정 패치 1]
                 with Image.open(io.BytesIO(img_bytes)) as pil_img:
                     orig_w, orig_h = pil_img.size
+                    pil_img.close()
                 
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(img_bytes)
@@ -720,8 +727,11 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
 
     workbook.close()
     
+    # [수정 패치 1] 엑셀 작업 끝난 뒤 temp file 확실히 삭제
     for f in temp_files:
-        try: os.unlink(f)
+        try: 
+            if os.path.exists(f):
+                os.unlink(f)
         except: pass
         
     return output.getvalue()
@@ -837,11 +847,13 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
             try:
                 img_data = img_b64.split(",", 1)[1]
                 img_bytes = base64.b64decode(img_data)
+                # [수정 패치 1]
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(img_bytes); tmp_path = tmp.name
-                
+                    tmp.write(img_bytes)
+                    tmp_path = tmp.name
                 pdf.image(tmp_path, x=x+6.25, y=y+2.5, w=37.5, h=30)
-                os.unlink(tmp_path)
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
             except: pass
             
         pdf.set_xy(x+col_w_img, y)
@@ -890,9 +902,11 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
                 img_data = img_b64.split(",", 1)[1]
                 img_bytes = base64.b64decode(img_data)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(img_bytes); tmp_path = tmp.name
+                    tmp.write(img_bytes)
+                    tmp_path = tmp.name
                 pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
-                os.unlink(tmp_path)
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
             except: pass
             
         pdf.set_xy(x+20, y)
@@ -933,9 +947,11 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
                     img_data = img_b64.split(",", 1)[1]
                     img_bytes = base64.b64decode(img_data)
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                        tmp.write(img_bytes); tmp_path = tmp.name
+                        tmp.write(img_bytes)
+                        tmp_path = tmp.name
                     pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
-                    os.unlink(tmp_path)
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
                 except: pass
                 
             pdf.set_xy(x+20, y)
@@ -978,9 +994,11 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
                 img_data = img_b64.split(",", 1)[1]
                 img_bytes = base64.b64decode(img_data)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(img_bytes); tmp_path = tmp.name
+                    tmp.write(img_bytes)
+                    tmp_path = tmp.name
                 pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
-                os.unlink(tmp_path)
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
             except: pass
             
         pdf.set_xy(x+20, y)
@@ -1039,19 +1057,25 @@ def create_composition_excel(set_cart, pipe_cart, final_data_list, db_products, 
             if total_qty > 0:
                 additional_items_list.append({"name": name, "spec": spec, "qty": total_qty, "code": code, "image": img_data})
 
+    # [수정 패치 1] Temp file 리스트 보관
+    temp_files = []
+
     def insert_scaled_image(ws, row, col, img_b64):
         if not img_b64: 
             ws.write(row, col, "", fmt_center)
             return
         try:
-            img_data = img_b64.split(",", 1)[1]
+            img_data = img_b64.split(",", 1)[1] if "," in img_b64 else img_b64
             img_bytes = base64.b64decode(img_data)
             
             with Image.open(io.BytesIO(img_bytes)) as pil_img:
                 orig_w, orig_h = pil_img.size
+                pil_img.close()
             
             with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                tmp.write(img_bytes); tmp_path = tmp.name
+                tmp.write(img_bytes)
+                tmp_path = tmp.name
+                temp_files.append(tmp_path)
             
             cell_w_px = 110
             cell_h_px = 106
@@ -1174,6 +1198,14 @@ def create_composition_excel(set_cart, pipe_cart, final_data_list, db_products, 
         row += 1
 
     workbook.close()
+    
+    # [수정 패치 1] 엑셀 작업 끝난 뒤 temp file 확실히 삭제
+    for f in temp_files:
+        try: 
+            if os.path.exists(f):
+                os.unlink(f)
+        except: pass
+        
     return output.getvalue()
 
 # ==========================================
@@ -1197,17 +1229,14 @@ if st.session_state.app_authenticated:
     if "final_edit_df" not in st.session_state: st.session_state.final_edit_df = None
     if "step3_ready" not in st.session_state: st.session_state.step3_ready = False
     
-    # [추가] 수정한 단가/수량 유지
     if "custom_prices" not in st.session_state: st.session_state.custom_prices = []
 
-    # [신규] 생성된 파일 저장용 상태 변수 초기화
     if "files_ready" not in st.session_state: st.session_state.files_ready = False
     if "gen_pdf" not in st.session_state: st.session_state.gen_pdf = None
     if "gen_excel" not in st.session_state: st.session_state.gen_excel = None
     if "gen_comp_pdf" not in st.session_state: st.session_state.gen_comp_pdf = None
     if "gen_comp_excel" not in st.session_state: st.session_state.gen_comp_excel = None
 
-    # [추가] 특약사항 상태 초기화
     if "quote_remarks" not in st.session_state: 
         st.session_state.quote_remarks = "1. 견적 유효기간: 견적일로부터 15일 이내\n2. 출고: 결재 완료 후 즉시 또는 7일 이내"
 
@@ -1223,16 +1252,12 @@ if st.session_state.app_authenticated:
         c1, c2 = st.columns(2)
         with c1:
             if st.button("💾 임시저장"):
-                # [수정] 구글 시트 저장 로직 (Quotes_KR) + 수정한 단가(custom_prices) 포함
                 if not q_name:
                     st.error("현장명을 입력해주세요.")
                 else:
                     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    
-                    # 현재 화면에서 수정된 데이터프레임을 리스트로 변환 (수동으로 변경된 단가, 수량 보존)
                     current_custom_prices = st.session_state.final_edit_df.to_dict('records') if st.session_state.final_edit_df is not None else []
                     
-                    # 견적 내용 전체 JSON 직렬화
                     save_data = {
                         "items": st.session_state.quote_items,
                         "services": st.session_state.services,
@@ -1241,10 +1266,9 @@ if st.session_state.app_authenticated:
                         "step": st.session_state.quote_step,
                         "buyer": st.session_state.buyer_info,
                         "remarks": st.session_state.quote_remarks,
-                        "custom_prices": current_custom_prices # [추가] 수정 단가 및 수량 저장
+                        "custom_prices": current_custom_prices
                     }
                     
-                    # 예상 총액 계산 (단순 합산)
                     est_total = 0
                     pdb = {str(p.get("code")).strip(): p for p in st.session_state.db["products"]}
                     for code, qty in st.session_state.quote_items.items():
@@ -1255,7 +1279,7 @@ if st.session_state.app_authenticated:
                     json_str = json.dumps(save_data, ensure_ascii=False)
                     
                     if save_quote_to_sheet(timestamp, q_name, st.session_state.buyer_info.get("manager", ""), est_total, json_str):
-                        st.session_state.db = load_data_from_sheet() # 목록 갱신
+                        st.session_state.db = load_data_from_sheet()
                         st.session_state.current_quote_name = q_name
                         st.success("구글 시트에 저장되었습니다.")
                     else:
@@ -1266,17 +1290,13 @@ if st.session_state.app_authenticated:
                 st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.pipe_cart = []; st.session_state.set_cart = []; st.session_state.quote_step = 1
                 st.session_state.current_quote_name = ""; st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}; st.session_state.step3_ready=False; st.session_state.files_ready = False
                 st.session_state.quote_remarks = "1. 견적 유효기간: 견적일로부터 15일 이내\n2. 출고: 결재 완료 후 즉시 또는 7일 이내"
-                st.session_state.custom_prices = [] # 초기화 시 수정한 단가 목록도 초기화
+                st.session_state.custom_prices = []
                 st.rerun()
         st.divider()
         
-        # [수정] 구글 시트 데이터 기반 불러오기 + custom_prices 로드
         kr_quotes = st.session_state.db.get("kr_quotes", [])
         if kr_quotes:
-            # 역순 정렬 (최신순)
             df_kr = pd.DataFrame(kr_quotes).iloc[::-1]
-            
-            # Selectbox 라벨 포맷: [날짜] 현장명 (담당자)
             sel_idx = st.selectbox(
                 "불러오기 (구글 시트)", 
                 range(len(df_kr)), 
@@ -1296,7 +1316,7 @@ if st.session_state.app_authenticated:
                     st.session_state.quote_step = d.get("step", 2)
                     st.session_state.buyer_info = d.get("buyer", {"manager": "", "phone": "", "addr": ""})
                     st.session_state.quote_remarks = d.get("remarks", "1. 견적 유효기간: 견적일로부터 15일 이내\n2. 출고: 결재 완료 후 즉시 또는 7일 이내")
-                    st.session_state.custom_prices = d.get("custom_prices", []) # [추가] 저장된 수정 단가 로드
+                    st.session_state.custom_prices = d.get("custom_prices", [])
                     st.session_state.current_quote_name = target_row.get("현장명", "")
                     
                     st.session_state.step3_ready = False
@@ -1328,10 +1348,8 @@ if st.session_state.app_authenticated:
                 with st.expander("📂 부품 데이터 직접 수정 (수정/추가/삭제)", expanded=True):
                     st.info("💡 팁: 표 안에서 직접 내용을 수정하거나, 맨 아래 행에 추가하거나, 행을 선택해 삭제(Del키)할 수 있습니다.")
                     
-                    # [수정] 관리자 모드 데이터 로딩 및 보정 로직
                     df = pd.DataFrame(st.session_state.db["products"])
                     
-                    # 기존 데이터에 새 컬럼이 없을 경우를 대비해 기본값 채우기 (에러 방지)
                     for key_val in COL_MAP.values():
                         if key_val not in df.columns:
                             df[key_val] = 0 if "price" in key_val or "len" in key_val else ""
@@ -1340,16 +1358,15 @@ if st.session_state.app_authenticated:
                     if "이미지데이터" in df.columns: df["이미지데이터"] = df["이미지데이터"].apply(lambda x: x if x else "")
                     df["순번"] = [f"{i+1:03d}" for i in range(len(df))]
                     
-                    # 컬럼 순서 재배열 (COL_MAP 순서대로)
                     desired_order = list(COL_MAP.keys())
-                    # 데이터프레임에 존재하는 컬럼만 추려서 순서 맞춤
                     final_cols = [c for c in desired_order if c in df.columns]
                     df = df[final_cols]
 
+                    # [수정 패치 2] width="stretch" 적용
                     edited_df = st.data_editor(
                         df, 
                         num_rows="dynamic", 
-                        use_container_width=True, 
+                        width="stretch", 
                         key="product_editor",
                         column_config={
                             "순번": st.column_config.TextColumn(disabled=False, width="small"),
@@ -1357,7 +1374,6 @@ if st.session_state.app_authenticated:
                             "매입단가": st.column_config.NumberColumn(format="%d"),
                             "총판가1": st.column_config.NumberColumn(format="%d"),
                             "총판가2": st.column_config.NumberColumn(format="%d"),
-                            # [변경] 컬럼 설정 업데이트
                             "대리점가1": st.column_config.NumberColumn(format="%d"),
                             "대리점가2": st.column_config.NumberColumn(format="%d"),
                             "계통농협": st.column_config.NumberColumn(format="%d"),
@@ -1395,19 +1411,15 @@ if st.session_state.app_authenticated:
                 ec1, ec2 = st.columns([1, 1])
                 with ec1:
                     buf = io.BytesIO()
-                    # [수정] 현재 정의된 컬럼 구조(COL_MAP)대로 엑셀 생성
                     org_df = pd.DataFrame(st.session_state.db["products"])
                     
-                    # 누락된 키 보정 (관리자 모드 에디터와 동일 로직)
                     for eng_key in COL_MAP.values():
                         if eng_key not in org_df.columns:
-                            # 가격이나 길이 정보는 0, 나머지는 빈 문자열
                             val = 0 if ("price" in eng_key or "len" in eng_key) else ""
                             org_df[eng_key] = val
                     
                     org_df = org_df.rename(columns=REV_COL_MAP)
                     
-                    # 순서 강제 지정
                     final_cols = [k for k in COL_MAP.keys() if k in org_df.columns]
                     org_df = org_df[final_cols]
                     
@@ -1426,7 +1438,7 @@ if st.session_state.app_authenticated:
                     st.info("💡 사용법: 이미지 파일명을 '품목코드.jpg' (예: 00200.jpg)로 저장해서 구글 드라이브 'Looperget_Images' 폴더에 먼저 업로드하세요.")
                     if st.button("🔄 드라이브 이미지 자동 연결 실행", key="btn_sync_images"):
                         with st.spinner("드라이브 폴더를 검색하는 중..."):
-                            get_drive_file_map.clear() # [수정] 캐시 초기화 추가
+                            get_drive_file_map.clear() 
                             file_map = get_drive_file_map() 
                             if not file_map:
                                 st.warning("폴더가 비어있거나 찾을 수 없습니다.")
@@ -1471,7 +1483,8 @@ if st.session_state.app_authenticated:
                 cset = st.session_state.db["sets"].get(cat, {})
                 if cset:
                     sl = [{"세트명": k, "부품수": len(v.get("recipe", {}))} for k,v in cset.items()]
-                    st.dataframe(pd.DataFrame(sl), use_container_width=True, on_select="rerun", selection_mode="multi-row", key="set_table")
+                    # [수정 패치 2] width="stretch" 적용
+                    st.dataframe(pd.DataFrame(sl), width="stretch", on_select="rerun", selection_mode="multi-row", key="set_table")
                     sel_rows = st.session_state.set_table.get("selection", {}).get("rows", [])
                     if sel_rows:
                         if len(sel_rows) == 1:
@@ -1627,7 +1640,6 @@ if st.session_state.app_authenticated:
                              st.success("삭제되었습니다."); time.sleep(1); st.rerun()
             with t3: st.write("설정")
 
-    # [추가] 일본 수출 분석 모드
     elif mode == "🇯🇵 일본 수출 분석":
         st.header("🇯🇵 일본 수출 견적 수익성 분석")
         st.caption("일본 현지 앱에서 저장된 견적 데이터를 불러와 예상 수익을 분석합니다.")
@@ -1641,8 +1653,6 @@ if st.session_state.app_authenticated:
         if not jp_quotes:
             st.warning("저장된 일본 견적 데이터가 없습니다. (Google Sheet: 'Quotes_JP')")
         else:
-            # 견적 목록 생성
-            # 가정: Quotes_JP 시트 컬럼은 ['견적명', '날짜', '항목JSON'] 형태라고 가정
             df_quotes = pd.DataFrame(jp_quotes)
             if "견적명" in df_quotes.columns:
                 selected_quote_idx = st.selectbox(
@@ -1664,12 +1674,10 @@ if st.session_state.app_authenticated:
                         st.divider()
                         st.subheader(f"📊 분석 결과: {target_quote.get('견적명')}")
                         
-                        # 분석 로직 수행
                         analysis_rows = []
-                        total_revenue = 0 # 매출 (신정공급가 기준)
-                        total_cost = 0    # 원가 (매입단가 기준)
+                        total_revenue = 0 
+                        total_cost = 0    
                         
-                        # DB 매핑 준비
                         db_map = {str(p.get("code")).strip(): p for p in st.session_state.db["products"]}
                         
                         for code, qty in items_dict.items():
@@ -1679,9 +1687,7 @@ if st.session_state.app_authenticated:
                             if prod:
                                 name = prod.get("name", "")
                                 spec = prod.get("spec", "")
-                                # 신정공급가 (매출)
                                 price_supply = int(prod.get("price_supply_jp", 0) or 0)
-                                # 매입단가 (원가)
                                 price_buy = int(prod.get("price_buy", 0) or 0)
                                 
                                 revenue = price_supply * qty
@@ -1703,7 +1709,6 @@ if st.session_state.app_authenticated:
                                     "예상이익": profit
                                 })
                             else:
-                                # DB에 없는 품목
                                 analysis_rows.append({
                                     "품목코드": code,
                                     "품목명": "미등록 품목",
@@ -1716,7 +1721,6 @@ if st.session_state.app_authenticated:
                                     "예상이익": 0
                                 })
 
-                        # 요약 지표 출력
                         total_profit = total_revenue - total_cost
                         profit_margin = (total_profit / total_revenue * 100) if total_revenue > 0 else 0
                         
@@ -1728,7 +1732,8 @@ if st.session_state.app_authenticated:
                         
                         st.markdown("---")
                         st.write("###### 상세 내역")
-                        st.dataframe(pd.DataFrame(analysis_rows), use_container_width=True, hide_index=True)
+                        # [수정 패치 2] width="stretch" 적용
+                        st.dataframe(pd.DataFrame(analysis_rows), width="stretch", hide_index=True)
                         
                     else:
                         st.info("견적에 포함된 품목이 없습니다.")
@@ -1778,7 +1783,6 @@ if st.session_state.app_authenticated:
                 
                 st.write("")
                 if st.button("➕ 입력한 수량 세트 목록에 추가"):
-                    # Sum quantities across all tabs to allow input from anywhere
                     def sum_dictionaries(*dicts):
                         result = {}
                         for d in dicts:
@@ -1811,7 +1815,8 @@ if st.session_state.app_authenticated:
                     if added_count > 0: st.success("추가됨")
             if st.session_state.set_cart:
                 st.info("📋 선택된 세트 목록 (합산 예정)")
-                st.dataframe(pd.DataFrame(st.session_state.set_cart), use_container_width=True, hide_index=True)
+                # [수정 패치 2] width="stretch" 적용
+                st.dataframe(pd.DataFrame(st.session_state.set_cart), width="stretch", hide_index=True)
                 if st.button("🗑️ 세트 목록 비우기"):
                     st.session_state.set_cart = []
                     st.rerun()
@@ -1829,7 +1834,8 @@ if st.session_state.app_authenticated:
                     if sel_pipe: st.session_state.pipe_cart.append({"type": pipe_type_sel, "name": sel_pipe['name'], "spec": sel_pipe.get("spec", ""), "code": sel_pipe.get("code", ""), "len": len_pipe})
             if st.session_state.pipe_cart:
                 st.caption("📋 입력된 배관 목록")
-                st.dataframe(pd.DataFrame(st.session_state.pipe_cart), use_container_width=True, hide_index=True)
+                # [수정 패치 2] width="stretch" 적용
+                st.dataframe(pd.DataFrame(st.session_state.pipe_cart), width="stretch", hide_index=True)
                 if st.button("🗑️ 비우기"): st.session_state.pipe_cart = []; st.rerun()
             st.divider()
             if st.button("계산하기 (STEP 2)"):
@@ -1864,7 +1870,6 @@ if st.session_state.app_authenticated:
             if st.button("⬅️ 1단계(물량수정)로 돌아가기"):
                 st.session_state.quote_step = 1
                 st.rerun()
-            # [수정] 단가 옵션 업데이트
             view_opts = ["소비자가"]
             if st.session_state.auth_price: view_opts += ["단가(현장)", "매입가", "총판1", "총판2", "대리점1", "대리점2", "계통농협", "지역농협"]
             c_lock, c_view = st.columns([1, 2])
@@ -1876,7 +1881,6 @@ if st.session_state.app_authenticated:
                         else: st.error("오류")
                 else: st.success("🔓 원가 조회 가능")
             with c_view: view = st.radio("단가 보기", view_opts, horizontal=True)
-            # [수정] 키 매핑 업데이트
             key_map = {
                 "매입가":("price_buy","매입"), 
                 "총판1":("price_d1","총판1"), "총판2":("price_d2","총판2"), 
@@ -1903,7 +1907,6 @@ if st.session_state.app_authenticated:
                     row["율(%)"] = (row["이익"]/row["합계"]*100) if row["합계"] else 0
                 rows.append(row)
             
-            # [수정] 빈 데이터프레임 처리 (선택 항목 없을 때 오류 방지)
             disp = ["품목", "규격", "수량"]
             if view == "소비자가": disp += ["소비자가", "합계"]
             else: 
@@ -1915,7 +1918,8 @@ if st.session_state.app_authenticated:
             else:
                 df = pd.DataFrame(columns=disp)
                 
-            st.dataframe(df[disp], use_container_width=True, hide_index=True)
+            # [수정 패치 2] width="stretch" 적용
+            st.dataframe(df[disp], width="stretch", hide_index=True)
             st.divider()
             col_add_part, col_add_cost = st.columns([1, 1])
             with col_add_part:
@@ -1955,10 +1959,9 @@ if st.session_state.app_authenticated:
             with c_opt1: 
                 form_type = st.radio("양식", ["기본 양식", "이익 분석 양식"])
                 print_mode = st.radio("출력 형태", ["개별 품목 나열 (기존)", "세트 단위 묶음 (신규)"])
-                vat_mode = st.radio("부가세", ["포함 (기본)", "별도"]) # [추가] 부가세 옵션 추가
+                vat_mode = st.radio("부가세", ["포함 (기본)", "별도"])
             with c_opt2:
                 basic_opts = ["소비자가", "단가(현장)"]
-                # [수정] 어드민 옵션 업데이트
                 admin_opts = ["매입단가", "총판가1", "총판가2", "대리점가1", "대리점가2", "계통농협", "지역농협"]
                 opts = basic_opts + (admin_opts if st.session_state.auth_price else [])
                 if "이익" in form_type and not st.session_state.auth_price:
@@ -1976,7 +1979,6 @@ if st.session_state.app_authenticated:
             if "기본" in form_type and len(sel) != 1: st.warning("출력할 단가를 1개 선택해주세요."); st.stop()
             if "이익" in form_type and len(sel) < 2: st.warning("비교할 단가를 2개 선택해주세요."); st.stop()
 
-            # [수정] 정렬 순서 및 키 매핑 업데이트
             price_rank = {"매입단가": 0, "총판가1": 1, "총판가2": 2, "대리점가1": 3, "대리점가2": 4, "계통농협": 5, "지역농협": 6, "단가(현장)": 7, "소비자가": 8}
             if sel: sel = sorted(sel, key=lambda x: price_rank.get(x, 9))
             pkey = {
@@ -1986,20 +1988,16 @@ if st.session_state.app_authenticated:
                 "소비자가":"price_cons", "단가(현장)":"price_site"
             }
             
-            # [수정] 옵션 변경 시 데이터 재로딩을 위한 로직 추가
             if "last_sel" not in st.session_state: st.session_state.last_sel = []
             
-            # 선택된 단가가 바뀌었는지 확인
             selectors_changed = (st.session_state.last_sel != sel)
             
-            # [추가] 커스텀 저장 단가 활용을 위한 Map 구성
             cp_map = {}
             if st.session_state.get("custom_prices"):
                 for cp in st.session_state.custom_prices:
                     k = str(cp.get("코드", "")).strip().zfill(5) if str(cp.get("코드", "")).strip() else str(cp.get("품목", "")).strip()
                     cp_map[k] = cp
 
-            # 첫 진입이거나 옵션이 바뀌었다면 가격 데이터 갱신
             if not st.session_state.step3_ready or selectors_changed:
                 pdb = {}
                 for p in st.session_state.db["products"]:
@@ -2008,7 +2006,6 @@ if st.session_state.app_authenticated:
                 
                 pk = [pkey[l] for l in sel] if sel else ["price_cons"]
                 
-                # 1. 첫 진입일 때: 전체 데이터 생성 (저장된 custom_prices가 있다면 그것을 반영!)
                 if not st.session_state.step3_ready:
                     fdata = []
                     processed_keys = set()
@@ -2030,12 +2027,10 @@ if st.session_state.app_authenticated:
                             "image_data": inf.get("image")
                         }
                         
-                        # 일단 기본값 세팅
                         d["price_1"] = int(inf.get(pk[0], 0))
                         if len(pk)>1: d["price_2"] = int(inf.get(pk[1], 0))
                         else: d["price_2"] = 0
                         
-                        # [추가] 커스텀 단가가 있으면 Override
                         if code_key in cp_map:
                             d["수량"] = int(cp_map[code_key].get("수량", d["수량"]))
                             d["price_1"] = int(cp_map[code_key].get("price_1", d["price_1"]))
@@ -2044,7 +2039,6 @@ if st.session_state.app_authenticated:
                             
                         fdata.append(d)
                         
-                    # [추가] quote_items에 없는데 custom_prices에 있는 수기 품목 등 복구
                     if st.session_state.get("custom_prices"):
                         for cp in st.session_state.custom_prices:
                             k = str(cp.get("코드", "")).strip().zfill(5) if str(cp.get("코드", "")).strip() else str(cp.get("품목", "")).strip()
@@ -2054,7 +2048,6 @@ if st.session_state.app_authenticated:
                     st.session_state.final_edit_df = pd.DataFrame(fdata)
                     st.session_state.step3_ready = True
                 
-                # 2. 옵션만 바뀌었을 때: 기존 수량 유지하고 가격만 업데이트
                 elif selectors_changed and st.session_state.final_edit_df is not None and not st.session_state.final_edit_df.empty:
                     def update_prices_in_row(row):
                         code = str(row.get("코드", "")).strip().zfill(5)
@@ -2062,13 +2055,11 @@ if st.session_state.app_authenticated:
                         item = pdb.get(code)
                         if not item: item = pdb.get(name)
                         
-                        # DB에 있는 제품이면 가격 업데이트
                         if item:
                             p1 = int(item.get(pk[0], 0))
                             p2 = int(item.get(pk[1], 0)) if len(pk) > 1 else 0
                             return pd.Series([p1, p2])
                         else:
-                            # DB에 없는(사용자 추가) 제품이면 기존 값 유지
                             return pd.Series([row.get("price_1", 0), row.get("price_2", 0)])
 
                     new_prices = st.session_state.final_edit_df.apply(update_prices_in_row, axis=1)
@@ -2076,7 +2067,7 @@ if st.session_state.app_authenticated:
                     st.session_state.final_edit_df["price_2"] = new_prices[1]
 
                 st.session_state.last_sel = sel
-                st.session_state.files_ready = False # 옵션이 바뀌었으니 파일 다시 생성해야 함
+                st.session_state.files_ready = False 
 
             st.markdown("---")
             
@@ -2084,16 +2075,13 @@ if st.session_state.app_authenticated:
             disp_cols = ["품목", "규격", "코드", "단위", "수량", "price_1"]
             if len(pk) > 1: disp_cols.append("price_2")
             
-            # 컬럼 존재 여부 확인 (방어 코드)
             for c in disp_cols:
                 if c not in st.session_state.final_edit_df.columns:
                     st.session_state.final_edit_df[c] = 0 if "price" in c or "수량" in c else ""
 
-            # 데이터 수정 시 파일 생성 버튼 다시 활성화
             def on_data_change():
                 st.session_state.files_ready = False
 
-            # [신규] 수기 품목 추가 기능
             with st.expander("➕ 수기 품목 추가 (DB 미등록 품목)", expanded=False):
                 c1, c2, c3, c4, c5 = st.columns([3, 2, 1, 1, 2])
                 m_name = c1.text_input("품목명 (필수)", key="m_name")
@@ -2120,10 +2108,11 @@ if st.session_state.app_authenticated:
                     else:
                         st.warning("품목명을 입력해주세요.")
 
+            # [수정 패치 2] width="stretch" 적용
             edited = st.data_editor(
                 st.session_state.final_edit_df[disp_cols], 
                 num_rows="dynamic",
-                use_container_width=True, 
+                width="stretch", 
                 hide_index=True,
                 column_config={
                     "품목": st.column_config.TextColumn(required=True),
@@ -2150,7 +2139,6 @@ if st.session_state.app_authenticated:
                         for s in st.session_state.services:
                             pdf_excel_services.append(s.copy())
                             
-                        # [추가] 부가세 별도 로직 (파일에 들어가는 데이터의 단가/금액을 1.1로 나누기 처리)
                         if vat_mode == "별도":
                             for item in safe_data:
                                 try: item['price_1'] = int(round(float(item.get('price_1', 0)) / 1.1))
@@ -2168,10 +2156,8 @@ if st.session_state.app_authenticated:
                             norm.sort(key=lambda x: str(x.get('품목', '')))
                             return high + norm
 
-                        # 개별 품목 기준 정렬 데이터 (자재명세서용)
                         individual_sorted_data = sort_items(safe_data)
 
-                        # 세트 단위 묶음 로직
                         if print_mode == "세트 단위 묶음 (신규)":
                             comp_pool = {}
                             comp_price1 = {}
@@ -2243,7 +2229,6 @@ if st.session_state.app_authenticated:
                                     rem_items_out.append(new_item)
                                     comp_pool[match_key] = 0 # Prevent duplicate addition
                             
-                            # 세트 그룹과 남은 부품 그룹을 각각 정렬 후 병합
                             sorted_final_data = sort_items(set_items_out) + sort_items(rem_items_out)
                         else:
                             sorted_final_data = individual_sorted_data
@@ -2251,7 +2236,6 @@ if st.session_state.app_authenticated:
                         st.session_state.gen_pdf = create_advanced_pdf(sorted_final_data, pdf_excel_services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info, st.session_state.quote_remarks)
                         st.session_state.gen_excel = create_quote_excel(sorted_final_data, pdf_excel_services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info, st.session_state.quote_remarks)
                         
-                        # 자재명세서는 개별 품목 기준(individual_sorted_data)으로 처리
                         st.session_state.gen_comp_pdf = create_composition_pdf(st.session_state.set_cart, st.session_state.pipe_cart, individual_sorted_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
                         st.session_state.gen_comp_excel = create_composition_excel(st.session_state.set_cart, st.session_state.pipe_cart, individual_sorted_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
                         
@@ -2276,7 +2260,6 @@ if st.session_state.app_authenticated:
                 else:
                     st.info("👆 위 버튼을 눌러 파일을 생성해주세요. (데이터 수정 시 다시 생성해야 합니다)")
             
-            # [수정] 특약사항 입력 필드 추가
             st.write("")
             st.markdown("##### 📝 특약사항 및 비고 (수정 가능)")
             st.session_state.quote_remarks = st.text_area(
@@ -2285,7 +2268,6 @@ if st.session_state.app_authenticated:
                 height=100, 
                 label_visibility="collapsed"
             )
-
 
             c1, c2 = st.columns(2)
             with c1: 

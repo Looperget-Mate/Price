@@ -24,6 +24,45 @@ from googleapiclient.http import MediaIoBaseUpload
 st.set_page_config(layout="wide", page_title="루퍼젯 프로 매니저 V10.0")
 
 # ==========================================
+# 0-1. 앱 접근 보안 잠금 (2FA Lockout 기능)
+# ==========================================
+if "app_authenticated" not in st.session_state:
+    st.session_state.app_authenticated = False
+    st.session_state.failed_attempts = 0
+    st.session_state.lockout_time = None
+
+if st.session_state.lockout_time:
+    if datetime.datetime.now() < st.session_state.lockout_time:
+        remaining_time = (st.session_state.lockout_time - datetime.datetime.now()).seconds // 60
+        st.error(f"🚫 보안 잠금 상태입니다. {remaining_time + 1}분 후에 다시 시도하세요.")
+        st.stop()
+    else:
+        st.session_state.failed_attempts = 0
+        st.session_state.lockout_time = None
+
+if not st.session_state.app_authenticated:
+    st.markdown("<h2 style='text-align: center; margin-top: 100px;'>🔒 루퍼젯 프로 매니저</h2>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        with st.container(border=True):
+            pwd = st.text_input("프로그램 접속 비밀번호", type="password", key="app_pwd")
+            if st.button("접속", use_container_width=True):
+                if pwd == "1234":
+                    st.session_state.app_authenticated = True
+                    st.session_state.failed_attempts = 0
+                    st.rerun()
+                else:
+                    st.session_state.failed_attempts += 1
+                    if st.session_state.failed_attempts >= 5:
+                        st.session_state.lockout_time = datetime.datetime.now() + datetime.timedelta(minutes=30)
+                        st.error("🚫 비밀번호를 5회 틀렸습니다. 30분 동안 접속이 차단됩니다.")
+                        time.sleep(2)
+                        st.rerun()
+                    else:
+                        st.error(f"❌ 비밀번호가 틀렸습니다. ({st.session_state.failed_attempts}/5)")
+    st.stop()
+
+# ==========================================
 # 1. 설정 및 구글 연동 유틸리티
 # ==========================================
 FONT_REGULAR = "NanumGothic.ttf"
@@ -1265,7 +1304,7 @@ with st.sidebar:
         
     st.divider()
     # [추가] 사이드바 메뉴에 '일본 수출 분석' 추가
-    mode = st.radio("모드", ["견적 작성", "관리자 모드", "🇯濒 일본 수출 분석"])
+    mode = st.radio("모드", ["견적 작성", "관리자 모드", "🇯🇵 일본 수출 분석"])
 
 if mode == "관리자 모드":
     st.header("🛠 관리자 모드")
@@ -2158,9 +2197,9 @@ else:
                     st.session_state.gen_pdf = create_advanced_pdf(sorted_final_data, st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info, st.session_state.quote_remarks)
                     st.session_state.gen_excel = create_quote_excel(sorted_final_data, st.session_state.services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info, st.session_state.quote_remarks)
                     
-                    # 자재명세서는 항상 개별 품목 기준(individual_sorted_data)으로 처리
-                    st.session_state.gen_comp_pdf = create_composition_pdf(st.session_state.set_cart, st.session_state.pipe_cart, individual_sorted_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
-                    st.session_state.gen_comp_excel = create_composition_excel(st.session_state.set_cart, st.session_state.pipe_cart, individual_sorted_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
+                    # [수정] create_composition_pdf/excel 호출 시 st.session_state.quote_items 대신 safe_data(수기 품목 포함됨) 전달 -> 정렬된 데이터 사용 (선택사항이나 일관성을 위해)
+                    st.session_state.gen_comp_pdf = create_composition_pdf(st.session_state.set_cart, st.session_state.pipe_cart, sorted_final_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
+                    st.session_state.gen_comp_excel = create_composition_excel(st.session_state.set_cart, st.session_state.pipe_cart, sorted_final_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
                     
                     st.session_state.files_ready = True
                 st.rerun()

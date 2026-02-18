@@ -24,45 +24,6 @@ from googleapiclient.http import MediaIoBaseUpload
 st.set_page_config(layout="wide", page_title="루퍼젯 프로 매니저 V10.0")
 
 # ==========================================
-# 0-1. 앱 접근 보안 잠금 (2FA Lockout 기능)
-# ==========================================
-if "app_authenticated" not in st.session_state:
-    st.session_state.app_authenticated = False
-    st.session_state.failed_attempts = 0
-    st.session_state.lockout_time = None
-
-if st.session_state.lockout_time:
-    if datetime.datetime.now() < st.session_state.lockout_time:
-        remaining_time = (st.session_state.lockout_time - datetime.datetime.now()).seconds // 60
-        st.error(f"🚫 보안 잠금 상태입니다. {remaining_time + 1}분 후에 다시 시도하세요.")
-        st.stop()
-    else:
-        st.session_state.failed_attempts = 0
-        st.session_state.lockout_time = None
-
-if not st.session_state.app_authenticated:
-    st.markdown("<h2 style='text-align: center; margin-top: 100px;'>🔒 루퍼젯 프로 매니저</h2>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 1, 1])
-    with col2:
-        with st.container(border=True):
-            pwd = st.text_input("프로그램 접속 비밀번호", type="password", key="app_pwd")
-            if st.button("접속", use_container_width=True):
-                if pwd == "1234":
-                    st.session_state.app_authenticated = True
-                    st.session_state.failed_attempts = 0
-                    st.rerun()
-                else:
-                    st.session_state.failed_attempts += 1
-                    if st.session_state.failed_attempts >= 5:
-                        st.session_state.lockout_time = datetime.datetime.now() + datetime.timedelta(minutes=30)
-                        st.error("🚫 비밀번호를 5회 틀렸습니다. 30분 동안 접속이 차단됩니다.")
-                        time.sleep(2)
-                        st.rerun()
-                    else:
-                        st.error(f"❌ 비밀번호가 틀렸습니다. ({st.session_state.failed_attempts}/5)")
-    st.stop()
-
-# ==========================================
 # 1. 설정 및 구글 연동 유틸리티
 # ==========================================
 FONT_REGULAR = "NanumGothic.ttf"
@@ -190,6 +151,7 @@ def get_drive_file_map():
 def get_set_drive_file_map():
     return get_drive_file_map()
 
+# [수정 패치 1] 메모리 누수 방지 (with 구문 및 img.close() 사용)
 def download_image_by_id(file_id):
     if not file_id or not drive_service: return None
     try:
@@ -283,12 +245,31 @@ def init_db():
         try: ws_kr = sh.add_worksheet(title="Quotes_KR", rows=100, cols=10); ws_kr.append_row(['날짜', '현장명', '담당자', '총액', '데이터JSON'])
         except: pass
         
+    # [기능 추가 2] Config 시트 자동 생성 및 연동
+    try: ws_config = sh.worksheet("Config")
+    except:
+        try: 
+            ws_config = sh.add_worksheet(title="Config", rows=10, cols=2)
+            ws_config.append_row(["항목", "비밀번호"])
+            ws_config.append_row(["app_pwd", "1234"])
+            ws_config.append_row(["admin_pwd", "1234"])
+        except: pass
+        
     return ws_prod, ws_sets
 
 def load_data_from_sheet():
     ws_prod, ws_sets = init_db()
     if not ws_prod: return DEFAULT_DATA
-    data = {"config": {"password": "1234"}, "products": [], "sets": {}, "jp_quotes": [], "kr_quotes": []}
+    data = {"config": {"app_pwd": "1234", "admin_pwd": "1234"}, "products": [], "sets": {}, "jp_quotes": [], "kr_quotes": []}
+    
+    try:
+        sh = gc.open(SHEET_NAME)
+        ws_config = sh.worksheet("Config")
+        for rec in ws_config.get_all_records():
+            if rec.get("항목") == "app_pwd": data["config"]["app_pwd"] = str(rec.get("비밀번호"))
+            if rec.get("항목") == "admin_pwd": data["config"]["admin_pwd"] = str(rec.get("비밀번호"))
+    except: pass
+    
     try:
         prod_records = ws_prod.get_all_records()
         for rec in prod_records:
@@ -337,6 +318,7 @@ def save_products_to_sheet(products_list):
     
     ws_prod.clear(); ws_prod.update([df_up.columns.values.tolist()] + df_up.values.tolist())
 
+# [최적화 패치 2] 구글 API 호출 최소화를 위해 init_db() 호출 없이 바로 업데이트 수행
 def save_sets_to_sheet(sets_dict):
     if not gc: return
     try:
@@ -491,6 +473,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
             try:
                 img_data_str = img_b64.split(",", 1)[1] if "," in img_b64 else img_b64
                 img_bytes = base64.b64decode(img_data_str)
+                # [수정 패치 1]
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(img_bytes)
                     tmp_path = tmp.name
@@ -620,7 +603,7 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
     total_a2 = 0
     total_profit = 0
     
-    temp_files = []
+    temp_files = [] # [수정 패치 1] Temp file 리스트 보관
     ROW_HEIGHT_PT = 80
 
     for item in final_data_list:
@@ -643,6 +626,7 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
                 img_data_str = img_b64.split(",", 1)[1] if "," in img_b64 else img_b64
                 img_bytes = base64.b64decode(img_data_str)
                 
+                # [수정 패치 1]
                 with Image.open(io.BytesIO(img_bytes)) as pil_img:
                     orig_w, orig_h = pil_img.size
                     pil_img.close()
@@ -729,6 +713,7 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
 
     workbook.close()
     
+    # [수정 패치 1] 엑셀 작업 끝난 뒤 temp file 확실히 삭제
     for f in temp_files:
         try: 
             if os.path.exists(f):
@@ -848,6 +833,7 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
             try:
                 img_data = img_b64.split(",", 1)[1]
                 img_bytes = base64.b64decode(img_data)
+                # [수정 패치 1]
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(img_bytes)
                     tmp_path = tmp.name
@@ -1057,6 +1043,7 @@ def create_composition_excel(set_cart, pipe_cart, final_data_list, db_products, 
             if total_qty > 0:
                 additional_items_list.append({"name": name, "spec": spec, "qty": total_qty, "code": code, "image": img_data})
 
+    # [수정 패치 1] Temp file 리스트 보관
     temp_files = []
 
     def insert_scaled_image(ws, row, col, img_b64):
@@ -1198,6 +1185,7 @@ def create_composition_excel(set_cart, pipe_cart, final_data_list, db_products, 
 
     workbook.close()
     
+    # [수정 패치 1] 엑셀 작업 끝난 뒤 temp file 확실히 삭제
     for f in temp_files:
         try: 
             if os.path.exists(f):
@@ -1207,12 +1195,50 @@ def create_composition_excel(set_cart, pipe_cart, final_data_list, db_products, 
     return output.getvalue()
 
 # ==========================================
-# 3. 메인 로직
+# 3. 메인 로직 (DB Init & 2FA Lockout)
 # ==========================================
-if st.session_state.app_authenticated:
-    if "db" not in st.session_state:
-        with st.spinner("DB 접속 중..."): st.session_state.db = load_data_from_sheet()
+if "db" not in st.session_state:
+    with st.spinner("DB 연동 중..."): 
+        st.session_state.db = load_data_from_sheet()
 
+if "app_authenticated" not in st.session_state:
+    st.session_state.app_authenticated = False
+    st.session_state.failed_attempts = 0
+    st.session_state.lockout_time = None
+
+if st.session_state.lockout_time:
+    if datetime.datetime.now() < st.session_state.lockout_time:
+        remaining_time = (st.session_state.lockout_time - datetime.datetime.now()).seconds // 60
+        st.error(f"🚫 보안 잠금 상태입니다. {remaining_time + 1}분 후에 다시 시도하세요.")
+        st.stop()
+    else:
+        st.session_state.failed_attempts = 0
+        st.session_state.lockout_time = None
+
+if not st.session_state.app_authenticated:
+    st.markdown("<h2 style='text-align: center; margin-top: 100px;'>🔒 루퍼젯 프로 매니저</h2>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        with st.container(border=True):
+            pwd = st.text_input("프로그램 접속 비밀번호", type="password", key="app_pwd")
+            if st.button("접속", use_container_width=True):
+                app_pwd_db = str(st.session_state.db.get("config", {}).get("app_pwd", "1234"))
+                if pwd == app_pwd_db:
+                    st.session_state.app_authenticated = True
+                    st.session_state.failed_attempts = 0
+                    st.rerun()
+                else:
+                    st.session_state.failed_attempts += 1
+                    if st.session_state.failed_attempts >= 5:
+                        st.session_state.lockout_time = datetime.datetime.now() + datetime.timedelta(minutes=30)
+                        st.error("🚫 비밀번호를 5회 틀렸습니다. 30분 동안 접속이 차단됩니다.")
+                        time.sleep(2)
+                        st.rerun()
+                    else:
+                        st.error(f"❌ 비밀번호가 틀렸습니다. ({st.session_state.failed_attempts}/5)")
+    st.stop()
+
+if st.session_state.app_authenticated:
     if "history" not in st.session_state: st.session_state.history = {} 
     if "quote_step" not in st.session_state: st.session_state.quote_step = 1
     if "quote_items" not in st.session_state: st.session_state.quote_items = {}
@@ -1247,98 +1273,111 @@ if st.session_state.app_authenticated:
     if "quote_remarks" not in st.session_state: 
         st.session_state.quote_remarks = "1. 견적 유효기간: 견적일로부터 15일 이내\n2. 출고: 결재 완료 후 즉시 또는 7일 이내"
 
-    DEFAULT_DATA = {"config": {"password": "1234"}, "products":[], "sets":{}}
-    if not st.session_state.db: st.session_state.db = DEFAULT_DATA
-    if "config" not in st.session_state.db: st.session_state.db["config"] = {"password": "1234"}
-
     st.title("💧 루퍼젯 프로 매니저 V10.0 (Cloud)")
 
     with st.sidebar:
         st.header("🗂️ 견적 보관함")
         q_name = st.text_input("현장명 (저장용)", value=st.session_state.current_quote_name)
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("💾 임시저장"):
-                if not q_name:
-                    st.error("현장명을 입력해주세요.")
+        
+        col_s1, col_s2, col_s3 = st.columns(3)
+        with col_s1: btn_save_temp = st.button("💾 임시저장")
+        with col_s2: btn_save_off = st.button("✅ 정식저장")
+        with col_s3: btn_init = st.button("✨ 초기화")
+        
+        if btn_save_temp or btn_save_off:
+            save_type = "정식" if btn_save_off else "임시"
+            if not q_name:
+                st.error("현장명을 입력해주세요.")
+            else:
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                current_custom_prices = st.session_state.final_edit_df.to_dict('records') if st.session_state.final_edit_df is not None else []
+                
+                # [버그 패치 2] ui_state 저장 로직 추가
+                form_type_val = st.session_state.get("step3_form_type", st.session_state.ui_state.get("form_type", "기본 양식"))
+                print_mode_val = st.session_state.get("step3_print_mode", st.session_state.ui_state.get("print_mode", "개별 품목 나열 (기존)"))
+                vat_mode_val = st.session_state.get("step3_vat_mode", st.session_state.ui_state.get("vat_mode", "포함 (기본)"))
+                
+                if form_type_val == "기본 양식":
+                    sel_val = st.session_state.get("step3_sel_basic", st.session_state.ui_state.get("sel", ["소비자가"]))
                 else:
-                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    current_custom_prices = st.session_state.final_edit_df.to_dict('records') if st.session_state.final_edit_df is not None else []
-                    
-                    # [버그 패치 2] ui_state 저장 로직 추가
-                    form_type_val = st.session_state.get("step3_form_type", st.session_state.ui_state.get("form_type", "기본 양식"))
-                    print_mode_val = st.session_state.get("step3_print_mode", st.session_state.ui_state.get("print_mode", "개별 품목 나열 (기존)"))
-                    vat_mode_val = st.session_state.get("step3_vat_mode", st.session_state.ui_state.get("vat_mode", "포함 (기본)"))
-                    
-                    if form_type_val == "기본 양식":
-                        sel_val = st.session_state.get("step3_sel_basic", st.session_state.ui_state.get("sel", ["소비자가"]))
-                    else:
-                        sel_val = st.session_state.get("step3_sel_profit", st.session_state.ui_state.get("sel", ["소비자가"]))
+                    sel_val = st.session_state.get("step3_sel_profit", st.session_state.ui_state.get("sel", ["소비자가"]))
 
-                    ui_state_to_save = {
-                        "form_type": form_type_val,
-                        "print_mode": print_mode_val,
-                        "vat_mode": vat_mode_val,
-                        "sel": sel_val
-                    }
-
-                    save_data = {
-                        "items": st.session_state.quote_items,
-                        "services": st.session_state.services,
-                        "pipe_cart": st.session_state.pipe_cart,
-                        "set_cart": st.session_state.set_cart,
-                        "step": st.session_state.quote_step,
-                        "buyer": st.session_state.buyer_info,
-                        "remarks": st.session_state.quote_remarks,
-                        "custom_prices": current_custom_prices,
-                        "ui_state": ui_state_to_save
-                    }
-                    
-                    est_total = 0
-                    pdb = {str(p.get("code")).strip(): p for p in st.session_state.db["products"]}
-                    for code, qty in st.session_state.quote_items.items():
-                        prod = pdb.get(str(code).strip())
-                        if prod:
-                            est_total += int(prod.get("price_cons", 0) or 0) * int(qty)
-                    
-                    json_str = json.dumps(save_data, ensure_ascii=False)
-                    
-                    if save_quote_to_sheet(timestamp, q_name, st.session_state.buyer_info.get("manager", ""), est_total, json_str):
-                        st.session_state.db = load_data_from_sheet()
-                        st.session_state.current_quote_name = q_name
-                        st.success("구글 시트에 저장되었습니다.")
-                    else:
-                        st.error("저장 실패 (네트워크 오류)")
-
-        with c2:
-            if st.button("✨ 초기화"):
-                st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.pipe_cart = []; st.session_state.set_cart = []; st.session_state.quote_step = 1
-                st.session_state.current_quote_name = ""; st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}; st.session_state.step3_ready=False; st.session_state.files_ready = False
-                st.session_state.quote_remarks = "1. 견적 유효기간: 견적일로부터 15일 이내\n2. 출고: 결재 완료 후 즉시 또는 7일 이내"
-                st.session_state.custom_prices = []
-                st.session_state.ui_state = {
-                    "form_type": "기본 양식",
-                    "print_mode": "개별 품목 나열 (기존)",
-                    "vat_mode": "포함 (기본)",
-                    "sel": ["소비자가"]
+                ui_state_to_save = {
+                    "form_type": form_type_val,
+                    "print_mode": print_mode_val,
+                    "vat_mode": vat_mode_val,
+                    "sel": sel_val
                 }
-                st.session_state.last_sel = []
-                for k in ["step3_form_type", "step3_print_mode", "step3_vat_mode", "step3_sel_basic", "step3_sel_profit"]:
-                    if k in st.session_state:
-                        del st.session_state[k]
-                st.rerun()
+
+                save_data = {
+                    "items": st.session_state.quote_items,
+                    "services": st.session_state.services,
+                    "pipe_cart": st.session_state.pipe_cart,
+                    "set_cart": st.session_state.set_cart,
+                    "step": st.session_state.quote_step,
+                    "buyer": st.session_state.buyer_info,
+                    "remarks": st.session_state.quote_remarks,
+                    "custom_prices": current_custom_prices,
+                    "ui_state": ui_state_to_save,
+                    "save_type": save_type
+                }
+                
+                est_total = 0
+                pdb = {str(p.get("code")).strip(): p for p in st.session_state.db["products"]}
+                for code, qty in st.session_state.quote_items.items():
+                    prod = pdb.get(str(code).strip())
+                    if prod:
+                        est_total += int(prod.get("price_cons", 0) or 0) * int(qty)
+                
+                json_str = json.dumps(save_data, ensure_ascii=False)
+                
+                if save_quote_to_sheet(timestamp, q_name, st.session_state.buyer_info.get("manager", ""), est_total, json_str):
+                    st.session_state.db = load_data_from_sheet()
+                    st.session_state.current_quote_name = q_name
+                    st.success(f"구글 시트에 '{save_type}'로 저장되었습니다.")
+                else:
+                    st.error("저장 실패 (네트워크 오류)")
+
+        if btn_init:
+            st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.pipe_cart = []; st.session_state.set_cart = []; st.session_state.quote_step = 1
+            st.session_state.current_quote_name = ""; st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}; st.session_state.step3_ready=False; st.session_state.files_ready = False
+            st.session_state.quote_remarks = "1. 견적 유효기간: 견적일로부터 15일 이내\n2. 출고: 결재 완료 후 즉시 또는 7일 이내"
+            st.session_state.custom_prices = []
+            st.session_state.ui_state = {
+                "form_type": "기본 양식",
+                "print_mode": "개별 품목 나열 (기존)",
+                "vat_mode": "포함 (기본)",
+                "sel": ["소비자가"]
+            }
+            st.session_state.last_sel = []
+            for k in ["step3_form_type", "step3_print_mode", "step3_vat_mode", "step3_sel_basic", "step3_sel_profit"]:
+                if k in st.session_state:
+                    del st.session_state[k]
+            st.rerun()
+            
         st.divider()
         
         kr_quotes = st.session_state.db.get("kr_quotes", [])
         if kr_quotes:
             df_kr = pd.DataFrame(kr_quotes).iloc[::-1]
-            sel_idx = st.selectbox(
-                "불러오기 (구글 시트)", 
-                range(len(df_kr)), 
-                format_func=lambda i: f"[{df_kr.iloc[i].get('날짜','')}] {df_kr.iloc[i].get('현장명','')} ({df_kr.iloc[i].get('담당자','')})"
-            )
             
-            if st.button("📂 로드"):
+            def format_quote_label(i):
+                r = df_kr.iloc[i]
+                d_json_str = str(r.get("데이터JSON", "{}"))
+                try: 
+                    d_json = json.loads(d_json_str)
+                    s_type = d_json.get("save_type", "임시")
+                except: s_type = "임시"
+                return f"[{r.get('날짜','')}] [{s_type}] {r.get('현장명','')} ({r.get('담당자','')})"
+                
+            sel_idx = st.selectbox("불러오기 (구글 시트)", range(len(df_kr)), format_func=format_quote_label)
+            
+            c_l1, c_l2, c_l3 = st.columns(3)
+            with c_l1: btn_load = st.button("📂 불러오기")
+            with c_l2: btn_copy = st.button("📝 복사/수정")
+            with c_l3: btn_del = st.button("🗑️ 삭제")
+            
+            if btn_load or btn_copy:
                 try:
                     target_row = df_kr.iloc[sel_idx]
                     json_str = target_row.get("데이터JSON", "{}")
@@ -1367,14 +1406,40 @@ if st.session_state.app_authenticated:
                         if k in st.session_state:
                             del st.session_state[k]
 
-                    st.session_state.current_quote_name = target_row.get("현장명", "")
+                    if btn_copy:
+                        st.session_state.quote_step = 1
+                        st.session_state.current_quote_name = ""
+                        st.success("데이터를 복사하여 새로운 견적을 시작합니다!")
+                    else:
+                        st.session_state.current_quote_name = target_row.get("현장명", "")
+                        st.success(f"'{st.session_state.current_quote_name}' 불러오기 완료!")
+                        
                     st.session_state.step3_ready = False
                     st.session_state.files_ready = False
-                    st.success(f"'{st.session_state.current_quote_name}' 불러오기 완료!")
                     time.sleep(0.5)
                     st.rerun()
                 except Exception as e:
                     st.error(f"불러오기 실패: {e}")
+                    
+            if btn_del:
+                try:
+                    real_idx = len(kr_quotes) - sel_idx - 1
+                    kr_quotes.pop(real_idx)
+                    sh = gc.open(SHEET_NAME)
+                    ws_kr = sh.worksheet("Quotes_KR")
+                    ws_kr.clear()
+                    if kr_quotes:
+                        header = list(kr_quotes[0].keys())
+                        rows = [header] + [[str(r.get(k, "")) for k in header] for r in kr_quotes]
+                        ws_kr.update(rows)
+                    else:
+                        ws_kr.update([['날짜', '현장명', '담당자', '총액', '데이터JSON']])
+                    st.session_state.db = load_data_from_sheet()
+                    st.success("삭제되었습니다.")
+                    time.sleep(0.5)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"삭제 실패: {e}")
         else:
             st.info("저장된 견적이 없습니다.")
             
@@ -1388,7 +1453,8 @@ if st.session_state.app_authenticated:
         if not st.session_state.auth_admin:
             pw = st.text_input("관리자 비밀번호", type="password")
             if st.button("로그인"):
-                if pw == st.session_state.db["config"]["password"]: st.session_state.auth_admin = True; st.rerun()
+                admin_pwd_db = str(st.session_state.db.get("config", {}).get("admin_pwd", "1234"))
+                if pw == admin_pwd_db: st.session_state.auth_admin = True; st.rerun()
                 else: st.error("비밀번호 불일치")
         else:
             if st.button("로그아웃"): st.session_state.auth_admin = False; st.rerun()
@@ -1412,6 +1478,7 @@ if st.session_state.app_authenticated:
                     final_cols = [c for c in desired_order if c in df.columns]
                     df = df[final_cols]
 
+                    # [수정 패치 2] width="stretch" 적용
                     edited_df = st.data_editor(
                         df, 
                         num_rows="dynamic", 
@@ -1423,6 +1490,7 @@ if st.session_state.app_authenticated:
                             "매입단가": st.column_config.NumberColumn(format="%d"),
                             "총판가1": st.column_config.NumberColumn(format="%d"),
                             "총판가2": st.column_config.NumberColumn(format="%d"),
+                            # [변경] 컬럼 설정 업데이트
                             "대리점가1": st.column_config.NumberColumn(format="%d"),
                             "대리점가2": st.column_config.NumberColumn(format="%d"),
                             "계통농협": st.column_config.NumberColumn(format="%d"),
@@ -1579,7 +1647,8 @@ if st.session_state.app_authenticated:
                             st.warning(f"선택한 {len(sel_rows)}개의 세트를 정말로 삭제하시겠습니까?")
                             del_pw = st.text_input("관리자 비밀번호 확인", type="password", key="bulk_del_pw")
                             if st.button("🚫 일괄 삭제 실행", type="primary"):
-                                if del_pw == st.session_state.db["config"]["password"]:
+                                admin_pwd_db = str(st.session_state.db.get("config", {}).get("admin_pwd", "1234"))
+                                if del_pw == admin_pwd_db:
                                     del_count = 0
                                     target_names = [sl[i]["세트명"] for i in sel_rows]
                                     for name in target_names:
@@ -1715,7 +1784,22 @@ if st.session_state.app_authenticated:
                             save_sets_to_sheet(st.session_state.db["sets"])
                             st.session_state.target_set_edit = None
                             st.success("삭제되었습니다."); time.sleep(1); st.rerun()
-            with t3: st.write("설정")
+            with t3: 
+                st.markdown("##### ⚙️ 비밀번호 설정")
+                app_pwd_input = st.text_input("앱 접속 비밀번호", value=st.session_state.db.get("config", {}).get("app_pwd", "1234"), key="cfg_app")
+                admin_pwd_input = st.text_input("관리자/원가조회 비밀번호", value=st.session_state.db.get("config", {}).get("admin_pwd", "1234"), key="cfg_admin")
+                
+                if st.button("💾 비밀번호 변경 저장"):
+                    try:
+                        sh = gc.open(SHEET_NAME)
+                        ws_config = sh.worksheet("Config")
+                        ws_config.clear()
+                        ws_config.update([["항목", "비밀번호"], ["app_pwd", app_pwd_input], ["admin_pwd", admin_pwd_input]])
+                        st.session_state.db["config"]["app_pwd"] = app_pwd_input
+                        st.session_state.db["config"]["admin_pwd"] = admin_pwd_input
+                        st.success("비밀번호가 성공적으로 변경되었습니다!")
+                    except Exception as e:
+                        st.error(f"비밀번호 저장 실패: {e}")
 
     elif mode == "🇯🇵 일본 수출 분석":
         st.header("🇯🇵 일본 수출 견적 수익성 분석")
@@ -1899,7 +1983,6 @@ if st.session_state.app_authenticated:
             st.markdown("#### 📏 배관 물량 산출 (장바구니)")
             all_products = st.session_state.db["products"]
             
-            # [버그 패치 1] 키 적용
             pipe_type_sel = st.radio("배관 구분", ["주배관", "가지관"], horizontal=True, key="pipe_type_radio")
             filtered_pipes = [p for p in all_products if p["category"] == pipe_type_sel]
             c1, c2, c3 = st.columns([3, 2, 1])
@@ -1953,11 +2036,11 @@ if st.session_state.app_authenticated:
                 if not st.session_state.auth_price:
                     pw = st.text_input("원가 조회 비번", type="password")
                     if st.button("해제"):
-                        if pw == st.session_state.db["config"]["password"]: st.session_state.auth_price = True; st.rerun()
+                        admin_pwd_db = str(st.session_state.db.get("config", {}).get("admin_pwd", "1234"))
+                        if pw == admin_pwd_db: st.session_state.auth_price = True; st.rerun()
                         else: st.error("오류")
                 else: st.success("🔓 원가 조회 가능")
             
-            # [버그 패치 1] 키 적용
             with c_view: view = st.radio("단가 보기", view_opts, horizontal=True, key="step2_price_view")
             
             key_map = {
@@ -2038,7 +2121,6 @@ if st.session_state.app_authenticated:
                 q_date = st.date_input("견적일", datetime.datetime.now())
                 
             with c_opt1: 
-                # [버그 패치 2] 로드 시 저장된 ui_state 값으로 index 기본값 설정
                 idx_form = 0 if st.session_state.ui_state.get("form_type", "기본 양식") == "기본 양식" else 1
                 form_type = st.radio("양식", ["기본 양식", "이익 분석 양식"], index=idx_form, key="step3_form_type")
                 
@@ -2059,11 +2141,11 @@ if st.session_state.app_authenticated:
                     with c_pw: input_pw = st.text_input("비밀번호", type="password", key="step3_pw")
                     with c_btn: 
                         if st.button("해제", key="step3_btn"):
-                            if input_pw == st.session_state.db["config"]["password"]: st.session_state.auth_price = True; st.rerun()
+                            admin_pwd_db = str(st.session_state.db.get("config", {}).get("admin_pwd", "1234"))
+                            if input_pw == admin_pwd_db: st.session_state.auth_price = True; st.rerun()
                             else: st.error("불일치")
                     st.stop()
                     
-                # [버그 패치 2] 로드 시 저장된 sel 옵션 복원
                 saved_sel = st.session_state.ui_state.get("sel", ["소비자가"])
                 valid_sel = [s for s in saved_sel if s in opts]
                 if not valid_sel: valid_sel = ["소비자가"]
@@ -2073,7 +2155,6 @@ if st.session_state.app_authenticated:
                 else: 
                     sel = st.multiselect("비교 단가 (2개)", opts, default=valid_sel[:2], max_selections=2, key="step3_sel_profit")
 
-            # [버그 패치 2] 현재 선택된 UI 값을 실시간 ui_state에 동기화 (임시저장 누를 때 바로 가져가도록)
             st.session_state.ui_state["form_type"] = form_type
             st.session_state.ui_state["print_mode"] = print_mode
             st.session_state.ui_state["vat_mode"] = vat_mode
@@ -2134,7 +2215,6 @@ if st.session_state.app_authenticated:
                         if len(pk)>1: d["price_2"] = int(inf.get(pk[1], 0))
                         else: d["price_2"] = 0
                         
-                        # [버그 패치 1] 커스텀 단가가 있으면 로드 시 우선 적용
                         if code_key in cp_map:
                             d["수량"] = int(cp_map[code_key].get("수량", d["수량"]))
                             d["price_1"] = int(cp_map[code_key].get("price_1", d["price_1"]))
@@ -2242,7 +2322,6 @@ if st.session_state.app_authenticated:
                         for s in st.session_state.services:
                             pdf_excel_services.append(s.copy())
                             
-                        # 부가세 별도 처리 로직 
                         if vat_mode == "별도":
                             for item in safe_data:
                                 try: item['price_1'] = int(round(float(item.get('price_1', 0)) / 1.1))

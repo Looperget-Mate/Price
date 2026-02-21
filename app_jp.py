@@ -589,8 +589,8 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         pdf.set_fill_color(255, 255, 224)
         pdf.cell(190, 6, " [ 追加費用 ] ", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
         for s in service_items:
-            svc_total += s['금액']; pdf.cell(155, 6, s['항목'], border=1)
-            pdf.cell(35, 6, f"¥ {s['금액']:,}", border=1, align='R', new_x="LMARGIN", new_y="NEXT")
+            svc_total += s['金額']; pdf.cell(155, 6, s['項目'], border=1)
+            pdf.cell(35, 6, f"¥ {s['金額']:,}", border=1, align='R', new_x="LMARGIN", new_y="NEXT")
 
     pdf.ln(5); pdf.set_font(font_name, b_style, 12)
     
@@ -745,10 +745,10 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
         ws.write(row, 1, "[追加費用]", fmt_header)
         row += 1
         for s in service_items:
-            ws.write(row, 1, s['항목'], fmt_text)
+            ws.write(row, 1, s['項目'], fmt_text)
             price_col = 5 if form_type == "基本様式" else 7
-            ws.write(row, price_col, s['금액'], fmt_num)
-            svc_total += s['금액']
+            ws.write(row, price_col, s['金額'], fmt_num)
+            svc_total += s['金額']
             row += 1
 
     row += 1
@@ -1416,7 +1416,7 @@ with st.sidebar:
                 d_json = json.loads(d_json_str)
                 s_type = d_json.get("save_type", "一時")
             except: s_type = "一時"
-            return f"[{r.get('날짜','')}] [{s_type}] {r.get('현장명','')} ({r.get('담당자','')})"
+            return f"[{r.get('날짜','')}] [{s_type}] {r.get('현장명','')} ({r.get('担当자','')})"
             
         sel_idx = st.selectbox("読み込み (Google Sheets)", range(len(df_jp_hist)), format_func=format_quote_label)
         
@@ -1899,7 +1899,7 @@ else:
                 with c_amt: sp = st.number_input("金額(¥)", 0, step=1000, key="step2_cost_amt")
                 sn = stype
                 if stype == "その他": sn = st.text_input("内容入力", key="step2_cost_desc")
-                if st.button("費用リストに追加", use_container_width=True): st.session_state.services.append({"항목": sn, "金額": int(sp)}); st.rerun()
+                if st.button("費用リストに追加", use_container_width=True): st.session_state.services.append({"項目": sn, "金額": int(sp)}); st.rerun()
         if st.session_state.services:
             st.caption("追加された費用リスト"); st.table(st.session_state.services)
         st.divider()
@@ -2114,7 +2114,7 @@ else:
                             try: item['price_2'] = int(round(float(item.get('price_2', 0)) / 1.1))
                             except: pass
                         for svc in pdf_excel_services:
-                            try: svc['금액'] = int(round(float(svc.get('금액', 0)) / 1.1))
+                            try: svc['金額'] = int(round(float(svc.get('金額', 0)) / 1.1))
                             except: pass
 
                     def sort_items(item_list):

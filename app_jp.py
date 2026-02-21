@@ -60,7 +60,7 @@ def get_google_services():
         drive_service = build('drive', 'v3', credentials=creds)
         return gc, drive_service
     except Exception as e:
-        st.error(f"Googleサービス認証에 실패했습니다: {e}")
+        st.error(f"Googleサービス認証に失敗しました: {e}")
         return None, None
 
 gc, drive_service = get_google_services()
@@ -296,7 +296,7 @@ def load_data_from_sheet():
         jp_records = []
         
     jp_dict = {str(r.get("품목코드", "")).zfill(5): r for r in jp_records if r.get("품목코드")}
-    cat_map = {"주배관": "メイン配관", "주배관세트": "メイン配관", "가지관": "分岐配管", "가지관세트": "分岐配管", "부속": "付属", "기타": "その他資材", "기타자재": "その他資材"}
+    cat_map = {"주배관": "メイン配管", "주배관세트": "メイン配管", "가지관": "分岐配管", "가지관세트": "分岐配管", "부속": "付属", "기타": "その他資材", "기타자재": "その他資材"}
     
     merged_products = []
     for kr in kr_records:
@@ -470,7 +470,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         pdf.cell(10, h_height, "単位", border=1, align='C', fill=True)
         pdf.cell(12, h_height, "数量", border=1, align='C', fill=True)
 
-        if form_type == "기본 양식":
+        if form_type == "基本様式":
             pdf.cell(35, h_height, f"{price_labels[0]}", border=1, align='C', fill=True)
             pdf.cell(35, h_height, "金額", border=1, align='C', fill=True)
             pdf.cell(38, h_height, "備考", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
@@ -514,7 +514,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         sum_a1 += a1
         
         p2 = 0; a2 = 0; profit = 0; rate = 0
-        if form_type == "이익 분석 양식":
+        if form_type == "利益分析様式":
             try: p2 = int(float(item.get("price_2", 0)))
             except: p2 = 0
             a2 = p2 * qty
@@ -543,7 +543,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         pdf.cell(10, h, str(item.get("단위", "EA") or "EA"), border=1, align='C')
         pdf.cell(12, h, str(qty), border=1, align='C')
 
-        if form_type == "기본 양식":
+        if form_type == "基本様式":
             pdf.cell(35, h, f"¥ {p1:,}", border=1, align='R')
             pdf.cell(35, h, f"¥ {a1:,}", border=1, align='R')
             pdf.cell(38, h, "", border=1, align='C'); pdf.ln()
@@ -566,7 +566,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     pdf.cell(15+45+10, 10, "小 計 (Sub Total)", border=1, align='C', fill=True)
     pdf.cell(12, 10, f"{sum_qty:,}", border=1, align='C', fill=True)
     
-    if form_type == "기본 양식":
+    if form_type == "基本様式":
         pdf.cell(35, 10, "", border=1, fill=True)
         pdf.cell(35, 10, f"¥ {sum_a1:,}", border=1, align='R', fill=True)
         pdf.cell(38, 10, "", border=1, fill=True); pdf.ln()
@@ -600,7 +600,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     pdf.multi_cell(0, 5, remarks, align='R')
     pdf.ln(2)
 
-    if form_type == "기본 양식":
+    if form_type == "基本様式":
         final_total = sum_a1 + svc_total
         pdf.cell(120, 10, "", border=0); pdf.cell(35, 10, "総 合 計", border=1, align='C', fill=True)
         pdf.cell(35, 10, f"¥ {final_total:,}", border=1, align='R')
@@ -637,7 +637,7 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
     ws.write(2, 4, f"TEL: {buyer_info.get('phone', '')}")
 
     headers = ["画像", "品名/規格", "単位", "数量"]
-    if form_type == "기본 양식":
+    if form_type == "基本様式":
         headers.extend([price_labels[0], "金額", "備考"])
     else:
         headers.extend([price_labels[0], "金額(1)", price_labels[1], "金額(2)", "利益", "率(%)"])
@@ -718,7 +718,7 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
         ws.write(row, 2, item.get("단위", "EA"), fmt_center)
         ws.write(row, 3, qty, fmt_center)
 
-        if form_type == "기본 양식":
+        if form_type == "基本様式":
             ws.write(row, 4, p1, fmt_num)
             ws.write(row, 5, a1, fmt_num)
             ws.write(row, 6, "", fmt_text)
@@ -746,15 +746,15 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
         row += 1
         for s in service_items:
             ws.write(row, 1, s['항목'], fmt_text)
-            price_col = 5 if form_type == "기본 양식" else 7
+            price_col = 5 if form_type == "基本様式" else 7
             ws.write(row, price_col, s['금액'], fmt_num)
             svc_total += s['금액']
             row += 1
 
     row += 1
     ws.write(row, 1, "総 合 計", fmt_header)
-    final_sum = (total_a1 if form_type == "기본 양식" else total_a2) + svc_total
-    col_idx = 5 if form_type == "기본 양식" else 7
+    final_sum = (total_a1 if form_type == "基本様式" else total_a2) + svc_total
+    col_idx = 5 if form_type == "基本様式" else 7
     ws.write(row, col_idx, final_sum, fmt_num)
 
     row += 2
@@ -1278,7 +1278,7 @@ if not st.session_state.app_authenticated:
                     st.session_state.failed_attempts += 1
                     if st.session_state.failed_attempts >= 5:
                         st.session_state.lockout_time = datetime.datetime.now() + datetime.timedelta(minutes=30)
-                        st.error("🚫 パスワードを5回間違えました。30분間接続がブロックされます。")
+                        st.error("🚫 パスワードを5回間違えました。30分間接続がブロックされます。")
                         time.sleep(2)
                         st.rerun()
                     else:
@@ -1331,7 +1331,7 @@ with st.sidebar:
     col_s1, col_s2, col_s3 = st.columns(3)
     with col_s1: btn_save_temp = st.button("💾 一時保存")
     with col_s2: btn_save_off = st.button("✅ 正式保存")
-    with col_s3: btn_init = st.button("✨ 初期화")
+    with col_s3: btn_init = st.button("✨ 初期化")
     
     if btn_save_temp or btn_save_off:
         save_type = "正式" if btn_save_off else "一時"
@@ -1341,7 +1341,7 @@ with st.sidebar:
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             current_custom_prices = st.session_state.final_edit_df.to_dict('records') if st.session_state.final_edit_df is not None else []
             
-            form_type_val = st.session_state.get("step3_form_type", st.session_state.ui_state.get("form_type", "基本様식"))
+            form_type_val = st.session_state.get("step3_form_type", st.session_state.ui_state.get("form_type", "基本様式"))
             print_mode_val = st.session_state.get("step3_print_mode", st.session_state.ui_state.get("print_mode", "個別品目羅列 (既存)"))
             vat_mode_val = st.session_state.get("step3_vat_mode", st.session_state.ui_state.get("vat_mode", "税込 (基本)"))
             
@@ -1642,7 +1642,7 @@ if mode == "管理者モード":
                 st.dataframe(pd.DataFrame(rows), width="stretch")
 
                 st.markdown("---")
-                st.info("現在のレートに基づいて、全ての製品の購入単価(JPY)を計算し、DB에 上書きします。(代理店価格・消費者価格は手動管理のため維持されます)")
+                st.info("現在のレートに基づいて、全ての製品の購入単価(JPY)を計算し、DBに上書きします。(代理店価格・消費者価格は手動管理のため維持されます)")
                 update_pw = st.text_input("管理者のパスワードを入力して更新", type="password", key="rate_update_pw")
                 if st.button("🚨 為替レートを適用して購入単価(JPY)のみ一括更新する", type="primary"):
                     admin_pwd_db = str(st.session_state.db.get("config", {}).get("admin_pwd", "1234"))
@@ -1682,7 +1682,7 @@ if mode == "管理者モード":
         with t3: 
             st.markdown("##### ⚙️ パスワード設定")
             app_pwd_input = st.text_input("アプリ接続パスワード", value=st.session_state.db.get("config", {}).get("app_pwd", "1234"), key="cfg_app")
-            admin_pwd_input = st.text_input("管理者/原価照회パスワード", value=st.session_state.db.get("config", {}).get("admin_pwd", "1234"), key="cfg_admin")
+            admin_pwd_input = st.text_input("管理者/原価照会パスワード", value=st.session_state.db.get("config", {}).get("admin_pwd", "1234"), key="cfg_admin")
             
             if st.button("💾 パスワード変更保存"):
                 try:
@@ -1786,7 +1786,7 @@ else:
         with c2: len_pipe = st.number_input("長さ(m)", min_value=1, step=1, format="%d", key="pipe_len")
         with c3:
             st.write(""); st.write("")
-            if st.button("➕ リ스트追加"):
+            if st.button("➕ リスト追加"):
                 if sel_pipe: st.session_state.pipe_cart.append({"type": pipe_type_sel, "name": sel_pipe['name'], "spec": sel_pipe.get("spec", ""), "code": sel_pipe.get("code", ""), "len": len_pipe})
         if st.session_state.pipe_cart:
             st.caption("📋 入力された配管リスト")
@@ -1987,76 +1987,54 @@ else:
             
             pk = [pkey[l] for l in sel] if sel else ["price_cons"]
             
-            if not st.session_state.step3_ready:
-                fdata = []
-                processed_keys = set()
-                
-                for n, q in st.session_state.quote_items.items():
-                    inf = pdb.get(str(n), {})
-                    if not inf: continue
-                    
-                    code_val = str(inf.get("code", "")).strip().zfill(5)
-                    name_val = str(inf.get("name", n)).strip()
-                    code_key = code_val if code_val and code_val != "00000" else name_val
-                    
-                    d = {
-                        "품목": name_val, 
-                        "규격": inf.get("spec", ""), 
-                        "코드": inf.get("code", ""), 
-                        "단위": inf.get("unit", "EA"), 
-                        "수량": int(q), 
-                        "image_data": inf.get("image")
-                    }
-                    
-                    def get_price(price_key, item_inf):
-                        if price_key == "price_buy":
-                            return int(item_inf.get(price_key, 0) / rate) if rate else 0
-                        return int(item_inf.get(price_key, 0))
-
-                    d["price_1"] = get_price(pk[0], inf)
-                    if len(pk)>1: d["price_2"] = get_price(pk[1], inf)
-                    else: d["price_2"] = 0
-                    
-                    if code_key in cp_map:
-                        d["수량"] = int(cp_map[code_key].get("수량", d["수량"]))
-                        d["price_1"] = int(cp_map[code_key].get("price_1", d["price_1"]))
-                        d["price_2"] = int(cp_map[code_key].get("price_2", d["price_2"]))
-                        processed_keys.add(code_key)
-                        
-                    fdata.append(d)
-                    
-                if st.session_state.get("custom_prices"):
-                    for cp in st.session_state.custom_prices:
-                        k = str(cp.get("코드", "")).strip().zfill(5) if str(cp.get("코드", "")).strip() else str(cp.get("품목", "")).strip()
-                        if k not in processed_keys:
-                            fdata.append(cp.copy())
-                            
-                st.session_state.final_edit_df = pd.DataFrame(fdata)
-                st.session_state.step3_ready = True
+            fdata = []
+            processed_keys = set()
             
-            elif selectors_changed and st.session_state.final_edit_df is not None and not st.session_state.final_edit_df.empty:
-                def update_prices_in_row(row):
-                    code = str(row.get("코드", "")).strip().zfill(5)
-                    name = str(row.get("품목", ""))
-                    item = pdb.get(code)
-                    if not item: item = pdb.get(name)
+            for n, q in st.session_state.quote_items.items():
+                inf = pdb.get(str(n), {})
+                if not inf: continue
+                
+                if "消費者価格" in sel and inf.get("category", "") == "관급비용":
+                    continue
+                
+                code_val = str(inf.get("code", "")).strip().zfill(5)
+                name_val = str(inf.get("name", n)).strip()
+                code_key = code_val if code_val and code_val != "00000" else name_val
+                
+                d = {
+                    "품목": name_val, 
+                    "규격": inf.get("spec", ""), 
+                    "코드": inf.get("code", ""), 
+                    "단위": inf.get("unit", "EA"), 
+                    "수량": int(q), 
+                    "image_data": inf.get("image")
+                }
+                
+                def get_price(price_key, item_inf):
+                    if price_key == "price_buy":
+                        return int(item_inf.get(price_key, 0) / rate) if rate else 0
+                    return int(item_inf.get(price_key, 0))
+
+                d["price_1"] = get_price(pk[0], inf)
+                if len(pk)>1: d["price_2"] = get_price(pk[1], inf)
+                else: d["price_2"] = 0
+                
+                if code_key in cp_map:
+                    d["수량"] = int(cp_map[code_key].get("수량", d["수량"]))
+                    d["price_1"] = int(cp_map[code_key].get("price_1", d["price_1"]))
+                    d["price_2"] = int(cp_map[code_key].get("price_2", d["price_2"]))
+                    processed_keys.add(code_key)
                     
-                    if item:
-                        def get_price(price_key, item_inf):
-                            if price_key == "price_buy":
-                                return int(item_inf.get(price_key, 0) / rate) if rate else 0
-                            return int(item_inf.get(price_key, 0))
-                            
-                        p1 = get_price(pk[0], item)
-                        p2 = get_price(pk[1], item) if len(pk) > 1 else 0
-                        return pd.Series([p1, p2])
-                    else:
-                        return pd.Series([int(row.get("price_1", 0)), int(row.get("price_2", 0))])
-
-                new_prices = st.session_state.final_edit_df.apply(update_prices_in_row, axis=1)
-                st.session_state.final_edit_df["price_1"] = new_prices[0]
-                st.session_state.final_edit_df["price_2"] = new_prices[1]
-
+                fdata.append(d)
+                
+            if st.session_state.get("custom_prices"):
+                for cp in st.session_state.custom_prices:
+                    k = str(cp.get("코드", "")).strip().zfill(5) if str(cp.get("코드", "")).strip() else str(cp.get("품목", "")).strip()
+                    if k not in processed_keys:
+                        fdata.append(cp.copy())
+                        
+            st.session_state.final_edit_df = pd.DataFrame(fdata)
+            st.session_state.step3_ready = True
             st.session_state.last_sel = sel
             st.session_state.files_ready = False 
 
@@ -2122,7 +2100,7 @@ else:
             st.write("")
             if st.button("📄 見積書ファイル作成 (PDF/Excel)", type="primary", use_container_width=True):
                 with st.spinner("ファイルを作成しています... (画像ダウンロード及び変換中)"):
-                    fmode = "기본 양식" if "基本" in form_type else "이익 분석 양식"
+                    fmode = "基本様式" if "基本" in form_type else "利益分析様式"
                     safe_data = edited.fillna(0).to_dict('records')
                     
                     pdf_excel_services = []

@@ -473,7 +473,6 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
             try:
                 img_data_str = img_b64.split(",", 1)[1] if "," in img_b64 else img_b64
                 img_bytes = base64.b64decode(img_data_str)
-                # [수정 패치 1]
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(img_bytes)
                     tmp_path = tmp.name
@@ -831,12 +830,10 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
                 img_data = img_b64.split(",", 1)[1]
                 img_bytes = base64.b64decode(img_data)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(img_bytes)
-                    tmp_path = tmp.name
+                    tmp.write(img_bytes); tmp_path = tmp.name
                 
                 pdf.image(tmp_path, x=x+6.25, y=y+2.5, w=37.5, h=30)
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
+                os.unlink(tmp_path)
             except: pass
             
         pdf.set_xy(x+col_w_img, y)
@@ -885,8 +882,7 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
                 img_data = img_b64.split(",", 1)[1]
                 img_bytes = base64.b64decode(img_data)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(img_bytes)
-                    tmp_path = tmp.name
+                    tmp.write(img_bytes); tmp_path = tmp.name
                 pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
                 if os.path.exists(tmp_path):
                     os.unlink(tmp_path)
@@ -977,8 +973,7 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
                 img_data = img_b64.split(",", 1)[1]
                 img_bytes = base64.b64decode(img_data)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(img_bytes)
-                    tmp_path = tmp.name
+                    tmp.write(img_bytes); tmp_path = tmp.name
                 pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
                 if os.path.exists(tmp_path):
                     os.unlink(tmp_path)
@@ -1267,6 +1262,8 @@ if "ui_state" not in st.session_state:
 
 if "quote_remarks" not in st.session_state: 
     st.session_state.quote_remarks = "1. 견적 유효기간: 견적일로부터 15일 이내\n2. 출고: 결재 완료 후 즉시 또는 7일 이내"
+
+st.title("💧 루퍼젯 프로 매니저 V10.0 (Cloud)")
 
 with st.sidebar:
     st.header("🗂️ 견적 보관함")
@@ -1822,7 +1819,6 @@ elif mode == "🇯🇵 일본 수출 분석":
                         "매입단가(원)": 0, "신정공급가(원)": 0, "합계매출": 0, "합계원가": 0, "순이익": 0
                     })
 
-            # 고가순 정렬 로직 (20,000원 이상 우선)
             def sort_analysis(item):
                 p1 = item.get("신정공급가(원)", 0)
                 if p1 >= 20000: return (0, -p1)
@@ -1847,12 +1843,10 @@ elif mode == "🇯🇵 일본 수출 분석":
 
             if st.button("📄 수출 이익 분석서 생성"):
                 with st.spinner("보고서를 생성하고 있습니다..."):
-                    # Excel 생성
                     excel_buf = io.BytesIO()
                     with pd.ExcelWriter(excel_buf, engine='xlsxwriter') as writer:
                         df_analysis.to_excel(writer, index=False, sheet_name='Profit_Analysis')
                     
-                    # PDF 생성
                     pdf = PDF(orientation='L')
                     pdf.title_text = "輸出利益分析書 (Export Profit Analysis)"
                     pdf.add_page()
@@ -1862,7 +1856,6 @@ elif mode == "🇯🇵 일본 수출 분석":
                     pdf.cell(0, 10, f"Quote Name: {target_quote.get('견적명')}", ln=True)
                     pdf.ln(5)
                     
-                    # Table Header
                     pdf.set_fill_color(220, 220, 220)
                     cols = ["Code", "Item Name", "Spec", "Qty", "Buy Price", "Supply Price", "Sum Revenue", "Sum Cost", "Profit"]
                     widths = [20, 50, 40, 15, 30, 30, 35, 35, 30]
@@ -1870,7 +1863,6 @@ elif mode == "🇯🇵 일본 수출 분석":
                         pdf.cell(w, 10, head, border=1, align='C', fill=True)
                     pdf.ln()
                     
-                    # Table Data
                     pdf.set_font(FONT_REGULAR if os.path.exists(FONT_REGULAR) else 'Helvetica', '', 8)
                     for _, row in df_analysis.iterrows():
                         pdf.cell(widths[0], 8, str(row['품목코드']), border=1, align='C')
@@ -1884,7 +1876,6 @@ elif mode == "🇯🇵 일본 수출 분석":
                         pdf.cell(widths[8], 8, f"{int(row['순이익']):,}", border=1, align='R')
                         pdf.ln()
                     
-                    # Total Row
                     pdf.set_font(FONT_BOLD if os.path.exists(FONT_BOLD) else 'Helvetica', 'B', 10)
                     total_w = sum(widths[:6])
                     pdf.cell(total_w, 10, "TOTAL (KRW)", border=1, align='C', fill=True)
@@ -2058,6 +2049,11 @@ else:
         for n, q in st.session_state.quote_items.items():
             inf = pdb.get(str(n), {})
             if not inf: continue
+            
+            # [필터링 추가] 소비자가 선택 시 '관급비용' 카테고리 항목 제외
+            if view == "소비자가" and inf.get("category", "") == "관급비용":
+                continue
+                
             cpr = inf.get("price_cons", 0)
             row = {"품목": inf.get("name", n), "규격": inf.get("spec", ""), "수량": q, "소비자가": cpr, "합계": cpr*q}
             if view != "소비자가":
@@ -2188,148 +2184,268 @@ else:
             
             pk = [pkey[l] for l in sel] if sel else ["price_cons"]
             
-            if not st.session_state.step3_ready:
-                fdata = []
-                processed_keys = set()
-                for n, q in st.session_state.quote_items.items():
-                    inf = pdb.get(str(n), {})
-                    if not inf: continue
-                    code_val = str(inf.get("code", "")).strip().zfill(5)
-                    name_val = str(inf.get("name", n)).strip()
-                    code_key = code_val if code_val and code_val != "00000" else name_val
-                    d = {
-                        "품목": name_val, "규격": inf.get("spec", ""), "코드": inf.get("code", ""), 
-                        "단위": inf.get("unit", "EA"), "수량": int(q), "image_data": inf.get("image")
-                    }
-                    d["price_1"] = int(inf.get(pk[0], 0))
-                    if len(pk)>1: d["price_2"] = int(inf.get(pk[1], 0))
-                    else: d["price_2"] = 0
-                    if code_key in cp_map:
-                        d["수량"] = int(cp_map[code_key].get("수량", d["수량"]))
-                        d["price_1"] = int(cp_map[code_key].get("price_1", d["price_1"]))
-                        d["price_2"] = int(cp_map[code_key].get("price_2", d["price_2"]))
-                        processed_keys.add(code_key)
-                    fdata.append(d)
-                if st.session_state.get("custom_prices"):
-                    for cp in st.session_state.custom_prices:
-                        k = str(cp.get("코드", "")).strip().zfill(5) if str(cp.get("코드", "")).strip() else str(cp.get("품목", "")).strip()
-                        if k not in processed_keys: fdata.append(cp.copy())
-                st.session_state.final_edit_df = pd.DataFrame(fdata)
-                st.session_state.step3_ready = True
+            fdata = []
+            processed_keys = set()
             
-            elif selectors_changed and st.session_state.final_edit_df is not None and not st.session_state.final_edit_df.empty:
-                def update_prices_in_row(row):
-                    code = str(row.get("코드", "")).strip().zfill(5); name = str(row.get("품목", ""))
-                    item = pdb.get(code)
-                    if not item: item = pdb.get(name)
-                    if item:
-                        p1 = int(item.get(pk[0], 0))
-                        p2 = int(item.get(pk[1], 0)) if len(pk) > 1 else 0
-                        return pd.Series([p1, p2])
-                    else: return pd.Series([row.get("price_1", 0), row.get("price_2", 0)])
-                new_prices = st.session_state.final_edit_df.apply(update_prices_in_row, axis=1)
-                st.session_state.final_edit_df["price_1"] = new_prices[0]
-                st.session_state.final_edit_df["price_2"] = new_prices[1]
+            for n, q in st.session_state.quote_items.items():
+                inf = pdb.get(str(n), {})
+                if not inf: continue
+                
+                # [필터링 추가] 소비자가 선택 시 '관급비용' 카테고리 항목 제외
+                if "소비자가" in sel and inf.get("category", "") == "관급비용":
+                    continue
+                
+                code_val = str(inf.get("code", "")).strip().zfill(5)
+                name_val = str(inf.get("name", n)).strip()
+                code_key = code_val if code_val and code_val != "00000" else name_val
+                
+                d = {
+                    "품목": name_val, 
+                    "규격": inf.get("spec", ""), 
+                    "코드": inf.get("code", ""), 
+                    "단위": inf.get("unit", "EA"), 
+                    "수량": int(q), 
+                    "image_data": inf.get("image")
+                }
+                
+                d["price_1"] = int(inf.get(pk[0], 0))
+                if len(pk)>1: d["price_2"] = int(inf.get(pk[1], 0))
+                else: d["price_2"] = 0
+                
+                if code_key in cp_map:
+                    d["수량"] = int(cp_map[code_key].get("수량", d["수량"]))
+                    d["price_1"] = int(cp_map[code_key].get("price_1", d["price_1"]))
+                    d["price_2"] = int(cp_map[code_key].get("price_2", d["price_2"]))
+                    processed_keys.add(code_key)
+                    
+                fdata.append(d)
+                
+            if st.session_state.get("custom_prices"):
+                for cp in st.session_state.custom_prices:
+                    k = str(cp.get("코드", "")).strip().zfill(5) if str(cp.get("코드", "")).strip() else str(cp.get("품목", "")).strip()
+                    if k not in processed_keys:
+                        fdata.append(cp.copy())
+                        
+            st.session_state.final_edit_df = pd.DataFrame(fdata)
+            st.session_state.step3_ready = True
             st.session_state.last_sel = sel
             st.session_state.files_ready = False 
 
         st.markdown("---")
+        
         pk = [pkey[l] for l in sel] if sel else ["price_cons"]
         disp_cols = ["품목", "규격", "코드", "단위", "수량", "price_1"]
         if len(pk) > 1: disp_cols.append("price_2")
+        
         for c in disp_cols:
             if c not in st.session_state.final_edit_df.columns:
                 st.session_state.final_edit_df[c] = 0 if "price" in c or "수량" in c else ""
 
+        def on_data_change():
+            st.session_state.files_ready = False
+
+        with st.expander("➕ 수기 품목 추가 (DB 미등록 품목)", expanded=False):
+            c1, c2, c3, c4, c5 = st.columns([3, 2, 1, 1, 2])
+            m_name = c1.text_input("품목명 (필수)", key="m_name")
+            m_spec = c2.text_input("규격", key="m_spec")
+            m_unit = c3.text_input("단위", "EA", key="m_unit")
+            m_qty = c4.number_input("수량", 1, key="m_qty")
+            m_price = c5.number_input("단가", 0, key="m_price")
+            
+            if st.button("리스트에 추가", key="btn_add_manual"):
+                if m_name:
+                    new_row = {
+                        "품목": m_name, 
+                        "규격": m_spec, 
+                        "코드": "", 
+                        "단위": m_unit, 
+                        "수량": m_qty, 
+                        "price_1": m_price, 
+                        "price_2": 0, 
+                        "image_data": ""
+                    }
+                    st.session_state.final_edit_df = pd.concat([st.session_state.final_edit_df, pd.DataFrame([new_row])], ignore_index=True)
+                    st.session_state.files_ready = False
+                    st.rerun()
+                else:
+                    st.warning("품목명을 입력해주세요.")
+
         edited = st.data_editor(
             st.session_state.final_edit_df[disp_cols], 
-            num_rows="dynamic", width="stretch", hide_index=True,
+            num_rows="dynamic",
+            width="stretch", 
+            hide_index=True,
             column_config={
                 "품목": st.column_config.TextColumn(required=True),
+                "규격": st.column_config.TextColumn(),
+                "코드": st.column_config.TextColumn(),
+                "단위": st.column_config.TextColumn(),
                 "수량": st.column_config.NumberColumn(step=1, required=True),
                 "price_1": st.column_config.NumberColumn(label=sel[0] if sel else "단가", format="%d", required=True),
                 "price_2": st.column_config.NumberColumn(label=sel[1] if len(sel)>1 else "", format="%d")
             },
-            on_change=lambda: st.session_state.update({"files_ready": False})
+            on_change=on_data_change
         )
+        
         st.session_state.final_edit_df = edited
 
         if sel:
             st.write("")
             if st.button("📄 견적서 파일 생성하기 (PDF/Excel)", type="primary", use_container_width=True):
-                with st.spinner("파일을 생성하고 있습니다..."):
+                with st.spinner("파일을 생성하고 있습니다... (이미지 다운로드 및 변환 중)"):
                     fmode = "basic" if "기본" in form_type else "profit"
                     safe_data = edited.fillna(0).to_dict('records')
-                    pdf_excel_services = [s.copy() for s in st.session_state.services]
+                    
+                    pdf_excel_services = []
+                    for s in st.session_state.services:
+                        pdf_excel_services.append(s.copy())
+                        
                     if vat_mode == "별도":
                         for item in safe_data:
-                            item['price_1'] = int(round(float(item.get('price_1', 0)) / 1.1))
-                            item['price_2'] = int(round(float(item.get('price_2', 0)) / 1.1))
+                            try: item['price_1'] = int(round(float(item.get('price_1', 0)) / 1.1))
+                            except: pass
+                            try: item['price_2'] = int(round(float(item.get('price_2', 0)) / 1.1))
+                            except: pass
                         for svc in pdf_excel_services:
-                            svc['금액'] = int(round(float(svc.get('금액', 0)) / 1.1))
+                            try: svc['금액'] = int(round(float(svc.get('금액', 0)) / 1.1))
+                            except: pass
 
                     def sort_items(item_list):
-                        high = sorted([x for x in item_list if int(float(x.get('price_1', 0))) >= 20000], key=lambda x: int(float(x.get('price_1', 0))), reverse=True)
-                        norm = sorted([x for x in item_list if int(float(x.get('price_1', 0))) < 20000], key=lambda x: str(x.get('품목', '')))
+                        high = [x for x in item_list if int(float(x.get('price_1', 0))) >= 20000]
+                        norm = [x for x in item_list if int(float(x.get('price_1', 0))) < 20000]
+                        high.sort(key=lambda x: int(float(x.get('price_1', 0))), reverse=True)
+                        norm.sort(key=lambda x: str(x.get('품목', '')))
                         return high + norm
 
+                    individual_sorted_data = sort_items(safe_data)
+
                     if print_mode == "세트 단위 묶음 (신규)":
-                        comp_pool = {}; comp_price1 = {}; comp_price2 = {}
+                        comp_pool = {}
+                        comp_price1 = {}
+                        comp_price2 = {}
+                        
                         for item in safe_data:
                             match_key = str(item.get("코드", "")).strip().zfill(5)
-                            if not match_key or match_key == "00000": match_key = str(item.get("품목", "")).strip()
-                            comp_pool[match_key] = comp_pool.get(match_key, 0) + int(float(item.get("수량", 0)))
+                            if not match_key or match_key == "00000":
+                                match_key = str(item.get("품목", "")).strip()
+                            
+                            qty = int(float(item.get("수량", 0)))
+                            comp_pool[match_key] = comp_pool.get(match_key, 0) + qty
                             comp_price1[match_key] = int(float(item.get("price_1", 0)))
                             comp_price2[match_key] = int(float(item.get("price_2", 0)))
-                        
-                        set_items_out = []; all_sets_db = {}
-                        for cat, val in st.session_state.db.get("sets", {}).items(): all_sets_db.update(val)
+
+                        set_items_out = []
+                        all_sets_db = {}
+                        for cat, val in st.session_state.db.get("sets", {}).items(): 
+                            all_sets_db.update(val)
+                            
                         for s_item in st.session_state.set_cart:
-                            s_name = s_item['name']; s_qty = s_item['qty']
-                            if s_qty <= 0 or s_name not in all_sets_db: continue
-                            recipe = all_sets_db[s_name].get("recipe", {})
-                            s_p1, s_p2 = 0, 0
-                            for p_code_or_name, p_qty_per_set in recipe.items():
-                                p_key = str(p_code_or_name).strip().zfill(5)
-                                if p_key not in comp_pool: p_key = str(p_code_or_name).strip()
-                                s_p1 += comp_price1.get(p_key, 0) * p_qty_per_set
-                                s_p2 += comp_price2.get(p_key, 0) * p_qty_per_set
-                                if p_key in comp_pool: comp_pool[p_key] -= (p_qty_per_set * s_qty)
-                            set_items_out.append({"품목": s_name, "규격": "세트", "코드": s_name, "단위": "SET", "수량": s_qty, "price_1": s_p1, "price_2": s_p2, "image_data": all_sets_db[s_name].get("image", "")})
-                        
+                            s_name = s_item['name']
+                            s_qty = s_item['qty']
+                            if s_qty <= 0: continue
+                            
+                            s_price1 = 0
+                            s_price2 = 0
+                            s_img = ""
+                            
+                            if s_name in all_sets_db:
+                                recipe = all_sets_db[s_name].get("recipe", {})
+                                s_img = all_sets_db[s_name].get("image", "")
+                                
+                                for p_code_or_name, p_qty_per_set in recipe.items():
+                                    p_key = str(p_code_or_name).strip().zfill(5)
+                                    if p_key not in comp_pool:
+                                        p_key = str(p_code_or_name).strip()
+                                        
+                                    p1 = comp_price1.get(p_key, 0)
+                                    p2 = comp_price2.get(p_key, 0)
+                                    
+                                    s_price1 += (p1 * p_qty_per_set)
+                                    s_price2 += (p2 * p_qty_per_set)
+                                    
+                                    if p_key in comp_pool:
+                                        comp_pool[p_key] -= (p_qty_per_set * s_qty)
+                                        
+                            set_items_out.append({
+                                "품목": s_name,
+                                "규격": "세트",
+                                "코드": s_name, 
+                                "단위": "SET",
+                                "수량": s_qty,
+                                "price_1": s_price1,
+                                "price_2": s_price2,
+                                "image_data": s_img
+                            })
+                            
                         rem_items_out = []
                         for item in safe_data:
                             match_key = str(item.get("코드", "")).strip().zfill(5)
-                            if not match_key or match_key == "00000": match_key = str(item.get("품목", "")).strip()
+                            if not match_key or match_key == "00000":
+                                match_key = str(item.get("품목", "")).strip()
+                                
                             rem_qty = comp_pool.get(match_key, 0)
                             if rem_qty > 0:
-                                new_item = item.copy(); new_item["수량"] = rem_qty
-                                rem_items_out.append(new_item); comp_pool[match_key] = 0
+                                new_item = item.copy()
+                                new_item["수량"] = rem_qty
+                                rem_items_out.append(new_item)
+                                comp_pool[match_key] = 0 # Prevent duplicate addition
+                        
                         sorted_final_data = sort_items(set_items_out) + sort_items(rem_items_out)
-                    else: sorted_final_data = sort_items(safe_data)
+                    else:
+                        sorted_final_data = individual_sorted_data
                     
                     st.session_state.gen_pdf = create_advanced_pdf(sorted_final_data, pdf_excel_services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info, st.session_state.quote_remarks)
                     st.session_state.gen_excel = create_quote_excel(sorted_final_data, pdf_excel_services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info, st.session_state.quote_remarks)
-                    st.session_state.gen_comp_pdf = create_composition_pdf(st.session_state.set_cart, st.session_state.pipe_cart, sort_items(safe_data), st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
-                    st.session_state.gen_comp_excel = create_composition_excel(st.session_state.set_cart, st.session_state.pipe_cart, sort_items(safe_data), st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
+                    
+                    st.session_state.gen_comp_pdf = create_composition_pdf(st.session_state.set_cart, st.session_state.pipe_cart, individual_sorted_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
+                    st.session_state.gen_comp_excel = create_composition_excel(st.session_state.set_cart, st.session_state.pipe_cart, individual_sorted_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
+                    
                     st.session_state.files_ready = True
                 st.rerun()
 
             if st.session_state.files_ready:
-                st.success("파일 생성이 완료되었습니다!")
-                c1, c2 = st.columns(2)
-                c1.download_button("📥 견적서 PDF", st.session_state.gen_pdf, f"quote_{st.session_state.current_quote_name}.pdf", "application/pdf", type="primary", use_container_width=True)
-                c2.download_button("📊 견적서 엑셀", st.session_state.gen_excel, f"quote_{st.session_state.current_quote_name}.xlsx", use_container_width=True)
-                st.write(""); st.markdown("##### 📂 자재 구성 명세서")
-                c1, c2 = st.columns(2)
-                c1.download_button("📥 자재명세 PDF", st.session_state.gen_comp_pdf, f"composition_{st.session_state.current_quote_name}.pdf", "application/pdf", use_container_width=True)
-                c2.download_button("📊 자재명세 엑셀", st.session_state.gen_comp_excel, f"composition_{st.session_state.current_quote_name}.xlsx", use_container_width=True)
+                st.success("파일 생성이 완료되었습니다! 아래 버튼을 눌러 다운로드하세요.")
+                col_pdf, col_xls = st.columns(2)
+                with col_pdf:
+                    st.download_button("📥 견적서 PDF", st.session_state.gen_pdf, f"quote_{st.session_state.current_quote_name}.pdf", "application/pdf", type="primary", use_container_width=True)
+                with col_xls:
+                    st.download_button("📊 견적서 엑셀", st.session_state.gen_excel, f"quote_{st.session_state.current_quote_name}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                
+                st.write("")
+                st.markdown("##### 📂 자재 구성 명세서 다운로드")
+                c_comp_pdf, c_comp_xls = st.columns(2)
+                with c_comp_pdf:
+                    st.download_button("📥 자재명세 PDF", st.session_state.gen_comp_pdf, f"composition_{st.session_state.current_quote_name}.pdf", "application/pdf", use_container_width=True)
+                with c_comp_xls:
+                    st.download_button("📊 자재명세 엑셀", st.session_state.gen_comp_excel, f"composition_{st.session_state.current_quote_name}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            else:
+                st.info("👆 위 버튼을 눌러 파일을 생성해주세요. (데이터 수정 시 다시 생성해야 합니다)")
         
-        st.write(""); st.markdown("##### 📝 특약사항 및 비고")
-        st.session_state.quote_remarks = st.text_area("특약사항", value=st.session_state.quote_remarks, height=100, label_visibility="collapsed")
+        st.write("")
+        st.markdown("##### 📝 특약사항 및 비고 (수정 가능)")
+        st.session_state.quote_remarks = st.text_area(
+            "특약사항", 
+            value=st.session_state.quote_remarks, 
+            height=100, 
+            label_visibility="collapsed"
+        )
 
         c1, c2 = st.columns(2)
-        if c1.button("⬅️ 수정 (이전 단계)"): 
-            st.session_state.update({"quote_step": 2, "step3_ready": False, "files_ready": False}); st.rerun()
-        if c2.button("🔄 처음으로"): 
-            st.session_state.update({"quote_step": 1, "quote_items": {}, "services": [], "pipe_cart": [], "set_cart": [], "buyer_info": {"manager": "", "phone": "", "addr": ""}, "current_quote_name": "", "step3_ready": False, "files_ready": False}); st.rerun()
+        with c1: 
+            if st.button("⬅️ 수정 (이전 단계)"): 
+                st.session_state.quote_step = 2
+                st.session_state.step3_ready = False
+                st.session_state.files_ready = False
+                st.rerun()
+        with c2:
+            if st.button("🔄 처음으로"): 
+                st.session_state.quote_step = 1
+                st.session_state.quote_items = {}
+                st.session_state.services = []
+                st.session_state.pipe_cart = []
+                st.session_state.set_cart = []
+                st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}
+                st.session_state.current_quote_name = ""
+                st.session_state.step3_ready = False
+                st.session_state.files_ready = False
+                st.rerun()

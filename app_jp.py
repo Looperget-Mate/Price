@@ -208,18 +208,23 @@ def get_best_image_id(code, db_image_val, file_map):
 def list_files_in_drive_folder():
     return get_drive_file_map()
 
-# --- 구글 시트 함수 (일본 현지화: COL_MAP 적용) ---
+# --- 구글 시트 함수 (일본 현지화: Products_JP 전용 COL_MAP 적용) ---
 SHEET_NAME = "Looperget_DB"
-COL_MAP = {
+COL_MAP_JP = {
     "순번": "seq_no",
-    "품목코드": "code", "카테고리": "category_jp", "제품명": "name_kr",
-    "name_jp": "name", "spec_jp": "spec", "단위": "unit", "1롤길이(m)": "len_per_unit",
-    "price_buy_jp_krw": "price_buy", 
-    "price_dealer1_jp": "price_d1", "price_dealer2_jp": "price_d2",
-    "price_cons_jp": "price_cons", "단가(현장)": "price_site",
-    "이미지데이터": "image", "신정공급가": "price_supply_jp"
+    "품목코드": "code",
+    "카테고리": "category",
+    "일본용 제품명": "name",
+    "규격": "spec",
+    "단위": "unit",
+    "1롤길이(m)": "len_per_unit",
+    "매입가(별도가,원)": "price_buy_krw",
+    "매입가(별도가,엔)": "price_buy",
+    "대리점가(별도가,엔)": "price_d1",
+    "소비자가(포함가,엔)": "price_cons",
+    "이미지데이터": "image"
 }
-REV_COL_MAP = {v: k for k, v in COL_MAP.items()}
+REV_COL_MAP_JP = {v: k for k, v in COL_MAP_JP.items()}
 
 def init_db():
     if not gc: return None, None
@@ -228,12 +233,20 @@ def init_db():
         try:
             sh = gc.create(SHEET_NAME)
             sh.add_worksheet(title="Products", rows=100, cols=20)
+            sh.add_worksheet(title="Products_JP", rows=100, cols=12)
             sh.add_worksheet(title="Sets", rows=100, cols=10)
-            sh.worksheet("Products").append_row(list(COL_MAP.keys()))
+            sh.worksheet("Products_JP").append_row(list(COL_MAP_JP.keys()))
             sh.worksheet("Sets").append_row(["세트명", "카테고리", "하위분류", "이미지파일명", "레시피JSON"])
         except: return None, None
+        
     try: ws_prod = sh.worksheet("Products")
     except: ws_prod = sh.add_worksheet(title="Products", rows=100, cols=20)
+    
+    try: ws_prod_jp = sh.worksheet("Products_JP")
+    except: 
+        ws_prod_jp = sh.add_worksheet(title="Products_JP", rows=100, cols=12)
+        ws_prod_jp.append_row(list(COL_MAP_JP.keys()))
+        
     try: ws_sets = sh.worksheet("Sets")
     except: ws_sets = sh.add_worksheet(title="Sets", rows=100, cols=10)
     
@@ -254,8 +267,8 @@ def init_db():
     return ws_prod, ws_sets
 
 def load_data_from_sheet():
-    ws_prod, ws_sets = init_db()
-    if not ws_prod: return DEFAULT_DATA
+    init_db()
+    if not gc: return DEFAULT_DATA
     data = {"config": {"app_pwd": "1234", "admin_pwd": "1234"}, "products": [], "sets": {}, "jp_quotes": []}
     
     try:
@@ -266,18 +279,62 @@ def load_data_from_sheet():
             if rec.get("항목") == "admin_pwd": data["config"]["admin_pwd"] = str(rec.get("비밀번호"))
     except: pass
     
+    rate = st.session_state.get("exchange_rate", 10.0)
+    
+    # Products_JP 동기화 및 로드 병합 로직
     try:
-        prod_records = ws_prod.get_all_records()
-        for rec in prod_records:
-            new_rec = {}
-            for k, v in rec.items():
-                if k in COL_MAP:
-                    if k == "품목코드": new_rec[COL_MAP[k]] = str(v).zfill(5)
-                    else: new_rec[COL_MAP[k]] = v
-            if "seq_no" not in new_rec: new_rec["seq_no"] = ""
-            data["products"].append(new_rec)
-    except: pass
+        sh = gc.open(SHEET_NAME)
+        ws_prod_kr = sh.worksheet("Products")
+        kr_records = ws_prod_kr.get_all_records()
+    except:
+        kr_records = []
+        
     try:
+        ws_prod_jp = sh.worksheet("Products_JP")
+        jp_records = ws_prod_jp.get_all_records()
+    except:
+        jp_records = []
+        
+    jp_dict = {str(r.get("품목코드", "")).zfill(5): r for r in jp_records if r.get("품목코드")}
+    cat_map = {"주배관": "メイン配管", "주배관세트": "メイン配管", "가지관": "分岐配管", "가지관세트": "分岐配管", "부속": "付属", "기타": "その他資材", "기타자재": "その他資材"}
+    
+    merged_products = []
+    for kr in kr_records:
+        code = str(kr.get("품목코드", "")).zfill(5)
+        if not code or code == "00000":
+            continue
+        
+        jp_row = jp_dict.get(code, {})
+        cat_kr = kr.get("카테고리", "")
+        cat_jp = cat_map.get(cat_kr, cat_kr)
+        
+        kr_supply = kr.get("신정공급가", 0)
+        try: kr_supply = float(kr_supply)
+        except: kr_supply = 0
+        
+        buy_krw = int(round(kr_supply / 1.1))
+        buy_jpy = int(round(buy_krw / rate)) if rate else 0
+        
+        new_rec = {
+            "seq_no": kr.get("순번", jp_row.get("순번", "")),
+            "code": code,
+            "category": cat_jp,
+            "name": jp_row.get("일본용 제품명", kr.get("제품명", "")),
+            "spec": jp_row.get("규격", kr.get("규격", "")),
+            "unit": jp_row.get("단위", kr.get("단위", "EA")),
+            "len_per_unit": kr.get("1롤길이(m)", jp_row.get("1롤길이(m)", "")),
+            "price_buy_krw": buy_krw,
+            "price_buy": buy_jpy,
+            "price_d1": jp_row.get("대리점가(별도가,엔)", 0),
+            "price_cons": jp_row.get("소비자가(포함가,엔)", 0),
+            "image": kr.get("이미지데이터", jp_row.get("이미지데이터", ""))
+        }
+        merged_products.append(new_rec)
+        
+    data["products"] = merged_products
+
+    try:
+        ws_sets = sh.worksheet("Sets")
         set_records = ws_sets.get_all_records()
         for rec in set_records:
             if not rec.get("세트명"): continue
@@ -287,8 +344,8 @@ def load_data_from_sheet():
             except: rcp = {}
             data["sets"][cat][name] = {"recipe": rcp, "image": rec.get("이미지파일명"), "sub_cat": rec.get("하위분류")}
     except: pass
+    
     try:
-        sh = gc.open(SHEET_NAME)
         ws_jp = sh.worksheet("Quotes_JP")
         data["jp_quotes"] = ws_jp.get_all_records()
     except: pass
@@ -296,18 +353,24 @@ def load_data_from_sheet():
     return data
 
 def save_products_to_sheet(products_list):
-    ws_prod, _ = init_db()
-    if not ws_prod: return
-    df = pd.DataFrame(products_list)
-    if "code" in df.columns: df["code"] = df["code"].astype(str).apply(lambda x: x.zfill(5))
-    if "seq_no" not in df.columns:
-        df["seq_no"] = [f"{i+1:03d}" for i in range(len(df))]
-    
-    df_up = df.rename(columns=REV_COL_MAP).fillna("")
-    cols_order = [c for c in COL_MAP.keys() if c in df_up.columns]
-    df_up = df_up[cols_order]
-    
-    ws_prod.clear(); ws_prod.update([df_up.columns.values.tolist()] + df_up.values.tolist())
+    if not gc: return
+    try:
+        sh = gc.open(SHEET_NAME)
+        try: ws_prod_jp = sh.worksheet("Products_JP")
+        except: ws_prod_jp = sh.add_worksheet(title="Products_JP", rows=100, cols=12)
+        
+        df = pd.DataFrame(products_list)
+        if "code" in df.columns: df["code"] = df["code"].astype(str).apply(lambda x: x.zfill(5))
+        if "seq_no" in df.columns: df["seq_no"] = [f"{i+1:03d}" for i in range(len(df))]
+        
+        df_up = df.rename(columns=REV_COL_MAP_JP).fillna("")
+        cols_order = list(COL_MAP_JP.keys())
+        df_up = df_up[[c for c in cols_order if c in df_up.columns]]
+        
+        ws_prod_jp.clear()
+        ws_prod_jp.update([df_up.columns.values.tolist()] + df_up.values.tolist())
+    except Exception as e:
+        st.error(f"Products_JP 저장 오류: {e}")
 
 def save_sets_to_sheet(sets_dict):
     if not gc: return
@@ -1481,22 +1544,85 @@ if mode == "管理者モード":
                     st.warning("更新対象の製品がありません (price_buy_jp_krw データを確認してください)")
 
             st.markdown("---")
-            st.markdown("##### 📋 製品単価リスト (KRW → JPY 換算プレビュー)")
-            
-            products = st.session_state.db["products"]
-            rows = []
-            for p in products:
-                krw_cost = p.get("price_buy", 0)
-                jpy_cost_calc = int(float(krw_cost) / new_rate) if new_rate and krw_cost else 0
-                rows.append({
-                    "Code": p.get("code"),
-                    "Name": p.get("name"),
-                    "購入単価(KRW)": krw_cost,
-                    "購入換算(JPY)": jpy_cost_calc,
-                    "代理店1(JPY)": p.get("price_d1", 0),
-                    "消費者(JPY)": p.get("price_cons", 0)
-                })
-            st.dataframe(pd.DataFrame(rows), width="stretch")
+            st.markdown("##### 🔍 製品及びExcel管理 (Products_JP)")
+            with st.expander("📂 部品データ直接修正 (修正/追加)", expanded=True):
+                st.info("💡 日本語製品名、規格、単位、代理店価格、消費者価格を修正できます。")
+                
+                df = pd.DataFrame(st.session_state.db["products"])
+                for eng_key in COL_MAP_JP.values():
+                    if eng_key not in df.columns:
+                        val = 0 if ("price" in eng_key or "len" in eng_key) else ""
+                        df[eng_key] = val
+
+                df = df.rename(columns=REV_COL_MAP_JP)
+                if "이미지데이터" in df.columns: df["이미지데이터"] = df["이미지데이터"].apply(lambda x: x if x else "")
+                df["순번"] = [f"{i+1:03d}" for i in range(len(df))]
+                
+                final_cols = list(COL_MAP_JP.keys())
+                df = df[final_cols]
+
+                edited_df = st.data_editor(
+                    df, 
+                    num_rows="dynamic", 
+                    width="stretch", 
+                    key="product_editor",
+                    disabled=["순번", "품목코드", "카테고리", "1롤길이(m)", "매입가(별도가,원)", "매입가(별도가,엔)", "이미지데이터"],
+                    column_config={
+                        "순번": st.column_config.TextColumn(width="small"),
+                        "품목코드": st.column_config.TextColumn(),
+                        "대리점가(별도가,엔)": st.column_config.NumberColumn(format="%d"),
+                        "소비자가(포함가,엔)": st.column_config.NumberColumn(format="%d"),
+                    }
+                )
+                
+                if st.button("💾 変更事項をGoogle Sheetsに反映"):
+                    st.session_state.confirming_product_save = True
+                if st.session_state.get("confirming_product_save"):
+                    st.warning("⚠️ 本当にGoogle Sheetsにこの内容を反映しますか？ (元に戻せません)")
+                    col_yes, col_no = st.columns(2)
+                    with col_yes:
+                        if st.button("✅ はい、反映します"):
+                            try:
+                                edited_df = edited_df.fillna("")
+                                edited_df.reset_index(drop=True, inplace=True)
+                                edited_df["순번"] = [f"{i+1:03d}" for i in range(len(edited_df))]
+                                new_products_list = edited_df.rename(columns=COL_MAP_JP).to_dict('records')
+                                save_products_to_sheet(new_products_list)
+                                st.session_state.db = load_data_from_sheet()
+                                st.success("Google Sheetsに正常に反映されました！")
+                                st.session_state.confirming_product_save = False
+                                time.sleep(1)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"保存中のエラー: {e}")
+                    with col_no:
+                        if st.button("❌ いいえ (キャンセル)"):
+                            st.session_state.confirming_product_save = False
+                            st.rerun()
+
+            st.divider()
+            ec1, ec2 = st.columns([1, 1])
+            with ec1:
+                buf = io.BytesIO()
+                org_df = pd.DataFrame(st.session_state.db["products"])
+                for eng_key in COL_MAP_JP.values():
+                    if eng_key not in org_df.columns:
+                        val = 0 if ("price" in eng_key or "len" in eng_key) else ""
+                        org_df[eng_key] = val
+                org_df = org_df.rename(columns=REV_COL_MAP_JP)
+                org_df = org_df[final_cols]
+                with pd.ExcelWriter(buf, engine='xlsxwriter') as w: org_df.to_excel(w, index=False)
+                st.download_button("Excel ダウンロード", buf.getvalue(), "products_jp.xlsx")
+            with ec2:
+                uf = st.file_uploader("Excel ファイル選択 (一括上書き)", ["xlsx"], label_visibility="collapsed")
+                if uf and st.button("シートに上書き"):
+                    try:
+                        ndf = pd.read_excel(uf, dtype={'품목코드': str}).rename(columns=COL_MAP_JP).fillna(0)
+                        save_products_to_sheet(ndf.to_dict('records'))
+                        st.session_state.db = load_data_from_sheet()
+                        st.success("完了")
+                        st.rerun()
+                    except Exception as e: st.error(e)
 
             st.divider()
             st.markdown("##### 🔄 ドライブ画像一括同期化")
@@ -1692,8 +1818,8 @@ elif mode == "🇯🇵 日本輸出分析":
                             # 공급가는 JPY
                             price_supply = int(prod.get("price_supply_jp", 0) or 0)
                             # 매입가는 원화(KRW)이므로 환율 적용 후 정수화
-                            krw_buy = int(prod.get("price_buy", 0) or 0)
-                            price_buy = int(krw_buy / rate) if rate else 0
+                            krw_buy = int(prod.get("price_buy_krw", 0) or 0)
+                            price_buy = int(round(krw_buy / rate)) if rate else 0
                             
                             revenue = price_supply * qty
                             cost = price_buy * qty
@@ -1827,7 +1953,7 @@ else:
         st.markdown("#### 📏 配管数量算出 (カート)")
         all_products = st.session_state.db["products"]
         
-        pipe_type_sel = st.radio("配管区分", ["주배관", "가지관"], horizontal=True, key="pipe_type_radio")
+        pipe_type_sel = st.radio("配管区分", ["メイン配管", "分岐配管"], horizontal=True, key="pipe_type_radio")
         filtered_pipes = [p for p in all_products if p["category"] == pipe_type_sel]
         c1, c2, c3 = st.columns([3, 2, 1])
         with c1: sel_pipe = st.selectbox(f"配管 選択", filtered_pipes, format_func=format_prod_label, key="pipe_sel")
@@ -1874,7 +2000,7 @@ else:
             st.session_state.quote_step = 1
             st.rerun()
         view_opts = ["消費者価格"]
-        if st.session_state.auth_price: view_opts += ["購入価格", "総販1", "総販2", "代理店1", "代理店2", "現場単価"]
+        if st.session_state.auth_price: view_opts += ["購入価格", "代理店価格1"]
         c_lock, c_view = st.columns([1, 2])
         with c_lock:
             if not st.session_state.auth_price:
@@ -1889,9 +2015,7 @@ else:
         
         key_map = {
             "購入価格":("price_buy","購入"), 
-            "総販1":("price_d1","総販1"), "総販2":("price_d2","総販2"), 
-            "代理店1":("price_agy1","代理店1"), "代理店2":("price_agy2","代理店2"),
-            "現場単価":("price_site", "現場")
+            "代理店価格1":("price_d1","代理店1")
         }
         
         rows = []
@@ -1911,12 +2035,7 @@ else:
             
             if view != "消費者価格":
                 k, l = key_map[view]
-                if view == "購入価格":
-                    krw = inf.get(k, 0)
-                    pr = int(krw / rate) if rate else 0
-                else:
-                    pr = int(inf.get(k, 0))
-                    
+                pr = int(inf.get(k, 0))
                 row[f"{l}単価"] = pr; row[f"{l}合計"] = pr*q
                 row["利益"] = row["合計"] - row[f"{l}合計"]
                 row["率(%)"] = (row["利益"]/row["合計"]*100) if row["合計"] else 0
@@ -1984,8 +2103,8 @@ else:
             vat_mode = st.radio("消費税", ["税込 (基本)", "税抜 (別)"], index=idx_vat, key="step3_vat_mode")
             
         with c_opt2:
-            basic_opts = ["消費者価格", "現場単価"]
-            admin_opts = ["購入価格", "総販1", "総販2", "代理店1", "代理店2"]
+            basic_opts = ["消費者価格"]
+            admin_opts = ["購入価格", "代理店価格1"]
             opts = basic_opts + (admin_opts if st.session_state.auth_price else [])
             
             if "利益" in form_type and not st.session_state.auth_price:
@@ -2016,12 +2135,10 @@ else:
         if "基本" in form_type and len(sel) != 1: st.warning("出力する単価を1つ選択してください。"); st.stop()
         if "利益" in form_type and len(sel) < 2: st.warning("比較する単価を2つ選択してください。"); st.stop()
 
-        price_rank = {"購入価格": 0, "総販1": 1, "総販2": 2, "代理店1": 3, "代理店2": 4, "現場単価": 5, "消費者価格": 6}
-        if sel: sel = sorted(sel, key=lambda x: price_rank.get(x, 7))
+        price_rank = {"購入価格": 0, "代理店価格1": 1, "消費者価格": 2}
+        if sel: sel = sorted(sel, key=lambda x: price_rank.get(x, 3))
         pkey = {
-            "購入価格":"price_buy", "総販1":"price_d1", "総販2":"price_d2", 
-            "代理店1":"price_agy1", "代理店2":"price_agy2",
-            "消費者価格":"price_cons", "現場単価":"price_site"
+            "購入価格":"price_buy", "代理店価格1":"price_d1", "消費者価格":"price_cons"
         }
         
         if "last_sel" not in st.session_state: st.session_state.last_sel = []
@@ -2065,13 +2182,8 @@ else:
                         "image_data": inf.get("image")
                     }
                     
-                    def get_price(price_key, item_inf):
-                        if price_key == "price_buy":
-                            return int(item_inf.get(price_key, 0) / rate) if rate else 0
-                        return int(item_inf.get(price_key, 0))
-
-                    d["price_1"] = get_price(pk[0], inf)
-                    if len(pk)>1: d["price_2"] = get_price(pk[1], inf)
+                    d["price_1"] = int(inf.get(pk[0], 0))
+                    if len(pk)>1: d["price_2"] = int(inf.get(pk[1], 0))
                     else: d["price_2"] = 0
                     
                     if code_key in cp_map:
@@ -2099,13 +2211,8 @@ else:
                     if not item: item = pdb.get(name)
                     
                     if item:
-                        def get_price(price_key, item_inf):
-                            if price_key == "price_buy":
-                                return int(item_inf.get(price_key, 0) / rate) if rate else 0
-                            return int(item_inf.get(price_key, 0))
-                            
-                        p1 = get_price(pk[0], item)
-                        p2 = get_price(pk[1], item) if len(pk) > 1 else 0
+                        p1 = int(item.get(pk[0], 0))
+                        p2 = int(item.get(pk[1], 0)) if len(pk) > 1 else 0
                         return pd.Series([p1, p2])
                     else:
                         return pd.Series([int(row.get("price_1", 0)), int(row.get("price_2", 0))])

@@ -1494,7 +1494,6 @@ with st.sidebar:
 
 if mode == "管理者モード":
     st.header("🛠 管理者モード")
-    if st.button("🔄 データの更新 (Google Sheets)"): st.session_state.db = load_data_from_sheet(); st.success("完了"); st.rerun()
     if not st.session_state.auth_admin:
         pw = st.text_input("管理者パスワード", type="password")
         if st.button("ログイン"):
@@ -1506,58 +1505,13 @@ if mode == "管理者モード":
         t1, t2, t3 = st.tabs(["単価・為替管理", "セット管理", "設定"])
         
         with t1:
-            st.subheader("💰 単価および為替レート設定")
+            st.subheader("💰 単価および為替レート管理")
             
-            # 1. 환율 설정
-            current_rate = st.session_state.exchange_rate
-            new_rate = st.number_input("適用為替レート (KRW / 1 JPY)", value=current_rate, step=0.1, help="1円あたりの韓国ウォン価格 (例: 100円=950ウォンなら 9.5)")
-            if new_rate != st.session_state.exchange_rate:
-                st.session_state.exchange_rate = new_rate
-                st.success(f"レートを {new_rate} に設定しました (1 JPY = {new_rate} KRW)")
-            
-            st.divider()
-            
-            # 2. 일괄 업데이트 (DB 저장)
-            st.markdown("##### ⚡️ 単価一括更新 (DB保存)")
-            st.info("現在のレートに基づいて、全ての製品の購入単価(JPY)を計算し、DBに上書きします。(代理店価格・消費者価格は手動管理のため維持されます)")
-            
-            if st.button("🚨 為替レートを適用して購入単価(JPY)のみ一括更新する", type="primary"):
-                products = st.session_state.db["products"]
-                updated_count = 0
-                for p in products:
-                    krw_cost = p.get("price_buy_krw", 0) 
-                    if krw_cost and float(krw_cost) > 0:
-                        base_jp = float(krw_cost) / new_rate
-                        # 매입가(엔)만 업데이트하고, price_d1, price_cons는 갱신하지 않음
-                        p["price_buy"] = int(round(base_jp))
-                        updated_count += 1
+            if st.button("🔄 データの更新 (Google Sheets)", key="refresh_t1"):
+                st.session_state.db = load_data_from_sheet()
+                st.success("完了")
+                st.rerun()
                 
-                if updated_count > 0:
-                    save_products_to_sheet(products)
-                    st.session_state.db = load_data_from_sheet()
-                    st.success(f"{updated_count}件の製品単価を更新しました！")
-                else:
-                    st.warning("更新対象の製品がありません (price_buy_krw データを確認してください)")
-
-            st.markdown("---")
-            st.markdown("##### 📋 製品単価リスト (KRW → JPY 換算プレビュー)")
-            
-            products = st.session_state.db["products"]
-            rows = []
-            for p in products:
-                krw_cost = p.get("price_buy_krw", 0)
-                jpy_cost_calc = int(float(krw_cost) / new_rate) if new_rate and krw_cost else 0
-                rows.append({
-                    "Code": p.get("code"),
-                    "Name": p.get("name"),
-                    "購入単価(KRW)": krw_cost,
-                    "購入換算(JPY)": jpy_cost_calc,
-                    "代理店1(JPY)": p.get("price_d1", 0),
-                    "消費者(JPY)": p.get("price_cons", 0)
-                })
-            st.dataframe(pd.DataFrame(rows), width="stretch")
-
-            st.divider()
             st.markdown("##### 🔍 製品及びExcel管理 (Products_JP)")
             with st.expander("📂 部品データ直接修正 (修正/追加)", expanded=True):
                 st.info("💡 日本語製品名、規格、単位、代理店価格、消費者価格を修正できます。")
@@ -1662,6 +1616,53 @@ if mode == "管理者モード":
                                 st.session_state.db = load_data_from_sheet() 
                             else:
                                 st.warning("一致する画像がありません。(ファイル名が品目コードと同じか確認してください)")
+
+            st.divider()
+
+            # --- NEW EXCHANGE RATE SECTION ---
+            with st.expander("💱 為替レート適用および購入単価(JPY)一括更新", expanded=False):
+                current_rate = st.session_state.exchange_rate
+                new_rate = st.number_input("適用為替レート (KRW / 1 JPY)", value=current_rate, step=0.1, help="1円あたりの韓国ウォン価格 (例: 100円=950ウォンなら 9.5)")
+                if new_rate != st.session_state.exchange_rate:
+                    st.session_state.exchange_rate = new_rate
+                    st.success(f"レートを {new_rate} に設定しました (1 JPY = {new_rate} KRW)")
+
+                st.markdown("##### 📋 購入単価(JPY) プレビュー")
+                products = st.session_state.db["products"]
+                rows = []
+                for p in products:
+                    krw_cost = p.get("price_buy_krw", 0)
+                    jpy_cost_calc = int(round(float(krw_cost) / new_rate)) if new_rate and krw_cost else 0
+                    rows.append({
+                        "Code": p.get("code"),
+                        "Name": p.get("name"),
+                        "購入単価(KRW)": krw_cost,
+                        "変更後の購入単価(JPY)": jpy_cost_calc
+                    })
+                st.dataframe(pd.DataFrame(rows), width="stretch")
+
+                st.markdown("---")
+                st.info("現在のレートに基づいて、全ての製品の購入単価(JPY)を計算し、DBに上書きします。(代理店価格・消費者価格は手動管理のため維持されます)")
+                update_pw = st.text_input("管理者のパスワードを入力して更新", type="password", key="rate_update_pw")
+                if st.button("🚨 為替レートを適用して購入単価(JPY)のみ一括更新する", type="primary"):
+                    admin_pwd_db = str(st.session_state.db.get("config", {}).get("admin_pwd", "1234"))
+                    if update_pw == admin_pwd_db:
+                        updated_count = 0
+                        for p in products:
+                            krw_cost = p.get("price_buy_krw", 0) 
+                            if krw_cost and float(krw_cost) > 0:
+                                base_jp = float(krw_cost) / new_rate
+                                p["price_buy"] = int(round(base_jp))
+                                updated_count += 1
+                        
+                        if updated_count > 0:
+                            save_products_to_sheet(products)
+                            st.session_state.db = load_data_from_sheet()
+                            st.success(f"{updated_count}件の購入単価(JPY)を更新しました！")
+                        else:
+                            st.warning("更新対象の製品がありません (price_buy_krw データを確認してください)")
+                    else:
+                        st.error("パスワードが一致しません。")
 
         with t2:
             st.subheader("📦 セット管理")

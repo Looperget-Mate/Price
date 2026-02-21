@@ -255,10 +255,10 @@ def init_db():
         try: ws_jp = sh.add_worksheet(title="Quotes_JP", rows=100, cols=10); ws_jp.append_row(["날짜", "현장명", "담당자", "총액", "데이터JSON"])
         except: pass
         
-    try: ws_config = sh.worksheet("Config")
+    try: ws_config = sh.worksheet("Config_JP")
     except:
         try: 
-            ws_config = sh.add_worksheet(title="Config", rows=10, cols=2)
+            ws_config = sh.add_worksheet(title="Config_JP", rows=10, cols=2)
             ws_config.append_row(["항목", "비밀번호"])
             ws_config.append_row(["app_pwd", "1234"])
             ws_config.append_row(["admin_pwd", "1234"])
@@ -273,7 +273,7 @@ def load_data_from_sheet():
     
     try:
         sh = gc.open(SHEET_NAME)
-        ws_config = sh.worksheet("Config")
+        ws_config = sh.worksheet("Config_JP")
         for rec in ws_config.get_all_records():
             if rec.get("항목") == "app_pwd": data["config"]["app_pwd"] = str(rec.get("비밀번호"))
             if rec.get("항목") == "admin_pwd": data["config"]["admin_pwd"] = str(rec.get("비밀번호"))
@@ -1519,21 +1519,17 @@ if mode == "管理者モード":
             
             # 2. 일괄 업데이트 (DB 저장)
             st.markdown("##### ⚡️ 単価一括更新 (DB保存)")
-            st.info("現在のレートとマージン率に基づいて、全ての製品の日本販売価格を計算し、DBに上書きします。")
+            st.info("現在のレートに基づいて、全ての製品の購入単価(JPY)を計算し、DBに上書きします。(代理店価格・消費者価格は手動管理のため維持されます)")
             
-            c_marg1, c_marg2 = st.columns(2)
-            with c_marg1: margin_d = st.number_input("代理店マージン (%)", value=20.0, step=1.0)
-            with c_marg2: margin_c = st.number_input("消費者マージン (%)", value=30.0, step=1.0)
-            
-            if st.button("🚨 レートとマージンを適用してDBを更新する", type="primary"):
+            if st.button("🚨 為替レートを適用して購入単価(JPY)のみ一括更新する", type="primary"):
                 products = st.session_state.db["products"]
                 updated_count = 0
                 for p in products:
-                    krw_cost = p.get("price_buy", 0) # price_buy_jp_krw mapped to price_buy
+                    krw_cost = p.get("price_buy_krw", 0) 
                     if krw_cost and float(krw_cost) > 0:
                         base_jp = float(krw_cost) / new_rate
-                        p["price_d1"] = int(base_jp * (1 + margin_d/100))
-                        p["price_cons"] = int(base_jp * (1 + margin_c/100))
+                        # 매입가(엔)만 업데이트하고, price_d1, price_cons는 갱신하지 않음
+                        p["price_buy"] = int(round(base_jp))
                         updated_count += 1
                 
                 if updated_count > 0:
@@ -1541,9 +1537,27 @@ if mode == "管理者モード":
                     st.session_state.db = load_data_from_sheet()
                     st.success(f"{updated_count}件の製品単価を更新しました！")
                 else:
-                    st.warning("更新対象の製品がありません (price_buy_jp_krw データを確認してください)")
+                    st.warning("更新対象の製品がありません (price_buy_krw データを確認してください)")
 
             st.markdown("---")
+            st.markdown("##### 📋 製品単価リスト (KRW → JPY 換算プレビュー)")
+            
+            products = st.session_state.db["products"]
+            rows = []
+            for p in products:
+                krw_cost = p.get("price_buy_krw", 0)
+                jpy_cost_calc = int(float(krw_cost) / new_rate) if new_rate and krw_cost else 0
+                rows.append({
+                    "Code": p.get("code"),
+                    "Name": p.get("name"),
+                    "購入単価(KRW)": krw_cost,
+                    "購入換算(JPY)": jpy_cost_calc,
+                    "代理店1(JPY)": p.get("price_d1", 0),
+                    "消費者(JPY)": p.get("price_cons", 0)
+                })
+            st.dataframe(pd.DataFrame(rows), width="stretch")
+
+            st.divider()
             st.markdown("##### 🔍 製品及びExcel管理 (Products_JP)")
             with st.expander("📂 部品データ直接修正 (修正/追加)", expanded=True):
                 st.info("💡 日本語製品名、規格、単位、代理店価格、消費者価格を修正できます。")
@@ -1757,7 +1771,7 @@ if mode == "管理者モード":
             if st.button("💾 パスワード変更保存"):
                 try:
                     sh = gc.open(SHEET_NAME)
-                    ws_config = sh.worksheet("Config")
+                    ws_config = sh.worksheet("Config_JP")
                     ws_config.clear()
                     ws_config.update([["항목", "비밀번호"], ["app_pwd", app_pwd_input], ["admin_pwd", admin_pwd_input]])
                     st.session_state.db["config"]["app_pwd"] = app_pwd_input
@@ -2182,8 +2196,13 @@ else:
                         "image_data": inf.get("image")
                     }
                     
-                    d["price_1"] = int(inf.get(pk[0], 0))
-                    if len(pk)>1: d["price_2"] = int(inf.get(pk[1], 0))
+                    def get_price(price_key, item_inf):
+                        if price_key == "price_buy":
+                            return int(item_inf.get(price_key, 0) / rate) if rate else 0
+                        return int(item_inf.get(price_key, 0))
+
+                    d["price_1"] = get_price(pk[0], inf)
+                    if len(pk)>1: d["price_2"] = get_price(pk[1], inf)
                     else: d["price_2"] = 0
                     
                     if code_key in cp_map:
@@ -2211,8 +2230,13 @@ else:
                     if not item: item = pdb.get(name)
                     
                     if item:
-                        p1 = int(item.get(pk[0], 0))
-                        p2 = int(item.get(pk[1], 0)) if len(pk) > 1 else 0
+                        def get_price(price_key, item_inf):
+                            if price_key == "price_buy":
+                                return int(item_inf.get(price_key, 0) / rate) if rate else 0
+                            return int(item_inf.get(price_key, 0))
+                            
+                        p1 = get_price(pk[0], item)
+                        p2 = get_price(pk[1], item) if len(pk) > 1 else 0
                         return pd.Series([p1, p2])
                     else:
                         return pd.Series([int(row.get("price_1", 0)), int(row.get("price_2", 0))])

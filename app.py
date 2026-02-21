@@ -24,45 +24,6 @@ from googleapiclient.http import MediaIoBaseUpload
 st.set_page_config(layout="wide", page_title="루퍼젯 프로 매니저 V10.0")
 
 # ==========================================
-# 0-1. 앱 접근 보안 잠금 (2FA Lockout 기능)
-# ==========================================
-if "app_authenticated" not in st.session_state:
-    st.session_state.app_authenticated = False
-    st.session_state.failed_attempts = 0
-    st.session_state.lockout_time = None
-
-if st.session_state.lockout_time:
-    if datetime.datetime.now() < st.session_state.lockout_time:
-        remaining_time = (st.session_state.lockout_time - datetime.datetime.now()).seconds // 60
-        st.error(f"🚫 보안 잠금 상태입니다. {remaining_time + 1}분 후에 다시 시도하세요.")
-        st.stop()
-    else:
-        st.session_state.failed_attempts = 0
-        st.session_state.lockout_time = None
-
-if not st.session_state.app_authenticated:
-    st.markdown("<h2 style='text-align: center; margin-top: 100px;'>🔒 루퍼젯 프로 매니저</h2>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 1, 1])
-    with col2:
-        with st.container(border=True):
-            pwd = st.text_input("프로그램 접속 비밀번호", type="password", key="app_pwd")
-            if st.button("접속", use_container_width=True):
-                if pwd == "1234":
-                    st.session_state.app_authenticated = True
-                    st.session_state.failed_attempts = 0
-                    st.rerun()
-                else:
-                    st.session_state.failed_attempts += 1
-                    if st.session_state.failed_attempts >= 5:
-                        st.session_state.lockout_time = datetime.datetime.now() + datetime.timedelta(minutes=30)
-                        st.error("🚫 비밀번호를 5회 틀렸습니다. 30분 동안 접속이 차단됩니다.")
-                        time.sleep(2)
-                        st.rerun()
-                    else:
-                        st.error(f"❌ 비밀번호가 틀렸습니다. ({st.session_state.failed_attempts}/5)")
-    st.stop()
-
-# ==========================================
 # 1. 설정 및 구글 연동 유틸리티
 # ==========================================
 FONT_REGULAR = "NanumGothic.ttf"
@@ -190,7 +151,7 @@ def get_drive_file_map():
 def get_set_drive_file_map():
     return get_drive_file_map()
 
-# [수정 패치 1] 메모리 누수 방지 (with 구문 및 img.close() 사용)
+# 메모리 누수 방지 (with 구문 및 img.close() 사용)
 def download_image_by_id(file_id):
     if not file_id or not drive_service: return None
     try:
@@ -284,7 +245,6 @@ def init_db():
         try: ws_kr = sh.add_worksheet(title="Quotes_KR", rows=100, cols=10); ws_kr.append_row(['날짜', '현장명', '담당자', '총액', '데이터JSON'])
         except: pass
         
-    # [기능 추가 2] Config 시트 자동 생성 및 연동
     try: ws_config = sh.worksheet("Config")
     except:
         try: 
@@ -357,7 +317,7 @@ def save_products_to_sheet(products_list):
     
     ws_prod.clear(); ws_prod.update([df_up.columns.values.tolist()] + df_up.values.tolist())
 
-# [최적화 패치 2] 구글 API 호출 최소화를 위해 init_db() 호출 없이 바로 업데이트 수행
+# 구글 API 호출 최소화를 위해 init_db() 호출 없이 바로 업데이트 수행
 def save_sets_to_sheet(sets_dict):
     if not gc: return
     try:
@@ -512,7 +472,6 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
             try:
                 img_data_str = img_b64.split(",", 1)[1] if "," in img_b64 else img_b64
                 img_bytes = base64.b64decode(img_data_str)
-                # [수정 패치 1]
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(img_bytes)
                     tmp_path = tmp.name
@@ -642,7 +601,7 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
     total_a2 = 0
     total_profit = 0
     
-    temp_files = [] # [수정 패치 1] Temp file 리스트 보관
+    temp_files = [] 
     ROW_HEIGHT_PT = 80
 
     for item in final_data_list:
@@ -665,7 +624,6 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
                 img_data_str = img_b64.split(",", 1)[1] if "," in img_b64 else img_b64
                 img_bytes = base64.b64decode(img_data_str)
                 
-                # [수정 패치 1]
                 with Image.open(io.BytesIO(img_bytes)) as pil_img:
                     orig_w, orig_h = pil_img.size
                     pil_img.close()
@@ -872,7 +830,8 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
                 img_data = img_b64.split(",", 1)[1]
                 img_bytes = base64.b64decode(img_data)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(img_bytes); tmp_path = tmp.name
+                    tmp.write(img_bytes)
+                    tmp_path = tmp.name
                 
                 pdf.image(tmp_path, x=x+6.25, y=y+2.5, w=37.5, h=30)
                 os.unlink(tmp_path)
@@ -924,9 +883,11 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
                 img_data = img_b64.split(",", 1)[1]
                 img_bytes = base64.b64decode(img_data)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(img_bytes); tmp_path = tmp.name
+                    tmp.write(img_bytes)
+                    tmp_path = tmp.name
                 pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
-                os.unlink(tmp_path)
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
             except: pass
             
         pdf.set_xy(x+20, y)
@@ -967,9 +928,11 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
                     img_data = img_b64.split(",", 1)[1]
                     img_bytes = base64.b64decode(img_data)
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                        tmp.write(img_bytes); tmp_path = tmp.name
+                        tmp.write(img_bytes)
+                        tmp_path = tmp.name
                     pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
-                    os.unlink(tmp_path)
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
                 except: pass
                 
             pdf.set_xy(x+20, y)
@@ -1012,9 +975,11 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
                 img_data = img_b64.split(",", 1)[1]
                 img_bytes = base64.b64decode(img_data)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(img_bytes); tmp_path = tmp.name
+                    tmp.write(img_bytes)
+                    tmp_path = tmp.name
                 pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
-                os.unlink(tmp_path)
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
             except: pass
             
         pdf.set_xy(x+20, y)
@@ -1073,7 +1038,6 @@ def create_composition_excel(set_cart, pipe_cart, final_data_list, db_products, 
             if total_qty > 0:
                 additional_items_list.append({"name": name, "spec": spec, "qty": total_qty, "code": code, "image": img_data})
 
-    # [수정 패치 1] Temp file 리스트 보관
     temp_files = []
 
     def insert_scaled_image(ws, row, col, img_b64):
@@ -1215,7 +1179,6 @@ def create_composition_excel(set_cart, pipe_cart, final_data_list, db_products, 
 
     workbook.close()
     
-    # [수정 패치 1] 엑셀 작업 끝난 뒤 temp file 확실히 삭제
     for f in temp_files:
         try: 
             if os.path.exists(f):
@@ -1225,12 +1188,12 @@ def create_composition_excel(set_cart, pipe_cart, final_data_list, db_products, 
     return output.getvalue()
 
 # ==========================================
-# 3. 메인 로직
+# 3. 메인 로직 (DB Init & 2FA Lockout)
 # ==========================================
 if "db" not in st.session_state:
-    with st.spinner("DB 접속 중..."): st.session_state.db = load_data_from_sheet()
+    with st.spinner("DB 연동 중..."): 
+        st.session_state.db = load_data_from_sheet()
 
-# [중요] 2FA Check Logic must be inside the main flow but using st.stop() if failed
 if "app_authenticated" not in st.session_state:
     st.session_state.app_authenticated = False
     st.session_state.failed_attempts = 0
@@ -1252,7 +1215,6 @@ if not st.session_state.app_authenticated:
         with st.container(border=True):
             pwd = st.text_input("프로그램 접속 비밀번호", type="password", key="app_pwd")
             if st.button("접속", use_container_width=True):
-                # [수정] DB Config에서 비밀번호 가져오기
                 app_pwd_db = str(st.session_state.db.get("config", {}).get("app_pwd", "1234"))
                 if pwd == app_pwd_db:
                     st.session_state.app_authenticated = True
@@ -1303,10 +1265,6 @@ if "ui_state" not in st.session_state:
 
 if "quote_remarks" not in st.session_state: 
     st.session_state.quote_remarks = "1. 견적 유효기간: 견적일로부터 15일 이내\n2. 출고: 결재 완료 후 즉시 또는 7일 이내"
-
-DEFAULT_DATA = {"config": {"password": "1234"}, "products":[], "sets":{}}
-if not st.session_state.db: st.session_state.db = DEFAULT_DATA
-if "config" not in st.session_state.db: st.session_state.db["config"] = {"password": "1234"}
 
 st.title("💧 루퍼젯 프로 매니저 V10.0 (Cloud)")
 
@@ -1676,7 +1634,8 @@ if mode == "관리자 모드":
                         st.warning(f"선택한 {len(sel_rows)}개의 세트를 정말로 삭제하시겠습니까?")
                         del_pw = st.text_input("관리자 비밀번호 확인", type="password", key="bulk_del_pw")
                         if st.button("🚫 일괄 삭제 실행", type="primary"):
-                            if del_pw == st.session_state.db["config"]["password"]:
+                            admin_pwd_db = str(st.session_state.db.get("config", {}).get("admin_pwd", "1234"))
+                            if del_pw == admin_pwd_db:
                                 del_count = 0
                                 target_names = [sl[i]["세트명"] for i in sel_rows]
                                 for name in target_names:
@@ -1689,6 +1648,32 @@ if mode == "관리자 모드":
                                 st.rerun()
                             else:
                                 st.error("비밀번호가 일치하지 않습니다.")
+            st.divider()
+            st.markdown("##### 🔄 세트 이미지 일괄 동기화 (수동 업로드 후 연결)")
+            with st.expander("📂 드라이브에 올린 파일과 세트 자동 연결하기", expanded=False):
+                st.info(f"💡 봇 업로드가 실패할 경우 사용하세요.\n1. 구글 드라이브 '{DRIVE_FOLDER_NAME}' 폴더에 이미지 파일을 직접 업로드하세요.\n2. 파일명은 반드시 '세트명'과 같아야 합니다 (예: {list(cset.keys())[0]}.png)")
+                if st.button("🔄 드라이브 세트 이미지 자동 동기화", key="btn_sync_set_images"):
+                    with st.spinner("드라이브 폴더를 검색하는 중..."):
+                        file_map = get_drive_file_map()
+                        if not file_map:
+                            st.warning("폴더를 찾을 수 없거나 비어있습니다.")
+                        else:
+                            updated_count = 0
+                            all_sets = st.session_state.db["sets"]
+                            for cat_key, cat_items in all_sets.items():
+                                for s_name, s_data in cat_items.items():
+                                    if s_name in file_map:
+                                        s_data["image"] = file_map[s_name]
+                                        updated_count += 1
+                                    elif f"{s_name}_image" in file_map:
+                                        s_data["image"] = file_map[f"{s_name}_image"]
+                                        updated_count += 1
+                            if updated_count > 0:
+                                save_sets_to_sheet(all_sets)
+                                st.success(f"✅ 총 {updated_count}개의 세트 이미지를 연결했습니다!")
+                                st.session_state.db = load_data_from_sheet()
+                            else:
+                                st.warning("매칭되는 이미지가 없습니다. (파일명이 세트명과 같은지 확인하세요)")
             st.divider()
             if "set_manage_mode" not in st.session_state: st.session_state.set_manage_mode = "신규"
             mt = st.radio("작업", ["신규", "수정"], horizontal=True, key="set_manage_mode")
@@ -2420,7 +2405,7 @@ else:
                                 new_item = item.copy()
                                 new_item["수량"] = rem_qty
                                 rem_items_out.append(new_item)
-                                comp_pool[match_key] = 0 # Prevent duplicate addition
+                                comp_pool[match_key] = 0
                         
                         sorted_final_data = sort_items(set_items_out) + sort_items(rem_items_out)
                     else:

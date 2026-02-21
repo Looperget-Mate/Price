@@ -23,6 +23,14 @@ from googleapiclient.http import MediaIoBaseUpload
 # ==========================================
 st.set_page_config(layout="wide", page_title="Looperget Pro Manager JP V10.0")
 
+# 비상용 기본 데이터 글로벌 선언 (NameError 방지)
+DEFAULT_DATA = {
+    "config": {"app_pwd": "1234", "admin_pwd": "1234"}, 
+    "products": [], 
+    "sets": {}, 
+    "jp_quotes": []
+}
+
 # ==========================================
 # 1. 설정 및 구글 연동 유틸리티 (일본 현지화: NotoSansJP 폰트 적용)
 # ==========================================
@@ -1903,7 +1911,6 @@ else:
             
             if view != "消費者価格":
                 k, l = key_map[view]
-                # 한국 매입가는 JPY로 환산, 나머지는 DB에 저장된 JPY 값 사용
                 if view == "購入価格":
                     krw = inf.get(k, 0)
                     pr = int(krw / rate) if rate else 0
@@ -1947,7 +1954,7 @@ else:
                 with c_amt: sp = st.number_input("金額(¥)", 0, step=1000, key="step2_cost_amt")
                 sn = stype
                 if stype == "その他": sn = st.text_input("内容入力", key="step2_cost_desc")
-                if st.button("費用リストに追加", use_container_width=True): st.session_state.services.append({"항목": sn, "금액": int(sp)}); st.rerun()
+                if st.button("費用リストに追加", use_container_width=True): st.session_state.services.append({"항목": sn, "金額": int(sp)}); st.rerun()
         if st.session_state.services:
             st.caption("追加された費用リスト"); st.table(st.session_state.services)
         st.divider()
@@ -2058,7 +2065,6 @@ else:
                         "image_data": inf.get("image")
                     }
                     
-                    # 환율 반영 로직 (매입가만 환율 계산, 나머지는 DB 값)
                     def get_price(price_key, item_inf):
                         if price_key == "price_buy":
                             return int(item_inf.get(price_key, 0) / rate) if rate else 0

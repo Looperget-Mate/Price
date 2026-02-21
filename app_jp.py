@@ -60,7 +60,7 @@ def get_google_services():
         drive_service = build('drive', 'v3', credentials=creds)
         return gc, drive_service
     except Exception as e:
-        st.error(f"Googleサービス認証に失敗しました: {e}")
+        st.error(f"Googleサービス認証에 실패했습니다: {e}")
         return None, None
 
 gc, drive_service = get_google_services()
@@ -296,7 +296,7 @@ def load_data_from_sheet():
         jp_records = []
         
     jp_dict = {str(r.get("품목코드", "")).zfill(5): r for r in jp_records if r.get("품목코드")}
-    cat_map = {"주배관": "メイン配管", "주배관세트": "メイン配管", "가지관": "分岐配管", "가지관세트": "分岐配管", "부속": "付属", "기타": "その他資材", "기타자재": "その他資材"}
+    cat_map = {"주배관": "メイン配관", "주배관세트": "メイン配관", "가지관": "分岐配管", "가지관세트": "分岐配管", "부속": "付属", "기타": "その他資材", "기타자재": "その他資材"}
     
     merged_products = []
     for kr in kr_records:
@@ -1278,7 +1278,7 @@ if not st.session_state.app_authenticated:
                     st.session_state.failed_attempts += 1
                     if st.session_state.failed_attempts >= 5:
                         st.session_state.lockout_time = datetime.datetime.now() + datetime.timedelta(minutes=30)
-                        st.error("🚫 パスワードを5回間違えました。30分間接続がブロックされます。")
+                        st.error("🚫 パスワードを5回間違えました。30분間接続がブロックされます。")
                         time.sleep(2)
                         st.rerun()
                     else:
@@ -1331,7 +1331,7 @@ with st.sidebar:
     col_s1, col_s2, col_s3 = st.columns(3)
     with col_s1: btn_save_temp = st.button("💾 一時保存")
     with col_s2: btn_save_off = st.button("✅ 正式保存")
-    with col_s3: btn_init = st.button("✨ 初期化")
+    with col_s3: btn_init = st.button("✨ 初期화")
     
     if btn_save_temp or btn_save_off:
         save_type = "正式" if btn_save_off else "一時"
@@ -1341,7 +1341,7 @@ with st.sidebar:
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             current_custom_prices = st.session_state.final_edit_df.to_dict('records') if st.session_state.final_edit_df is not None else []
             
-            form_type_val = st.session_state.get("step3_form_type", st.session_state.ui_state.get("form_type", "基本様式"))
+            form_type_val = st.session_state.get("step3_form_type", st.session_state.ui_state.get("form_type", "基本様식"))
             print_mode_val = st.session_state.get("step3_print_mode", st.session_state.ui_state.get("print_mode", "個別品目羅列 (既存)"))
             vat_mode_val = st.session_state.get("step3_vat_mode", st.session_state.ui_state.get("vat_mode", "税込 (基本)"))
             
@@ -1490,7 +1490,7 @@ with st.sidebar:
         st.info("保存された見積がありません。")
         
     st.divider()
-    mode = st.radio("モード", ["見積作成", "管理者モード", "🇯🇵 日本輸出分析"], key="main_sidebar_mode")
+    mode = st.radio("モード", ["見積作成", "管理者モード"], key="main_sidebar_mode")
 
 if mode == "管理者モード":
     st.header("🛠 管理者モード")
@@ -1619,7 +1619,7 @@ if mode == "管理者モード":
 
             st.divider()
 
-            # --- NEW EXCHANGE RATE SECTION ---
+            # --- EXCHANGE RATE SECTION ---
             with st.expander("💱 為替レート適用および購入単価(JPY)一括更新", expanded=False):
                 current_rate = st.session_state.exchange_rate
                 new_rate = st.number_input("適用為替レート (KRW / 1 JPY)", value=current_rate, step=0.1, help="1円あたりの韓国ウォン価格 (例: 100円=950ウォンなら 9.5)")
@@ -1642,7 +1642,7 @@ if mode == "管理者モード":
                 st.dataframe(pd.DataFrame(rows), width="stretch")
 
                 st.markdown("---")
-                st.info("現在のレートに基づいて、全ての製品の購入単価(JPY)を計算し、DBに上書きします。(代理店価格・消費者価格は手動管理のため維持されます)")
+                st.info("現在のレートに基づいて、全ての製品の購入単価(JPY)を計算し、DB에 上書きします。(代理店価格・消費者価格は手動管理のため維持されます)")
                 update_pw = st.text_input("管理者のパスワードを入力して更新", type="password", key="rate_update_pw")
                 if st.button("🚨 為替レートを適用して購入単価(JPY)のみ一括更新する", type="primary"):
                     admin_pwd_db = str(st.session_state.db.get("config", {}).get("admin_pwd", "1234"))
@@ -1666,6 +1666,7 @@ if mode == "管理者モード":
 
         with t2:
             st.subheader("📦 セット管理")
+            st.info("セットの構成や画像の変更は韓国本社のアプリでのみ可能です。ここでは一覧の照会のみ行えます。")
             ppt_data = get_admin_ppt_content()
             if ppt_data:
                 st.download_button(label="📥 セット構成一覧表(PPT) ダウンロード", data=ppt_data, file_name="Set_Composition_Master.pptx", mime="application/vnd.openxmlformats-officedocument.presentationml.presentation", use_container_width=True)
@@ -1676,98 +1677,12 @@ if mode == "管理者モード":
             cset = st.session_state.db["sets"].get(cat, {})
             if cset:
                 sl = [{"セット名": k, "部品数": len(v.get("recipe", {}))} for k,v in cset.items()]
-                st.dataframe(pd.DataFrame(sl), width="stretch", on_select="rerun", selection_mode="multi-row", key="set_table")
-                sel_rows = st.session_state.set_table.get("selection", {}).get("rows", [])
-                if sel_rows:
-                    if len(sel_rows) == 1:
-                        tg = sl[sel_rows[0]]["セット名"]
-                        st.markdown(f"#### 🔧 セット管理: {tg}")
-                        col_edit, col_img = st.columns([1, 1])
-                        with col_edit:
-                            if st.button(f"✏️ '{tg}' 構成品を修正する", use_container_width=True):
-                                st.session_state.temp_set_recipe = cset[tg].get("recipe", {}).copy()
-                                st.session_state.target_set_edit = tg
-                                st.session_state.set_manage_mode = "수정" 
-                                st.rerun()
-                        with col_img:
-                            with st.expander("🖼️ セット画像管理", expanded=True):
-                                set_folder_id = get_or_create_set_drive_folder()
-                                current_set_data = st.session_state.db["sets"][cat][tg]
-                                current_img_id = current_set_data.get("image", "")
-                                if current_img_id:
-                                    st.image(get_image_from_drive(current_img_id), caption="現在登録されている画像", use_container_width=True)
-                                    if st.button("🗑️ 画像削除", key=f"del_img_{tg}"):
-                                        st.session_state.db["sets"][cat][tg]["image"] = ""
-                                        save_sets_to_sheet(st.session_state.db["sets"])
-                                        st.success("画像が削除されました。")
-                                        st.rerun()
-                                else:
-                                    st.info("登録された画像がありません。")
-                                set_img_file = st.file_uploader("画像アップロード/変更", type=["png", "jpg", "jpeg"], key=f"uploader_{tg}")
-                                if set_img_file:
-                                    if st.button("💾 画像保存", key=f"save_img_{tg}"):
-                                        with st.spinner("画像アップロード中..."):
-                                            file_ext = set_img_file.name.split('.')[-1]
-                                            new_filename = f"{tg}_image.{file_ext}"
-                                            new_img_id = upload_set_image_to_drive(set_img_file, new_filename)
-                                            if new_img_id:
-                                                st.session_state.db["sets"][cat][tg]["image"] = new_img_id
-                                                save_sets_to_sheet(st.session_state.db["sets"])
-                                                st.success("画像が登録されました！")
-                                                time.sleep(1)
-                                                st.rerun()
-                    else:
-                        st.caption("💡 修正または画像管理を行うには1つだけ選択してください。")
-                    st.markdown("---")
-                    with st.expander(f"🗑️ 選択された {len(sel_rows)}個のセットを一括削除", expanded=True):
-                        st.warning(f"選択した {len(sel_rows)}個のセットを本当に削除しますか？")
-                        del_pw = st.text_input("管理者パスワード確認", type="password", key="bulk_del_pw")
-                        if st.button("🚫 一括削除実行", type="primary"):
-                            admin_pwd_db = str(st.session_state.db.get("config", {}).get("admin_pwd", "1234"))
-                            if del_pw == admin_pwd_db:
-                                del_count = 0
-                                target_names = [sl[i]["セット名"] for i in sel_rows]
-                                for name in target_names:
-                                    if name in st.session_state.db["sets"][cat]:
-                                        del st.session_state.db["sets"][cat][name]
-                                        del_count += 1
-                                save_sets_to_sheet(st.session_state.db["sets"])
-                                st.success(f"{del_count}個のセットが削除されました。")
-                                time.sleep(1)
-                                st.rerun()
-                            else:
-                                st.error("パスワードが一致しません。")
-            st.divider()
-            st.markdown("##### 🔄 セット画像一括同期 (手動アップロード後)")
-            with st.expander("📂 ドライブにアップしたファイルとセットを自動リンク", expanded=False):
-                st.info(f"💡 1. Googleドライブの '{DRIVE_FOLDER_NAME}' フォルダに画像を手動でアップロードします。\n2. ファイル名は必ず 'セット名' と同じにしてください。")
-                if st.button("🔄 ドライブセット画像自動同期", key="btn_sync_set_images"):
-                    with st.spinner("ドライブフォルダを検索中..."):
-                        file_map = get_drive_file_map()
-                        if not file_map:
-                            st.warning("フォルダが見つからないか空です。")
-                        else:
-                            updated_count = 0
-                            all_sets = st.session_state.db["sets"]
-                            for cat_key, cat_items in all_sets.items():
-                                for s_name, s_data in cat_items.items():
-                                    if s_name in file_map:
-                                        s_data["image"] = file_map[s_name]
-                                        updated_count += 1
-                                    elif f"{s_name}_image" in file_map:
-                                        s_data["image"] = file_map[f"{s_name}_image"]
-                                        updated_count += 1
-                            if updated_count > 0:
-                                save_sets_to_sheet(all_sets)
-                                st.success(f"✅ 計 {updated_count}個のセット画像をリンクしました！")
-                                st.session_state.db = load_data_from_sheet()
-                            else:
-                                st.warning("一致する画像がありません。")
+                st.dataframe(pd.DataFrame(sl), width="stretch", hide_index=True)
 
         with t3: 
             st.markdown("##### ⚙️ パスワード設定")
             app_pwd_input = st.text_input("アプリ接続パスワード", value=st.session_state.db.get("config", {}).get("app_pwd", "1234"), key="cfg_app")
-            admin_pwd_input = st.text_input("管理者/原価照会パスワード", value=st.session_state.db.get("config", {}).get("admin_pwd", "1234"), key="cfg_admin")
+            admin_pwd_input = st.text_input("管理者/原価照회パスワード", value=st.session_state.db.get("config", {}).get("admin_pwd", "1234"), key="cfg_admin")
             
             if st.button("💾 パスワード変更保存"):
                 try:
@@ -1780,110 +1695,6 @@ if mode == "管理者モード":
                     st.success("パスワードが正常に変更されました！")
                 except Exception as e:
                     st.error(f"パスワード保存失敗: {e}")
-
-elif mode == "🇯🇵 日本輸出分析":
-    st.header("🇯🇵 日本輸出見積 収益性分析")
-    st.caption("日本現地で保存された見積データを読み込み、予想収益を分析します。")
-    
-    if st.button("🔄 データ更新"):
-        st.session_state.db = load_data_from_sheet()
-        st.rerun()
-
-    jp_quotes = st.session_state.db.get("jp_quotes", [])
-    
-    if not jp_quotes:
-        st.warning("保存された見積データがありません。 (Google Sheet: 'Quotes_JP')")
-    else:
-        df_quotes = pd.DataFrame(jp_quotes)
-        if "현장명" in df_quotes.columns:
-            selected_quote_idx = st.selectbox(
-                "分析する見積を選択してください", 
-                range(len(df_quotes)), 
-                format_func=lambda i: f"[{df_quotes.iloc[i].get('날짜','')}] {df_quotes.iloc[i].get('현장명','')}"
-            )
-            
-            if selected_quote_idx is not None:
-                target_quote = df_quotes.iloc[selected_quote_idx]
-                items_json_str = str(target_quote.get("데이터JSON", "{}"))
-                try:
-                    full_dict = json.loads(items_json_str)
-                    items_dict = full_dict.get("items", {})
-                except:
-                    items_dict = {}
-                    st.error("データ形式が正しくありません。")
-
-                if items_dict:
-                    st.divider()
-                    st.subheader(f"📊 分析結果: {target_quote.get('현장명')}")
-                    
-                    analysis_rows = []
-                    total_revenue = 0 
-                    total_cost = 0    
-                    
-                    db_map = {str(p.get("code")).strip(): p for p in st.session_state.db["products"]}
-                    rate = st.session_state.exchange_rate
-
-                    for code, qty in items_dict.items():
-                        qty = int(qty)
-                        prod = db_map.get(str(code).strip())
-                        
-                        if prod:
-                            name = prod.get("name", "")
-                            spec = prod.get("spec", "")
-                            # 공급가는 JPY
-                            price_supply = int(prod.get("price_supply_jp", 0) or 0)
-                            # 매입가는 원화(KRW)이므로 환율 적용 후 정수화
-                            krw_buy = int(prod.get("price_buy_krw", 0) or 0)
-                            price_buy = int(round(krw_buy / rate)) if rate else 0
-                            
-                            revenue = price_supply * qty
-                            cost = price_buy * qty
-                            profit = revenue - cost
-                            
-                            total_revenue += revenue
-                            total_cost += cost
-                            
-                            analysis_rows.append({
-                                "品目コード": code,
-                                "品名": name,
-                                "規格": spec,
-                                "数量": qty,
-                                "供給単価(¥)": price_supply,
-                                "購入単価(¥)": price_buy,
-                                "予想売上(¥)": revenue,
-                                "予想原価(¥)": cost,
-                                "予想利益(¥)": profit
-                            })
-                        else:
-                            analysis_rows.append({
-                                "品目コード": code,
-                                "品名": "未登録品目",
-                                "規格": "-",
-                                "数量": qty,
-                                "供給単価(¥)": 0,
-                                "購入単価(¥)": 0,
-                                "予想売上(¥)": 0,
-                                "予想原価(¥)": 0,
-                                "予想利益(¥)": 0
-                            })
-
-                    total_profit = total_revenue - total_cost
-                    profit_margin = (total_profit / total_revenue * 100) if total_revenue > 0 else 0
-                    
-                    m1, m2, m3, m4 = st.columns(4)
-                    m1.metric("総売上 (供給価)", f"¥ {total_revenue:,}")
-                    m2.metric("総原価 (購入価)", f"¥ {total_cost:,}")
-                    m3.metric("予想利益", f"¥ {total_profit:,}", delta_color="normal")
-                    m4.metric("利益率", f"{profit_margin:.1f} %")
-                    
-                    st.markdown("---")
-                    st.write("###### 詳細内訳")
-                    st.dataframe(pd.DataFrame(analysis_rows), width="stretch", hide_index=True)
-                    
-                else:
-                    st.info("見積に含まれた品目がありません。")
-        else:
-            st.error("データ形式が正しくありません。(Quotes_JP シート確認必要)")
 
 else:
     st.markdown(f"### 📝 現場名: **{st.session_state.current_quote_name if st.session_state.current_quote_name else '(未設定)'}**")
@@ -1975,7 +1786,7 @@ else:
         with c2: len_pipe = st.number_input("長さ(m)", min_value=1, step=1, format="%d", key="pipe_len")
         with c3:
             st.write(""); st.write("")
-            if st.button("➕ リスト追加"):
+            if st.button("➕ リ스트追加"):
                 if sel_pipe: st.session_state.pipe_cart.append({"type": pipe_type_sel, "name": sel_pipe['name'], "spec": sel_pipe.get("spec", ""), "code": sel_pipe.get("code", ""), "len": len_pipe})
         if st.session_state.pipe_cart:
             st.caption("📋 入力された配管リスト")

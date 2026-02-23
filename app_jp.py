@@ -1772,10 +1772,34 @@ else:
                 if added_count > 0: st.success("追加しました")
         if st.session_state.set_cart:
             st.info("📋 選択されたセットリスト (合算予定)")
-            st.dataframe(pd.DataFrame(st.session_state.set_cart), width="stretch", hide_index=True)
-            if st.button("🗑️ セットリストを空にする"):
+            df_set_cart = pd.DataFrame(st.session_state.set_cart)
+            df_set_cart["削除 (Delete)"] = False
+            
+            edited_set_cart = st.data_editor(
+                df_set_cart,
+                column_config={
+                    "name": st.column_config.TextColumn("セット名", disabled=True),
+                    "type": st.column_config.TextColumn("区分", disabled=True),
+                    "qty": st.column_config.NumberColumn("数量(qty)", min_value=1, step=1),
+                    "削除 (Delete)": st.column_config.CheckboxColumn("削除 (Delete)", default=False)
+                },
+                hide_index=True,
+                width="stretch",
+                key="set_cart_editor"
+            )
+            
+            if st.button("💾 セットリストの変更を適用"):
+                new_set_cart = []
+                for _, row in edited_set_cart.iterrows():
+                    if not row["削除 (Delete)"]:
+                        new_set_cart.append({"name": row["name"], "qty": int(row["qty"]), "type": row["type"]})
+                st.session_state.set_cart = new_set_cart
+                st.rerun()
+
+            if st.button("🗑️ セットリストをすべて空にする"):
                 st.session_state.set_cart = []
                 st.rerun()
+                
         st.divider()
         st.markdown("#### 📏 配管数量算出 (カート)")
         all_products = st.session_state.db["products"]
@@ -1858,7 +1882,7 @@ else:
             if not inf: continue
             
             cpr = int(inf.get("price_cons", 0))
-            row = {"品名": inf.get("name", n), "規格": inf.get("spec", ""), "数量": q, "消費者価格": cpr, "合計": cpr*q}
+            row = {"品名": inf.get("name", n), "規格": inf.get("spec", ""), "数量": q, "消費者価格": cpr, "合計": cpr*q, "コード": str(n)}
             
             if view != "消費者価格":
                 k, l = key_map[view]
@@ -1880,6 +1904,47 @@ else:
             df = pd.DataFrame(columns=disp)
             
         st.dataframe(df[disp], width="stretch", hide_index=True)
+        
+        st.divider()
+        with st.expander("🛒 追加された部品の修正および削除", expanded=False):
+            if rows:
+                editor_data = []
+                for r in rows:
+                    editor_data.append({
+                        "コード": r.get("コード", ""),
+                        "品名": r.get("品名", ""),
+                        "数量": r.get("数量", 0),
+                        "削除": False
+                    })
+                
+                df_editor = pd.DataFrame(editor_data)
+                
+                edited_items = st.data_editor(
+                    df_editor,
+                    column_config={
+                        "コード": st.column_config.TextColumn("コード", disabled=True),
+                        "品名": st.column_config.TextColumn("品名", disabled=True),
+                        "数量": st.column_config.NumberColumn("数量", min_value=1, step=1),
+                        "削除": st.column_config.CheckboxColumn("削除", default=False)
+                    },
+                    hide_index=True,
+                    width="stretch",
+                    key="items_editor"
+                )
+                
+                if st.button("💾 部品の変更を適用"):
+                    new_quote_items = {}
+                    for _, r in edited_items.iterrows():
+                        if not r["削除"]:
+                            code_key = str(r["コード"]).strip()
+                            qty_val = int(r["数量"])
+                            if qty_val > 0:
+                                new_quote_items[code_key] = qty_val
+                    st.session_state.quote_items = new_quote_items
+                    st.rerun()
+            else:
+                st.info("追加された部品がありません。")
+
         st.divider()
         col_add_part, col_add_cost = st.columns([1, 1])
         with col_add_part:

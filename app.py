@@ -317,7 +317,6 @@ def save_products_to_sheet(products_list):
     
     ws_prod.clear(); ws_prod.update([df_up.columns.values.tolist()] + df_up.values.tolist())
 
-# 구글 API 호출 최소화를 위해 init_db() 호출 없이 바로 업데이트 수행
 def save_sets_to_sheet(sets_dict):
     if not gc: return
     try:
@@ -830,7 +829,8 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
                 img_data = img_b64.split(",", 1)[1]
                 img_bytes = base64.b64decode(img_data)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(img_bytes); tmp_path = tmp.name
+                    tmp.write(img_bytes)
+                    tmp_path = tmp.name
                 
                 pdf.image(tmp_path, x=x+6.25, y=y+2.5, w=37.5, h=30)
                 os.unlink(tmp_path)
@@ -882,7 +882,8 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
                 img_data = img_b64.split(",", 1)[1]
                 img_bytes = base64.b64decode(img_data)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(img_bytes); tmp_path = tmp.name
+                    tmp.write(img_bytes)
+                    tmp_path = tmp.name
                 pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
                 if os.path.exists(tmp_path):
                     os.unlink(tmp_path)
@@ -973,7 +974,8 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
                 img_data = img_b64.split(",", 1)[1]
                 img_bytes = base64.b64decode(img_data)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(img_bytes); tmp_path = tmp.name
+                    tmp.write(img_bytes)
+                    tmp_path = tmp.name
                 pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
                 if os.path.exists(tmp_path):
                     os.unlink(tmp_path)
@@ -1639,6 +1641,32 @@ if mode == "관리자 모드":
                             else:
                                 st.error("비밀번호가 일치하지 않습니다.")
             st.divider()
+            st.markdown("##### 🔄 세트 이미지 일괄 동기화 (수동 업로드 후 연결)")
+            with st.expander("📂 드라이브에 올린 파일과 세트 자동 연결하기", expanded=False):
+                st.info(f"💡 봇 업로드가 실패할 경우 사용하세요.\n1. 구글 드라이브 '{DRIVE_FOLDER_NAME}' 폴더에 이미지 파일을 직접 업로드하세요.\n2. 파일명은 반드시 '세트명'과 같아야 합니다 (예: {list(cset.keys())[0]}.png)")
+                if st.button("🔄 드라이브 세트 이미지 자동 동기화", key="btn_sync_set_images"):
+                    with st.spinner("드라이브 폴더를 검색하는 중..."):
+                        file_map = get_drive_file_map()
+                        if not file_map:
+                            st.warning("폴더를 찾을 수 없거나 비어있습니다.")
+                        else:
+                            updated_count = 0
+                            all_sets = st.session_state.db["sets"]
+                            for cat_key, cat_items in all_sets.items():
+                                for s_name, s_data in cat_items.items():
+                                    if s_name in file_map:
+                                        s_data["image"] = file_map[s_name]
+                                        updated_count += 1
+                                    elif f"{s_name}_image" in file_map:
+                                        s_data["image"] = file_map[f"{s_name}_image"]
+                                        updated_count += 1
+                            if updated_count > 0:
+                                save_sets_to_sheet(all_sets)
+                                st.success(f"✅ 총 {updated_count}개의 세트 이미지를 연결했습니다!")
+                                st.session_state.db = load_data_from_sheet()
+                            else:
+                                st.warning("매칭되는 이미지가 없습니다. (파일명이 세트명과 같은지 확인하세요)")
+            st.divider()
             if "set_manage_mode" not in st.session_state: st.session_state.set_manage_mode = "신규"
             mt = st.radio("작업", ["신규", "수정"], horizontal=True, key="set_manage_mode")
             sub_cat = None
@@ -1963,12 +1991,46 @@ else:
                         st.session_state.set_cart.append({"name": set_name, "qty": qty, "type": "기타"})
                         added_count += 1
                 if added_count > 0: st.success("추가됨")
+                
+        # [수정 지침 1 반영] STEP 1 세트 장바구니 수정/삭제 기능 추가
         if st.session_state.set_cart:
             st.info("📋 선택된 세트 목록 (합산 예정)")
-            st.dataframe(pd.DataFrame(st.session_state.set_cart), width="stretch", hide_index=True)
-            if st.button("🗑️ 세트 목록 비우기"):
-                st.session_state.set_cart = []
-                st.rerun()
+            
+            cart_df = pd.DataFrame(st.session_state.set_cart)
+            cart_df["삭제"] = False
+            
+            edited_cart = st.data_editor(
+                cart_df,
+                width="stretch",
+                hide_index=True,
+                disabled=["name", "type"],
+                column_config={
+                    "name": st.column_config.TextColumn("세트명"),
+                    "qty": st.column_config.NumberColumn("수량", min_value=1, step=1),
+                    "type": st.column_config.TextColumn("구분"),
+                    "삭제": st.column_config.CheckboxColumn("삭제?", default=False)
+                },
+                key="set_cart_editor"
+            )
+            
+            c_btn1, c_btn2 = st.columns(2)
+            with c_btn1:
+                if st.button("💾 세트 목록 변경사항 적용", use_container_width=True):
+                    new_cart = []
+                    for _, row in edited_cart.iterrows():
+                        if not row.get("삭제"):
+                            new_cart.append({
+                                "name": row["name"],
+                                "qty": int(row["qty"]),
+                                "type": row["type"]
+                            })
+                    st.session_state.set_cart = new_cart
+                    st.rerun()
+            with c_btn2:
+                if st.button("🗑️ 세트 목록 전체 비우기", use_container_width=True):
+                    st.session_state.set_cart = []
+                    st.rerun()
+                    
         st.divider()
         st.markdown("#### 📏 배관 물량 산출 (장바구니)")
         all_products = st.session_state.db["products"]
@@ -2050,7 +2112,6 @@ else:
             inf = pdb.get(str(n), {})
             if not inf: continue
             
-            # [필터링 추가] 소비자가 선택 시 '관급비용' 카테고리 항목 제외
             if view == "소비자가" and inf.get("category", "") == "관급비용":
                 continue
                 
@@ -2076,6 +2137,48 @@ else:
             df = pd.DataFrame(columns=disp)
             
         st.dataframe(df[disp], width="stretch", hide_index=True)
+        
+        # [수정 지침 2 반영] STEP 2 부품 장바구니 수정/삭제 기능 추가
+        st.divider()
+        with st.expander("🛒 추가된 부품 수정 및 삭제", expanded=False):
+            parts_list = []
+            for k, v in st.session_state.quote_items.items():
+                inf = pdb.get(str(k), {})
+                p_code = inf.get("code", str(k))
+                p_name = inf.get("name", str(k))
+                parts_list.append({
+                    "품목코드": p_code,
+                    "품목명": p_name,
+                    "수량": int(v),
+                    "삭제": False,
+                    "_orig_key": str(k)
+                })
+            
+            if parts_list:
+                parts_df = pd.DataFrame(parts_list)
+                edited_parts = st.data_editor(
+                    parts_df,
+                    width="stretch",
+                    hide_index=True,
+                    disabled=["품목코드", "품목명"],
+                    column_config={
+                        "삭제": st.column_config.CheckboxColumn("삭제?", default=False),
+                        "수량": st.column_config.NumberColumn("수량", min_value=1, step=1),
+                        "_orig_key": None
+                    },
+                    key="parts_cart_editor"
+                )
+                
+                if st.button("💾 부품 변경사항 적용", use_container_width=True):
+                    new_quote_items = {}
+                    for _, row in edited_parts.iterrows():
+                        if not row.get("삭제"):
+                            new_quote_items[row["_orig_key"]] = int(row["수량"])
+                    st.session_state.quote_items = new_quote_items
+                    st.rerun()
+            else:
+                st.info("장바구니에 담긴 부품이 없습니다.")
+
         st.divider()
         col_add_part, col_add_cost = st.columns([1, 1])
         with col_add_part:
@@ -2191,7 +2294,6 @@ else:
                 inf = pdb.get(str(n), {})
                 if not inf: continue
                 
-                # [필터링 추가] 소비자가 선택 시 '관급비용' 카테고리 항목 제외
                 if "소비자가" in sel and inf.get("category", "") == "관급비용":
                     continue
                 

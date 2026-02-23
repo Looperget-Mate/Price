@@ -317,6 +317,7 @@ def save_products_to_sheet(products_list):
     
     ws_prod.clear(); ws_prod.update([df_up.columns.values.tolist()] + df_up.values.tolist())
 
+# 구글 API 호출 최소화를 위해 init_db() 호출 없이 바로 업데이트 수행
 def save_sets_to_sheet(sets_dict):
     if not gc: return
     try:
@@ -1641,32 +1642,6 @@ if mode == "관리자 모드":
                             else:
                                 st.error("비밀번호가 일치하지 않습니다.")
             st.divider()
-            st.markdown("##### 🔄 세트 이미지 일괄 동기화 (수동 업로드 후 연결)")
-            with st.expander("📂 드라이브에 올린 파일과 세트 자동 연결하기", expanded=False):
-                st.info(f"💡 봇 업로드가 실패할 경우 사용하세요.\n1. 구글 드라이브 '{DRIVE_FOLDER_NAME}' 폴더에 이미지 파일을 직접 업로드하세요.\n2. 파일명은 반드시 '세트명'과 같아야 합니다 (예: {list(cset.keys())[0]}.png)")
-                if st.button("🔄 드라이브 세트 이미지 자동 동기화", key="btn_sync_set_images"):
-                    with st.spinner("드라이브 폴더를 검색하는 중..."):
-                        file_map = get_drive_file_map()
-                        if not file_map:
-                            st.warning("폴더를 찾을 수 없거나 비어있습니다.")
-                        else:
-                            updated_count = 0
-                            all_sets = st.session_state.db["sets"]
-                            for cat_key, cat_items in all_sets.items():
-                                for s_name, s_data in cat_items.items():
-                                    if s_name in file_map:
-                                        s_data["image"] = file_map[s_name]
-                                        updated_count += 1
-                                    elif f"{s_name}_image" in file_map:
-                                        s_data["image"] = file_map[f"{s_name}_image"]
-                                        updated_count += 1
-                            if updated_count > 0:
-                                save_sets_to_sheet(all_sets)
-                                st.success(f"✅ 총 {updated_count}개의 세트 이미지를 연결했습니다!")
-                                st.session_state.db = load_data_from_sheet()
-                            else:
-                                st.warning("매칭되는 이미지가 없습니다. (파일명이 세트명과 같은지 확인하세요)")
-            st.divider()
             if "set_manage_mode" not in st.session_state: st.session_state.set_manage_mode = "신규"
             mt = st.radio("작업", ["신규", "수정"], horizontal=True, key="set_manage_mode")
             sub_cat = None
@@ -1803,13 +1778,14 @@ elif mode == "🇯🇵 일본 수출 분석":
         selected_quote_idx = st.selectbox(
             "분석 대상 견적 선택", 
             range(len(df_quotes)), 
-            format_func=lambda i: f"[{df_quotes.iloc[i].get('날짜','')}] {df_quotes.iloc[i].get('견적명','')}"
+            format_func=lambda i: f"[{df_quotes.iloc[i].get('날짜','')}] {df_quotes.iloc[i].get('현장명','')}"
         )
         
         target_quote = df_quotes.iloc[selected_quote_idx]
-        items_json = str(target_quote.get("항목JSON", "{}"))
+        items_json = str(target_quote.get("데이터JSON", "{}"))
         try:
-            items_dict = json.loads(items_json)
+            full_dict = json.loads(items_json)
+            items_dict = full_dict.get("items", {}) if isinstance(full_dict, dict) and "items" in full_dict else full_dict
         except:
             items_dict = {}
             st.error("JSON 데이터 파싱 실패")
@@ -1881,7 +1857,7 @@ elif mode == "🇯🇵 일본 수출 분석":
                     pdf.set_font(FONT_REGULAR if os.path.exists(FONT_REGULAR) else 'Helvetica', '', 10)
                     
                     pdf.cell(0, 10, f"Analysis Date: {datetime.datetime.now().strftime('%Y-%m-%d')}", ln=True, align='R')
-                    pdf.cell(0, 10, f"Quote Name: {target_quote.get('견적명')}", ln=True)
+                    pdf.cell(0, 10, f"Quote Name: {target_quote.get('현장명')}", ln=True)
                     pdf.ln(5)
                     
                     pdf.set_fill_color(220, 220, 220)
@@ -1915,8 +1891,8 @@ elif mode == "🇯🇵 일본 수출 분석":
                     
                     st.success("보고서 생성 완료")
                     c1, c2 = st.columns(2)
-                    c1.download_button("📥 분석서 PDF 다운로드", pdf_bytes, f"Export_Analysis_{target_quote.get('견적명')}.pdf", "application/pdf", use_container_width=True)
-                    c2.download_button("📥 분석서 Excel 다운로드", excel_buf.getvalue(), f"Export_Analysis_{target_quote.get('견적명')}.xlsx", use_container_width=True)
+                    c1.download_button("📥 분석서 PDF 다운로드", pdf_bytes, f"Export_Analysis_{target_quote.get('현장명')}.pdf", "application/pdf", use_container_width=True)
+                    c2.download_button("📥 분석서 Excel 다운로드", excel_buf.getvalue(), f"Export_Analysis_{target_quote.get('현장명')}.xlsx", use_container_width=True)
 
 else:
     st.markdown(f"### 📝 현장명: **{st.session_state.current_quote_name if st.session_state.current_quote_name else '(제목 없음)'}**")
@@ -1992,7 +1968,6 @@ else:
                         added_count += 1
                 if added_count > 0: st.success("추가됨")
                 
-        # [수정 지침 1 반영] STEP 1 세트 장바구니 수정/삭제 기능 추가
         if st.session_state.set_cart:
             st.info("📋 선택된 세트 목록 (합산 예정)")
             
@@ -2138,7 +2113,6 @@ else:
             
         st.dataframe(df[disp], width="stretch", hide_index=True)
         
-        # [수정 지침 2 반영] STEP 2 부품 장바구니 수정/삭제 기능 추가
         st.divider()
         with st.expander("🛒 추가된 부품 수정 및 삭제", expanded=False):
             parts_list = []

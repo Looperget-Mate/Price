@@ -23,6 +23,15 @@ from googleapiclient.http import MediaIoBaseUpload
 # ==========================================
 st.set_page_config(layout="wide", page_title="루퍼젯 프로 매니저 V10.0")
 
+# 비상용 기본 데이터 글로벌 선언 (NameError 방지)
+DEFAULT_DATA = {
+    "config": {"password": "1234"}, 
+    "products": [], 
+    "sets": {}, 
+    "jp_quotes": [], 
+    "kr_quotes": []
+}
+
 # ==========================================
 # 1. 설정 및 구글 연동 유틸리티
 # ==========================================
@@ -1642,6 +1651,32 @@ if mode == "관리자 모드":
                             else:
                                 st.error("비밀번호가 일치하지 않습니다.")
             st.divider()
+            st.markdown("##### 🔄 세트 이미지 일괄 동기화 (수동 업로드 후 연결)")
+            with st.expander("📂 드라이브에 올린 파일과 세트 자동 연결하기", expanded=False):
+                st.info(f"💡 봇 업로드가 실패할 경우 사용하세요.\n1. 구글 드라이브 '{DRIVE_FOLDER_NAME}' 폴더에 이미지 파일을 직접 업로드하세요.\n2. 파일명은 반드시 '세트명'과 같아야 합니다 (예: {list(cset.keys())[0]}.png)")
+                if st.button("🔄 드라이브 세트 이미지 자동 동기화", key="btn_sync_set_images"):
+                    with st.spinner("드라이브 폴더를 검색하는 중..."):
+                        file_map = get_drive_file_map()
+                        if not file_map:
+                            st.warning("폴더를 찾을 수 없거나 비어있습니다.")
+                        else:
+                            updated_count = 0
+                            all_sets = st.session_state.db["sets"]
+                            for cat_key, cat_items in all_sets.items():
+                                for s_name, s_data in cat_items.items():
+                                    if s_name in file_map:
+                                        s_data["image"] = file_map[s_name]
+                                        updated_count += 1
+                                    elif f"{s_name}_image" in file_map:
+                                        s_data["image"] = file_map[f"{s_name}_image"]
+                                        updated_count += 1
+                            if updated_count > 0:
+                                save_sets_to_sheet(all_sets)
+                                st.success(f"✅ 총 {updated_count}개의 세트 이미지를 연결했습니다!")
+                                st.session_state.db = load_data_from_sheet()
+                            else:
+                                st.warning("매칭되는 이미지가 없습니다. (파일명이 세트명과 같은지 확인하세요)")
+            st.divider()
             if "set_manage_mode" not in st.session_state: st.session_state.set_manage_mode = "신규"
             mt = st.radio("작업", ["신규", "수정"], horizontal=True, key="set_manage_mode")
             sub_cat = None
@@ -2268,6 +2303,7 @@ else:
                 inf = pdb.get(str(n), {})
                 if not inf: continue
                 
+                # [필터링 추가] 소비자가 선택 시 '관급비용' 카테고리 항목 제외
                 if "소비자가" in sel and inf.get("category", "") == "관급비용":
                     continue
                 

@@ -2303,7 +2303,6 @@ else:
                 inf = pdb.get(str(n), {})
                 if not inf: continue
                 
-                # [필터링 추가] 소비자가 선택 시 '관급비용' 카테고리 항목 제외
                 if "소비자가" in sel and inf.get("category", "") == "관급비용":
                     continue
                 
@@ -2326,8 +2325,9 @@ else:
                 
                 if code_key in cp_map:
                     d["수량"] = int(cp_map[code_key].get("수량", d["수량"]))
-                    d["price_1"] = int(cp_map[code_key].get("price_1", d["price_1"]))
-                    d["price_2"] = int(cp_map[code_key].get("price_2", d["price_2"]))
+                    if not selectors_changed:
+                        d["price_1"] = int(cp_map[code_key].get("price_1", d["price_1"]))
+                        d["price_2"] = int(cp_map[code_key].get("price_2", d["price_2"]))
                     processed_keys.add(code_key)
                     
                 fdata.append(d)

@@ -2220,6 +2220,8 @@ else:
 
     elif st.session_state.quote_step == 3:
         st.header("🏁 최종 견적")
+        if not st.session_state.get("files_ready"):
+            st.info("💡 불러온 견적(또는 수정 중인 견적)입니다. 내용을 확인하신 후 하단의 **[📄 견적서 파일 생성하기]** 버튼을 눌러야 명세서가 나타납니다.")
         if not st.session_state.current_quote_name: st.warning("현장명(저장)을 확인해주세요!")
         st.markdown("##### 🖨️ 출력 옵션")
         c_date, c_opt1, c_opt2 = st.columns([1, 1, 1])
@@ -2231,8 +2233,11 @@ else:
             idx_form = 0 if st.session_state.ui_state.get("form_type", "기본 양식") == "기본 양식" else 1
             form_type = st.radio("양식", ["기본 양식", "이익 분석 양식"], index=idx_form, key="step3_form_type")
             
-            idx_print = 0 if st.session_state.ui_state.get("print_mode", "개별 품목 나열 (기존)") == "개별 품목 나열 (기존)" else 1
-            print_mode = st.radio("출력 형태", ["개별 품목 나열 (기존)", "세트 단위 묶음 (신규)"], index=idx_print, key="step3_print_mode")
+            current_pm = st.session_state.ui_state.get("print_mode", "개별 품목 나열 (기존)")
+            idx_print = 0
+            if current_pm == "세트 단위 묶음 (신규)": idx_print = 1
+            elif current_pm == "세트별 부품 분해 (납품 패킹용)": idx_print = 2
+            print_mode = st.radio("출력 형태", ["개별 품목 나열 (기존)", "세트 단위 묶음 (신규)", "세트별 부품 분해 (납품 패킹용)"], index=idx_print, key="step3_print_mode")
             
             idx_vat = 0 if st.session_state.ui_state.get("vat_mode", "포함 (기본)") == "포함 (기본)" else 1
             vat_mode = st.radio("부가세", ["포함 (기본)", "별도"], index=idx_vat, key="step3_vat_mode")
@@ -2431,7 +2436,76 @@ else:
 
                     individual_sorted_data = sort_items(safe_data)
 
-                    if print_mode == "세트 단위 묶음 (신규)":
+                    if print_mode == "세트별 부품 분해 (납품 패킹용)":
+                        expanded_data = []
+                        pool = {}; price_map_1 = {}; price_map_2 = {}
+                        for item in safe_data:
+                            k = str(item.get("코드", "")).strip().zfill(5)
+                            if k == "00000" or not k: k = str(item.get("품목", "")).strip()
+                            pool[k] = pool.get(k, 0) + int(float(item.get("수량", 0)))
+                            price_map_1[k] = int(float(item.get("price_1", 0)))
+                            price_map_2[k] = int(float(item.get("price_2", 0)))
+                        
+                        all_sets_db = {}
+                        for cat, val in st.session_state.db.get("sets", {}).items(): all_sets_db.update(val)
+                        
+                        for s_item in st.session_state.set_cart:
+                            s_name = s_item['name']
+                            s_qty = s_item['qty']
+                            if s_qty <= 0 or s_name not in all_sets_db: continue
+                            recipe = all_sets_db[s_name].get("recipe", {})
+                            
+                            for p_code_or_name, p_qty_per_set in recipe.items():
+                                p_key = str(p_code_or_name).strip().zfill(5)
+                                if p_key not in pool: p_key = str(p_code_or_name).strip()
+                                req_qty = p_qty_per_set * s_qty
+                                prod_info = next((p for p in st.session_state.db["products"] if str(p.get("code","")).strip().zfill(5) == p_key or p.get("name") == p_key), {})
+                                
+                                expanded_data.append({
+                                    "품목": f"[{s_name}] {prod_info.get('name', p_key)}",
+                                    "규격": prod_info.get("spec", ""),
+                                    "코드": prod_info.get("code", p_key),
+                                    "단위": prod_info.get("unit", "EA"),
+                                    "수량": req_qty,
+                                    "price_1": price_map_1.get(p_key, 0),
+                                    "price_2": price_map_2.get(p_key, 0),
+                                    "image_data": prod_info.get("image", "")
+                                })
+                                if p_key in pool: pool[p_key] -= req_qty
+                                
+                        for p_item in st.session_state.pipe_cart:
+                            p_code = p_item.get('code')
+                            p_len = p_item.get('len', 0)
+                            prod_info = next((p for p in st.session_state.db["products"] if str(p.get("code","")).strip().zfill(5) == p_code), {})
+                            unit_len = prod_info.get("len_per_unit", 4) if prod_info else 4
+                            req_qty = math.ceil(p_len / (unit_len if unit_len > 0 else 4))
+                            p_key = str(p_code).strip().zfill(5)
+                            
+                            expanded_data.append({
+                                "품목": f"[배관] {prod_info.get('name', p_item.get('name'))}",
+                                "규격": prod_info.get("spec", p_item.get("spec", "")),
+                                "코드": p_code,
+                                "단위": prod_info.get("unit", "EA"),
+                                "수량": req_qty,
+                                "price_1": price_map_1.get(p_key, 0),
+                                "price_2": price_map_2.get(p_key, 0),
+                                "image_data": prod_info.get("image", "")
+                            })
+                            if p_key in pool: pool[p_key] -= req_qty
+                            
+                        for item in safe_data:
+                            k = str(item.get("코드", "")).strip().zfill(5)
+                            if k == "00000" or not k: k = str(item.get("품목", "")).strip()
+                            rem_qty = pool.get(k, 0)
+                            if rem_qty > 0:
+                                new_item = item.copy()
+                                new_item["품목"] = f"[추가/별도] {item.get('품목')}"
+                                new_item["수량"] = rem_qty
+                                expanded_data.append(new_item)
+                                pool[k] = 0
+                                
+                        sorted_final_data = expanded_data
+                    elif print_mode == "세트 단위 묶음 (신규)":
                         comp_pool = {}
                         comp_price1 = {}
                         comp_price2 = {}

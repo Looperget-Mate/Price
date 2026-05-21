@@ -368,15 +368,45 @@ KR_PRICE_LABELS = {
     "price_supply_jp": "신정공급가"
 }
 
-def smart_roundup(value: float) -> int:
-    """가격 규모별 올림 단위: ~999 → 1원, 1000~9999 → 10원, 10000~ → 100원"""
+def smart_roundup(value: float, apply_vat_fit: bool = True) -> float:
+    """
+    가격 규모별 올림 단위 + 부가세 역산(÷1.1) 정수 조건:
+      ~999원    → 0.1원 단위, ÷1.1이 소수점 없이 떨어지는 최소값으로 올림
+      1000~9999 → 10원 단위, ÷1.1 조건 적용 (11의 배수)
+      10000~    → 100원 단위, ÷1.1 조건 적용 (11의 배수 × 10)
+    apply_vat_fit=False 이면 단순 올림만 수행 (신정공급가 등에 사용)
+    """
     v = float(value)
+
     if v < 1000:
-        return int(math.ceil(v))
+        # 0.1원 단위 올림 후, v/1.1이 소수점 1자리 이하로 떨어지는 최솟값 탐색
+        # 조건: v * 10이 11의 배수 → v = 11k/10 (k는 양의 정수)
+        base = math.ceil(v * 10) / 10  # 0.1원 올림
+        if not apply_vat_fit:
+            return round(base, 1)
+        # v * 10 이 11의 배수가 되는 최소 k 탐색
+        k = math.ceil(v * 10 / 11)  # v*10 >= 11k → k = ceil(v*10/11)
+        result = round(k * 11 / 10, 1)
+        return result
+
     elif v < 10000:
-        return int(math.ceil(v / 10) * 10)
+        # 10원 단위 올림 후 11의 배수
+        if not apply_vat_fit:
+            return int(math.ceil(v / 10) * 10)
+        k = math.ceil(v / 11)
+        result = k * 11
+        # 10원 단위가 아니면 다음 11의 배수로
+        while result % 10 != 0:
+            k += 1
+            result = k * 11
+        return result
+
     else:
-        return int(math.ceil(v / 100) * 100)
+        # 100원 단위 올림 후 110의 배수 (11의 배수이면서 100원 단위)
+        if not apply_vat_fit:
+            return int(math.ceil(v / 100) * 100)
+        k = math.ceil(v / 110)
+        return k * 110
 
 def recalc_prices_from_buy(old_prod: dict, new_buy: int) -> dict:
     """매입단가 변동 시 기존 비율 유지하며 전체 단가 재계산."""
@@ -393,8 +423,11 @@ def recalc_prices_from_buy(old_prod: dict, new_buy: int) -> dict:
             result[f] = new_buy
         elif old_val == 0:
             result[f] = 0
+        elif f == "price_supply_jp":
+            # 신정공급가는 부가세 역산 조건 제외, 단순 올림만
+            result[f] = smart_roundup(old_val * ratio, apply_vat_fit=False)
         else:
-            result[f] = smart_roundup(old_val * ratio)
+            result[f] = smart_roundup(old_val * ratio, apply_vat_fit=True)
     return result
 
 def sync_products_jp_to_sheet(kr_products: list, exchange_rate: float):
@@ -1820,13 +1853,14 @@ if mode == "관리자 모드" or mode == "管理者モード":
                             st.markdown("**📊 재계산 미리보기**")
                             preview_rows = []
                             for fk, label in KR_PRICE_LABELS.items():
-                                old_v = int(recalc_target.get(fk, 0) or 0)
-                                new_v = preview.get(fk, 0)
+                                old_v = float(recalc_target.get(fk, 0) or 0)
+                                new_v = float(preview.get(fk, 0))
                                 delta = new_v - old_v
-                                if delta > 0: arrow = f"▲ {abs(delta):,}"
-                                elif delta < 0: arrow = f"▽ {abs(delta):,}"
+                                fmt = lambda x: f"{x:,.1f}" if x < 1000 and x != int(x) else f"{int(x):,}"
+                                if delta > 0: arrow = f"▲ {fmt(abs(delta))}"
+                                elif delta < 0: arrow = f"▽ {fmt(abs(delta))}"
                                 else: arrow = "-"
-                                preview_rows.append({"항목": label, "기존": f"{old_v:,}", "변경후": f"{new_v:,}", "증감": arrow})
+                                preview_rows.append({"항목": label, "기존": fmt(old_v), "변경후": fmt(new_v), "증감": arrow})
                             st.dataframe(pd.DataFrame(preview_rows), hide_index=True, use_container_width=True)
 
                         st.warning(f"⚠️ [{recalc_target.get('code')}] {recalc_target.get('name')} 의 단가를 위와 같이 변경합니다.")

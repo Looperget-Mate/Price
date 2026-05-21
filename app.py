@@ -229,6 +229,31 @@ COL_MAP = {
 }
 REV_COL_MAP = {v: k for k, v in COL_MAP.items()}
 
+# ── [V11] 일본용 컬럼맵 및 카테고리 매핑 ──────────────────────────
+COL_MAP_JP = {
+    "순번": "seq_no",
+    "품목코드": "code",
+    "카테고리": "category",
+    "일본용 제품명": "name",
+    "규격": "spec",
+    "단위": "unit",
+    "1롤길이(m)": "len_per_unit",
+    "매입가(별도가,원)": "price_buy_krw",
+    "매입가(별도가,엔)": "price_buy",
+    "대리점가(별도가,엔)": "price_d1",
+    "소비자가(포함가,엔)": "price_cons",
+    "이미지데이터": "image"
+}
+REV_COL_MAP_JP = {v: k for k, v in COL_MAP_JP.items()}
+
+JP_CAT_MAP = {
+    "주배관": "メイン配管", "주배관세트": "メイン配管",
+    "가지관": "分岐配管",  "가지관세트": "分岐配管",
+    "부속": "付属",
+    "기타": "その他資材",  "기타자재": "その他資材",
+    "관급비용": "管給費用"
+}
+
 def init_db():
     if not gc: return None, None
     try: sh = gc.open(SHEET_NAME)
@@ -325,6 +350,143 @@ def save_products_to_sheet(products_list):
     df_up = df_up[cols_order]
     
     ws_prod.clear(); ws_prod.update([df_up.columns.values.tolist()] + df_up.values.tolist())
+
+# ── [V11] 핵심 엔진 함수 ─────────────────────────────────────────
+
+KR_PRICE_FIELDS = [
+    "price_buy", "price_d1", "price_d2",
+    "price_agy1", "price_agy2",
+    "price_nh_sys", "price_nh_loc",
+    "price_cons", "price_site", "price_supply_jp"
+]
+KR_PRICE_LABELS = {
+    "price_buy": "매입단가", "price_d1": "총판가1", "price_d2": "총판가2",
+    "price_agy1": "대리점가1", "price_agy2": "대리점가2",
+    "price_nh_sys": "계통농협", "price_nh_loc": "지역농협",
+    "price_cons": "소비자가", "price_site": "단가(현장)",
+    "price_supply_jp": "신정공급가"
+}
+
+def smart_roundup(value: float) -> int:
+    """가격 규모별 올림 단위: ~999 → 1원, 1000~9999 → 10원, 10000~ → 100원"""
+    v = float(value)
+    if v < 1000:
+        return int(math.ceil(v))
+    elif v < 10000:
+        return int(math.ceil(v / 10) * 10)
+    else:
+        return int(math.ceil(v / 100) * 100)
+
+def recalc_prices_from_buy(old_prod: dict, new_buy: int) -> dict:
+    """매입단가 변동 시 기존 비율 유지하며 전체 단가 재계산."""
+    old_buy = float(old_prod.get("price_buy", 0) or 0)
+    if old_buy == 0:
+        result = {f: int(old_prod.get(f, 0) or 0) for f in KR_PRICE_FIELDS}
+        result["price_buy"] = new_buy
+        return result
+    ratio = float(new_buy) / old_buy
+    result = {}
+    for f in KR_PRICE_FIELDS:
+        old_val = float(old_prod.get(f, 0) or 0)
+        if f == "price_buy":
+            result[f] = new_buy
+        elif old_val == 0:
+            result[f] = 0
+        else:
+            result[f] = smart_roundup(old_val * ratio)
+    return result
+
+def sync_products_jp_to_sheet(kr_products: list, exchange_rate: float):
+    """한국 Products → Products_JP 자동 동기화. 기존 JP 단가 비율 유지."""
+    if not gc:
+        return False, "구글 서비스 미연결"
+    try:
+        sh = gc.open(SHEET_NAME)
+        try:
+            ws_prod_jp = sh.worksheet("Products_JP")
+            jp_records = ws_prod_jp.get_all_records()
+        except:
+            ws_prod_jp = sh.add_worksheet(title="Products_JP", rows=300, cols=12)
+            jp_records = []
+
+        jp_dict = {str(r.get("품목코드", "")).zfill(5): r for r in jp_records if r.get("품목코드")}
+        rows = [list(COL_MAP_JP.keys())]
+        synced = 0
+        for i, p in enumerate(kr_products):
+            code = str(p.get("code", "")).strip().zfill(5)
+            if not code or code == "00000":
+                continue
+            kr_supply = float(p.get("price_supply_jp", 0) or 0)
+            buy_krw = int(round(kr_supply / 1.1)) if kr_supply else 0
+            buy_jpy = int(round(buy_krw / exchange_rate)) if (exchange_rate and buy_krw) else 0
+
+            jp_row = jp_dict.get(code, {})
+            old_buy_jpy = float(jp_row.get("매입가(별도가,엔)", 0) or 0)
+            old_d1      = float(jp_row.get("대리점가(별도가,엔)", 0) or 0)
+            old_cons    = float(jp_row.get("소비자가(포함가,엔)", 0) or 0)
+
+            if old_buy_jpy > 0 and buy_jpy > 0:
+                jp_ratio = buy_jpy / old_buy_jpy
+                new_d1   = smart_roundup(old_d1   * jp_ratio) if old_d1   > 0 else smart_roundup(buy_jpy * 1.3)
+                new_cons = smart_roundup(old_cons  * jp_ratio) if old_cons > 0 else smart_roundup(buy_jpy * 1.65)
+            else:
+                new_d1   = smart_roundup(buy_jpy * 1.3)
+                new_cons = smart_roundup(buy_jpy * 1.65)
+
+            cat_jp = JP_CAT_MAP.get(p.get("category", ""), p.get("category", ""))
+            rows.append([
+                f"{i+1:03d}", code, cat_jp,
+                jp_row.get("일본용 제품명", p.get("name", "")),
+                p.get("spec", ""), p.get("unit", "EA"), p.get("len_per_unit", ""),
+                buy_krw, buy_jpy, new_d1, new_cons, p.get("image", "")
+            ])
+            synced += 1
+
+        ws_prod_jp.clear()
+        ws_prod_jp.update(rows)
+        return True, f"Products_JP 동기화 완료 ({synced}개 품목, 환율 {exchange_rate})"
+    except Exception as e:
+        return False, str(e)
+
+def load_jp_merged_products(kr_products: list, exchange_rate: float) -> list:
+    """KR Products + Products_JP 병합 → JP 모드 제품 리스트 반환."""
+    if not gc:
+        return []
+    try:
+        sh = gc.open(SHEET_NAME)
+        ws_prod_jp = sh.worksheet("Products_JP")
+        jp_records = ws_prod_jp.get_all_records()
+    except:
+        jp_records = []
+    jp_dict = {str(r.get("품목코드", "")).zfill(5): r for r in jp_records if r.get("품목코드")}
+    merged = []
+    for p in kr_products:
+        code = str(p.get("code", "")).strip().zfill(5)
+        if not code or code == "00000":
+            continue
+        jp_row = jp_dict.get(code, {})
+        kr_supply = float(p.get("price_supply_jp", 0) or 0)
+        buy_krw = int(round(kr_supply / 1.1)) if kr_supply else 0
+        buy_jpy = int(round(buy_krw / exchange_rate)) if (exchange_rate and buy_krw) else 0
+        existing_d1   = int(jp_row.get("대리점가(별도가,엔)", 0) or 0)
+        existing_cons = int(jp_row.get("소비자가(포함가,엔)", 0) or 0)
+        merged.append({
+            "seq_no": p.get("seq_no", ""),
+            "code": code,
+            "category": JP_CAT_MAP.get(p.get("category", ""), p.get("category", "")),
+            "name": jp_row.get("일본용 제품명", p.get("name", "")),
+            "spec": p.get("spec", ""),
+            "unit": p.get("unit", "EA"),
+            "len_per_unit": p.get("len_per_unit", ""),
+            "price_buy_krw": buy_krw,
+            "price_buy": buy_jpy,
+            "price_d1":   existing_d1   if existing_d1   > 0 else smart_roundup(buy_jpy * 1.3),
+            "price_cons": existing_cons if existing_cons > 0 else smart_roundup(buy_jpy * 1.65),
+            "image": p.get("image", "")
+        })
+    return merged
+
+# ─────────────────────────────────────────────────────────────────
 
 # 구글 API 호출 최소화를 위해 init_db() 호출 없이 바로 업데이트 수행
 def save_sets_to_sheet(sets_dict):
@@ -1257,6 +1419,10 @@ if "final_edit_df" not in st.session_state: st.session_state.final_edit_df = Non
 if "step3_ready" not in st.session_state: st.session_state.step3_ready = False
 
 if "custom_prices" not in st.session_state: st.session_state.custom_prices = []
+# ── [V11] 통합 앱 신규 세션 변수 ──
+if "app_lang" not in st.session_state: st.session_state.app_lang = "KR"
+if "exchange_rate" not in st.session_state: st.session_state.exchange_rate = 10.0
+if "pending_jp_sync" not in st.session_state: st.session_state.pending_jp_sync = False
 
 if "files_ready" not in st.session_state: st.session_state.files_ready = False
 if "gen_pdf" not in st.session_state: st.session_state.gen_pdf = None
@@ -1275,7 +1441,18 @@ if "ui_state" not in st.session_state:
 if "quote_remarks" not in st.session_state: 
     st.session_state.quote_remarks = "1. 견적 유효기간: 견적일로부터 15일 이내\n2. 출고: 결재 완료 후 즉시 또는 7일 이내"
 
-st.title("💧 루퍼젯 프로 매니저 V10.0 (Cloud)")
+st.title("💧 루퍼젯 프로 매니저 V11.0 (Cloud)")
+
+# ── [V11] JP 모드 진입 시 jp_products 병합 로드 ──────────────────
+if st.session_state.app_lang == "JP":
+    if "jp_products_loaded" not in st.session_state or not st.session_state.get("jp_products_loaded"):
+        st.session_state.db["jp_products"] = load_jp_merged_products(
+            st.session_state.db["products"],
+            st.session_state.exchange_rate
+        )
+        st.session_state.jp_products_loaded = True
+else:
+    st.session_state.jp_products_loaded = False
 
 with st.sidebar:
     st.header("🗂️ 견적 보관함")
@@ -1358,6 +1535,39 @@ with st.sidebar:
         
     st.divider()
     
+    # ── [V11] KR / JP 언어 토글 ──────────────────────────────────
+    st.markdown("**🌐 앱 모드 선택**")
+    col_lang1, col_lang2 = st.columns(2)
+    with col_lang1:
+        kr_type = "primary" if st.session_state.app_lang == "KR" else "secondary"
+        if st.button("🇰🇷 한국용", use_container_width=True, type=kr_type, key="btn_lang_kr"):
+            st.session_state.app_lang = "KR"
+            st.session_state.jp_products_loaded = False
+            st.rerun()
+    with col_lang2:
+        jp_type = "primary" if st.session_state.app_lang == "JP" else "secondary"
+        if st.button("🇯🇵 일본용", use_container_width=True, type=jp_type, key="btn_lang_jp"):
+            st.session_state.app_lang = "JP"
+            st.session_state.jp_products_loaded = False
+            st.rerun()
+
+    if st.session_state.app_lang == "JP":
+        new_rate = st.number_input(
+            "환율 설정 (₩/¥)", value=st.session_state.exchange_rate,
+            step=0.1, min_value=1.0, max_value=50.0, key="sidebar_exchange_rate"
+        )
+        if new_rate != st.session_state.exchange_rate:
+            st.session_state.exchange_rate = new_rate
+            st.session_state.jp_products_loaded = False
+            st.rerun()
+
+    st.divider()
+
+    if st.session_state.app_lang == "KR":
+        mode = st.radio("모드", ["견적 작성", "관리자 모드", "🇯🇵 일본 수출 분석"], key="main_sidebar_mode")
+    else:
+        mode = st.radio("モード", ["見積作成", "管理者モード"], key="main_sidebar_mode")
+
     kr_quotes = st.session_state.db.get("kr_quotes", [])
     if kr_quotes:
         df_kr = pd.DataFrame(kr_quotes).iloc[::-1]
@@ -1443,9 +1653,8 @@ with st.sidebar:
         st.info("저장된 견적이 없습니다.")
         
     st.divider()
-    mode = st.radio("모드", ["견적 작성", "관리자 모드", "🇯🇵 일본 수출 분석"], key="main_sidebar_mode")
 
-if mode == "관리자 모드":
+if mode == "관리자 모드" or mode == "管理者モード":
     st.header("🛠 관리자 모드")
     if st.button("🔄 구글시트 데이터 새로고침"): st.session_state.db = load_data_from_sheet(); st.success("완료"); st.rerun()
     if not st.session_state.auth_admin:
@@ -1577,6 +1786,96 @@ if mode == "관리자 모드":
                             for p in st.session_state.db["products"]:
                                 if p["name"] == tp: p["image"] = fid
                             save_products_to_sheet(st.session_state.db["products"]); st.success("완료")
+
+            # ── [V11] 매입단가 변동 → 전체 단가 자동 재계산 ────────────
+            st.divider()
+            st.markdown("##### 💹 매입단가 변동 → 전체 단가 자동 재계산")
+            with st.expander("품목을 선택하여 매입단가 변경 시 다른 단가를 자동 재계산합니다.", expanded=False):
+                st.info("매입단가를 입력하면 기존 단가 구조(비율)를 유지하며 자동 재계산합니다.\n라운드업 규칙: ~999원→1원 단위 / 1천~9999원→10원 단위 / 1만원~→100원 단위")
+
+                products_for_recalc = st.session_state.db["products"]
+                recalc_target = st.selectbox(
+                    "재계산 대상 품목 선택",
+                    products_for_recalc,
+                    format_func=lambda p: f"[{p.get('code','?')}] {p.get('name','')} | 현재 매입가: {int(p.get('price_buy', 0) or 0):,}원",
+                    key="recalc_product_sel"
+                )
+
+                if recalc_target:
+                    old_buy = int(recalc_target.get("price_buy", 0) or 0)
+                    col_new_buy, col_preview = st.columns([1, 2])
+                    with col_new_buy:
+                        new_buy_input = st.number_input(
+                            "새 매입단가 (원)", min_value=0, value=old_buy, step=10, key="new_buy_input"
+                        )
+
+                    if new_buy_input > 0 and new_buy_input != old_buy:
+                        preview = recalc_prices_from_buy(recalc_target, new_buy_input)
+                        with col_preview:
+                            st.markdown("**📊 재계산 미리보기**")
+                            preview_rows = []
+                            for fk, label in KR_PRICE_LABELS.items():
+                                old_v = int(recalc_target.get(fk, 0) or 0)
+                                new_v = preview.get(fk, 0)
+                                delta = new_v - old_v
+                                if delta > 0: arrow = f"▲ {abs(delta):,}"
+                                elif delta < 0: arrow = f"▽ {abs(delta):,}"
+                                else: arrow = "-"
+                                preview_rows.append({"항목": label, "기존": f"{old_v:,}", "변경후": f"{new_v:,}", "증감": arrow})
+                            st.dataframe(pd.DataFrame(preview_rows), hide_index=True, use_container_width=True)
+
+                        st.warning(f"⚠️ [{recalc_target.get('code')}] {recalc_target.get('name')} 의 단가를 위와 같이 변경합니다.")
+                        col_ok, col_cancel = st.columns(2)
+                        with col_ok:
+                            if st.button("✅ 확인 — 단가 반영 및 저장", key="btn_recalc_confirm", type="primary"):
+                                target_code = str(recalc_target.get("code", "")).strip()
+                                updated_products = []
+                                for p in st.session_state.db["products"]:
+                                    if str(p.get("code", "")).strip() == target_code:
+                                        p.update(preview)
+                                    updated_products.append(p)
+                                save_products_to_sheet(updated_products)
+                                st.session_state.db["products"] = updated_products
+                                st.session_state.pending_jp_sync = True
+                                st.success("✅ 한국 단가 저장 완료!")
+                                st.rerun()
+                        with col_cancel:
+                            if st.button("❌ 취소", key="btn_recalc_cancel"):
+                                st.rerun()
+
+                # JP 동기화 확인 팝업
+                if st.session_state.get("pending_jp_sync"):
+                    st.divider()
+                    st.markdown("### 🇯🇵 일본 Products_JP 자동 동기화")
+                    st.info("한국 단가가 변경되었습니다. 일본 시트(Products_JP)도 환율 기준으로 자동 업데이트하시겠습니까?")
+                    rate_for_sync = st.number_input("적용 환율 (₩/¥)", value=st.session_state.get("exchange_rate", 10.0), step=0.1, key="sync_rate_popup")
+                    c_yes, c_no = st.columns(2)
+                    with c_yes:
+                        if st.button("🇯🇵 네, Products_JP 업데이트", type="primary", key="btn_jp_sync_yes"):
+                            with st.spinner("Products_JP 동기화 중..."):
+                                ok, msg = sync_products_jp_to_sheet(st.session_state.db["products"], rate_for_sync)
+                            st.session_state.pending_jp_sync = False
+                            st.session_state.jp_products_loaded = False
+                            if ok: st.success(f"✅ {msg}")
+                            else: st.error(f"동기화 실패: {msg}")
+                            st.rerun()
+                    with c_no:
+                        if st.button("나중에", key="btn_jp_sync_no"):
+                            st.session_state.pending_jp_sync = False
+                            st.rerun()
+
+            # ── [V11] 일본 Products_JP 일괄 동기화 ──────────────────────
+            st.divider()
+            st.markdown("##### 🇯🇵 일본 Products_JP 일괄 동기화")
+            with st.expander("한국 DB 전체를 기준으로 Products_JP를 재생성합니다.", expanded=False):
+                st.info("신정공급가 기준으로 엔화 매입가를 재산출하고, 기존 대리점가/소비자가 비율을 유지합니다.\n신규 품목은 매입가 × 1.3(대리점), × 1.65(소비자 포함가) 기본 배수 적용.")
+                rate_bulk = st.number_input("환율 설정 (₩/¥)", value=st.session_state.get("exchange_rate", 10.0), step=0.1, key="bulk_sync_rate")
+                if st.button("🔄 일본 시트 전체 동기화 실행", key="btn_bulk_jp_sync"):
+                    with st.spinner("Products_JP 동기화 중..."):
+                        ok, msg = sync_products_jp_to_sheet(st.session_state.db["products"], rate_bulk)
+                    st.session_state.jp_products_loaded = False
+                    if ok: st.success(f"✅ {msg}")
+                    else: st.error(f"실패: {msg}")
         with t2:
             st.subheader("세트 관리")
             ppt_data = get_admin_ppt_content()
@@ -1930,6 +2229,144 @@ elif mode == "🇯🇵 일본 수출 분석":
                     c2.download_button("📥 분석서 Excel 다운로드", excel_buf.getvalue(), f"Export_Analysis_{target_quote.get('현장명')}.xlsx", use_container_width=True)
 
 else:
+    # ── [V11] JP 모드 견적 작성 ──────────────────────────────────
+    if st.session_state.app_lang == "JP" and mode == "見積作成":
+        st.markdown(f"### 📝 現場名: **{st.session_state.current_quote_name if st.session_state.current_quote_name else '(タイトルなし)'}**")
+        jp_products = st.session_state.db.get("jp_products", [])
+        if not jp_products:
+            st.warning("⚠️ 일본용 제품 데이터가 없습니다. 먼저 관리자 모드에서 Products_JP를 동기화해주세요.")
+        else:
+            # JP 모드 STEP 1: 세트 선택 (KR과 동일 구조, 언어만 일본어)
+            if st.session_state.quote_step == 1:
+                st.subheader("STEP 1. 数量・情報入力")
+                with st.expander("👤 お客様情報", expanded=True):
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        new_q_name = st.text_input("現場名", value=st.session_state.current_quote_name)
+                        if new_q_name != st.session_state.current_quote_name: st.session_state.current_quote_name = new_q_name
+                        manager = st.text_input("担当者", value=st.session_state.buyer_info.get("manager",""))
+                    with c2:
+                        phone = st.text_input("電話番号", value=st.session_state.buyer_info.get("phone",""))
+                        addr = st.text_input("住所", value=st.session_state.buyer_info.get("addr",""))
+                    st.session_state.buyer_info.update({"manager": manager, "phone": phone, "addr": addr})
+                st.divider()
+                sets = st.session_state.db.get("sets", {})
+                with st.expander("セット選択", True):
+                    m_sets = sets.get("주배관세트", {})
+                    grouped = {"50mm":{}, "40mm":{}, "その他":{}, "未分類":{}}
+                    for k, v in m_sets.items():
+                        sc = v.get("sub_cat", "미분류") if isinstance(v, dict) else "미분류"
+                        sc_jp = {"50mm":"50mm","40mm":"40mm","기타":"その他","미분류":"未分類"}.get(sc, sc)
+                        if sc_jp not in grouped: grouped[sc_jp] = {}
+                        grouped[sc_jp][k] = v
+                    mt1, mt2, mt3, mt4 = st.tabs(["50mm", "40mm", "その他", "全体"])
+                    def render_inputs_jp(d, pf):
+                        cols = st.columns(4); res = {}
+                        for i, (n, v) in enumerate(d.items()):
+                            with cols[i%4]:
+                                img_name = v.get("image") if isinstance(v, dict) else None
+                                if img_name:
+                                    b64 = get_image_from_drive(img_name)
+                                    if b64: st.image(b64, use_container_width=True)
+                                    else: st.markdown("No Image")
+                                else: st.markdown("<div style='height:80px;background:#eee'></div>", unsafe_allow_html=True)
+                                res[n] = st.number_input(n, 0, key=f"{pf}_{n}_input")
+                        return res
+                    with mt1: inp_m_50 = render_inputs_jp(grouped.get("50mm",{}), "jp_m50")
+                    with mt2: inp_m_40 = render_inputs_jp(grouped.get("40mm",{}), "jp_m40")
+                    with mt3: inp_m_etc = render_inputs_jp(grouped.get("その他",{}), "jp_metc")
+                    with mt4: inp_m_all = render_inputs_jp(m_sets, "jp_mall")
+                    if st.button("➕ セットリストに追加"):
+                        all_inp = {}
+                        for d in [inp_m_50, inp_m_40, inp_m_etc, inp_m_all]:
+                            for k, v in d.items(): all_inp[k] = all_inp.get(k,0) + v
+                        added = sum(1 for k,v in all_inp.items() if v > 0 and not st.session_state.set_cart.append({"name":k,"qty":v,"type":"メイン管"}) for _ in [None] if v>0)
+                        st.rerun()
+                with st.expander("配管数量入力"):
+                    ptype = st.radio("配管区分", ["주배관","가지관"], horizontal=True, key="jp_pipe_radio",
+                                     format_func=lambda x: "メイン配管" if x=="주배관" else "分岐配管")
+                    filtered_pipes = [p for p in jp_products if p.get("category") in (["メイン配管"] if ptype=="주배관" else ["分岐配管"])]
+                    c1, c2, c3 = st.columns([3,2,1])
+                    with c1: sel_pipe = st.selectbox("配管選択", filtered_pipes, format_func=lambda p: f"[{p.get('code')}] {p.get('name')} ({p.get('spec','-')})", key="jp_pipe_sel")
+                    with c2: len_pipe = st.number_input("長さ(m)", min_value=1, step=1, key="jp_pipe_len")
+                    with c3:
+                        st.write(""); st.write("")
+                        if st.button("➕ 追加", key="jp_add_pipe"):
+                            if sel_pipe: st.session_state.pipe_cart.append({"type":ptype,"name":sel_pipe["name"],"spec":sel_pipe.get("spec",""),"code":sel_pipe.get("code",""),"len":len_pipe})
+                if st.session_state.pipe_cart:
+                    st.dataframe(pd.DataFrame(st.session_state.pipe_cart), hide_index=True, use_container_width=True)
+                    if st.button("🗑️ クリア", key="jp_clear_pipe"): st.session_state.pipe_cart = []; st.rerun()
+                st.divider()
+                if st.button("計算する (STEP 2)", type="primary"):
+                    if not st.session_state.current_quote_name: st.error("現場名を入力してください。")
+                    else:
+                        res = {}
+                        all_sets_db = {}
+                        for cat, val in st.session_state.db.get("sets",{}).items(): all_sets_db.update(val)
+                        for item in st.session_state.set_cart:
+                            recipe = all_sets_db.get(item["name"],{}).get("recipe",{})
+                            for pc, pq in recipe.items(): res[str(pc)] = res.get(str(pc),0) + pq*item["qty"]
+                        code_sums = {}
+                        for pi in st.session_state.pipe_cart:
+                            c = pi.get("code")
+                            if c: code_sums[c] = code_sums.get(c,0) + pi["len"]
+                        for pc, tl in code_sums.items():
+                            prod_info = next((p for p in jp_products if str(p.get("code",""))==str(pc)), None)
+                            if prod_info:
+                                ul = prod_info.get("len_per_unit",4) or 4
+                                res[str(pc)] = res.get(str(pc),0) + math.ceil(tl/ul)
+                        st.session_state.quote_items = res; st.session_state.quote_step = 2; st.rerun()
+
+            elif st.session_state.quote_step == 2:
+                st.subheader("STEP 2. 内容確認")
+                if st.button("⬅️ STEP 1に戻る"): st.session_state.quote_step = 1; st.rerun()
+                pdb_jp = {str(p.get("code","")).strip(): p for p in jp_products}
+                rows = []
+                for n, q in st.session_state.quote_items.items():
+                    inf = pdb_jp.get(str(n), {})
+                    if not inf: continue
+                    cpr = int(inf.get("price_cons", 0) or 0)
+                    rows.append({"品目": inf.get("name",n), "規格": inf.get("spec",""), "数量": q, "消費者価格(¥)": cpr, "合計(¥)": cpr*q})
+                if rows:
+                    df_jp = pd.DataFrame(rows)
+                    st.dataframe(df_jp, hide_index=True, use_container_width=True)
+                    st.metric("合計金額", f"¥{df_jp['合計(¥)'].sum():,}")
+                st.divider()
+                if st.button("最終確定 (STEP 3)", type="primary"):
+                    fdata = []
+                    for n, q in st.session_state.quote_items.items():
+                        inf = pdb_jp.get(str(n), {})
+                        if not inf: continue
+                        fdata.append({"品目": inf.get("name",n), "規格": inf.get("spec",""), "コード": inf.get("code",""), "単位": inf.get("unit","EA"), "数量": int(q), "price_1": int(inf.get("price_cons",0) or 0), "price_2": int(inf.get("price_d1",0) or 0), "image_data": inf.get("image","")})
+                    st.session_state.final_edit_df = pd.DataFrame(fdata)
+                    st.session_state.quote_step = 3; st.rerun()
+
+            elif st.session_state.quote_step == 3:
+                st.header("🏁 最終見積")
+                q_date = st.date_input("見積日", datetime.datetime.now())
+                if st.session_state.final_edit_df is not None:
+                    edited_jp = st.data_editor(st.session_state.final_edit_df[["品目","規格","コード","単位","数量","price_1"]], num_rows="dynamic", hide_index=True, column_config={"price_1": st.column_config.NumberColumn("消費者価格(¥)", format="%d")}, use_container_width=True, key="jp_final_editor")
+                    st.session_state.final_edit_df = edited_jp
+                    total_jpy = (edited_jp["数量"] * edited_jp["price_1"]).sum()
+                    st.metric("合計金額 (税込)", f"¥{int(total_jpy):,}")
+                    if st.button("💾 見積保存 (Quotes_JPシート)"):
+                        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        items_dict = {row["コード"] if row["コード"] else row["品目"]: row["数量"] for _, row in edited_jp.iterrows()}
+                        jdata = {"items": items_dict, "pipe_cart": st.session_state.pipe_cart, "set_cart": st.session_state.set_cart, "buyer": st.session_state.buyer_info}
+                        if save_quote_to_sheet(ts, st.session_state.current_quote_name, st.session_state.buyer_info.get("manager",""), int(total_jpy), json.dumps(jdata, ensure_ascii=False)):
+                            st.success("✅ Quotes_JPシートに保存しました。")
+                        else: st.error("保存失敗")
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("⬅️ STEP 2に戻る"): st.session_state.quote_step = 2; st.rerun()
+                with c2:
+                    if st.button("🔄 最初から"):
+                        st.session_state.quote_step = 1; st.session_state.quote_items = {}
+                        st.session_state.pipe_cart = []; st.session_state.set_cart = []
+                        st.session_state.current_quote_name = ""; st.rerun()
+        st.stop()
+
+    # ── KR 모드 견적 작성 (기존 코드) ────────────────────────────
     st.markdown(f"### 📝 현장명: **{st.session_state.current_quote_name if st.session_state.current_quote_name else '(제목 없음)'}**")
     if st.session_state.quote_step == 1:
         st.subheader("STEP 1. 물량 및 정보 입력")

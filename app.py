@@ -1847,7 +1847,8 @@ if mode == "관리자 모드" or mode == "管理者モード":
                             "새 매입단가 (원)", min_value=0, value=old_buy, step=10, key="new_buy_input"
                         )
 
-                    if new_buy_input > 0 and new_buy_input != old_buy:
+                    if new_buy_input > 0:
+                        # 매입가 변동 여부와 무관하게 항상 editor 표시
                         preview = recalc_prices_from_buy(recalc_target, new_buy_input)
                         with col_preview:
                             st.markdown("**📊 재계산 미리보기**")
@@ -1881,7 +1882,10 @@ if mode == "관리자 모드" or mode == "管理者モード":
                                 if fk in preview:
                                     preview[fk] = row["변경후"]
 
-                        st.warning(f"⚠️ [{recalc_target.get('code')}] {recalc_target.get('name')} 의 단가를 위와 같이 변경합니다.")
+                        if new_buy_input != old_buy:
+                            st.warning(f"⚠️ [{recalc_target.get('code')}] {recalc_target.get('name')} 의 단가를 위와 같이 변경합니다.")
+                        else:
+                            st.info(f"ℹ️ 매입가 동일 — 변경후 열을 직접 수정한 항목만 저장됩니다.")
                         col_ok, col_cancel = st.columns(2)
                         with col_ok:
                             if st.button("✅ 확인 — 단가 반영 및 저장", key="btn_recalc_confirm", type="primary"):

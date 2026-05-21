@@ -225,7 +225,8 @@ COL_MAP = {
     "계통농협": "price_nh_sys", "지역농협": "price_nh_loc", 
     "소비자가": "price_cons", "단가(현장)": "price_site", 
     "이미지데이터": "image",
-    "신정공급가": "price_supply_jp"
+    "신정공급가": "price_supply_jp",
+    "최근수정일": "last_updated"
 }
 REV_COL_MAP = {v: k for k, v in COL_MAP.items()}
 
@@ -1797,7 +1798,11 @@ if mode == "관리자 모드" or mode == "管理者モード":
                 recalc_target = st.selectbox(
                     "재계산 대상 품목 선택",
                     products_for_recalc,
-                    format_func=lambda p: f"[{p.get('code','?')}] {p.get('name','')} ({p.get('spec','-')}) | 현재 매입가: {int(p.get('price_buy', 0) or 0):,}원",
+                    format_func=lambda p: (
+                        f"[{p.get('code','?')}] {p.get('name','')} ({p.get('spec','-')}) "
+                        f"| 매입가: {int(p.get('price_buy', 0) or 0):,}원"
+                        + (f" | 🕒 {p.get('last_updated','')}" if p.get('last_updated') else "")
+                    ),
                     key="recalc_product_sel"
                 )
 
@@ -1829,10 +1834,12 @@ if mode == "관리자 모드" or mode == "管理者モード":
                         with col_ok:
                             if st.button("✅ 확인 — 단가 반영 및 저장", key="btn_recalc_confirm", type="primary"):
                                 target_code = str(recalc_target.get("code", "")).strip()
+                                today_str = datetime.datetime.now().strftime("%Y-%m-%d")
                                 updated_products = []
                                 for p in st.session_state.db["products"]:
                                     if str(p.get("code", "")).strip() == target_code:
                                         p.update(preview)
+                                        p["last_updated"] = today_str  # 수정일 기록
                                     updated_products.append(p)
                                 save_products_to_sheet(updated_products)
                                 st.session_state.db["products"] = updated_products

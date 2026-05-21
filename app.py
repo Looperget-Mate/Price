@@ -1797,7 +1797,7 @@ if mode == "관리자 모드" or mode == "管理者モード":
                 recalc_target = st.selectbox(
                     "재계산 대상 품목 선택",
                     products_for_recalc,
-                    format_func=lambda p: f"[{p.get('code','?')}] {p.get('name','')} | 현재 매입가: {int(p.get('price_buy', 0) or 0):,}원",
+                    format_func=lambda p: f"[{p.get('code','?')}] {p.get('name','')} ({p.get('spec','-')}) | 현재 매입가: {int(p.get('price_buy', 0) or 0):,}원",
                     key="recalc_product_sel"
                 )
 

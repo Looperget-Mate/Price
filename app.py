@@ -1856,12 +1856,30 @@ if mode == "관리자 모드" or mode == "管理者モード":
                                 old_v = float(recalc_target.get(fk, 0) or 0)
                                 new_v = float(preview.get(fk, 0))
                                 delta = new_v - old_v
-                                fmt = lambda x: f"{x:,.1f}" if x < 1000 and x != int(x) else f"{int(x):,}"
-                                if delta > 0: arrow = f"▲ {fmt(abs(delta))}"
-                                elif delta < 0: arrow = f"▽ {fmt(abs(delta))}"
-                                else: arrow = "-"
-                                preview_rows.append({"항목": label, "기존": fmt(old_v), "변경후": fmt(new_v), "증감": arrow})
-                            st.dataframe(pd.DataFrame(preview_rows), hide_index=True, use_container_width=True)
+                                fmt = lambda x: round(x, 1) if x < 1000 else int(x)
+                                preview_rows.append({
+                                    "_field": fk,
+                                    "항목": label,
+                                    "기존": fmt(old_v),
+                                    "변경후": fmt(new_v),
+                                })
+                            edited_preview = st.data_editor(
+                                pd.DataFrame(preview_rows),
+                                column_config={
+                                    "_field": None,  # 숨김
+                                    "항목": st.column_config.TextColumn("항목", disabled=True, width="small"),
+                                    "기존": st.column_config.NumberColumn("기존", disabled=True, format="%.1f", width="small"),
+                                    "변경후": st.column_config.NumberColumn("변경후 ✏️", format="%.1f", width="small"),
+                                },
+                                hide_index=True,
+                                use_container_width=True,
+                                key="preview_editor"
+                            )
+                            # 수정된 값으로 preview 덮어쓰기
+                            for _, row in edited_preview.iterrows():
+                                fk = row["_field"]
+                                if fk in preview:
+                                    preview[fk] = row["변경후"]
 
                         st.warning(f"⚠️ [{recalc_target.get('code')}] {recalc_target.get('name')} 의 단가를 위와 같이 변경합니다.")
                         col_ok, col_cancel = st.columns(2)

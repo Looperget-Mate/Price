@@ -562,9 +562,17 @@ class PDF(FPDF):
             header_font = 'NanumGothic'
             if os.path.exists(FONT_BOLD): self.add_font('NanumGothic', 'B', FONT_BOLD, uni=True); header_style = 'B'
             else: header_style = ''
+        # 제목 중앙 + 우측에 회사명
         self.set_font(header_font, header_style, 20)
-        self.cell(0, 15, self.title_text if hasattr(self, 'title_text') else 'Quotation', align='C', new_x="LMARGIN", new_y="NEXT")
-        self.set_font(header_font, '', 9)
+        title_txt = self.title_text if hasattr(self, 'title_text') else '견 적 서'
+        self.cell(130, 16, title_txt, align='C', border=0)
+        self.set_font(header_font, header_style, 11)
+        self.cell(60, 16, 'ShinJinChemTech', align='C', border=0, new_x="LMARGIN", new_y="NEXT")
+        # 구분선
+        self.set_draw_color(180, 180, 180)
+        self.line(self.l_margin, self.get_y(), self.l_margin + 190, self.get_y())
+        self.ln(2)
+        self.set_draw_color(0, 0, 0)
 
     def footer(self):
         self.set_y(-25) 
@@ -580,100 +588,198 @@ class PDF(FPDF):
         self.cell(0, 5, f'Page {self.page_no()}', align='C')
 
 def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, buyer_info, remarks):
+    """
+    견적서 PDF 생성 — 첨부 이미지 양식과 동일한 레이아웃
+    ┌─────────────────────────────────┐
+    │        견 적 서  [로고]          │  ← 헤더
+    ├──────────────┬──────────────────┤
+    │ 일련번호 등   │ 사업자번호 등     │  ← 2단 정보
+    ├──────────────┴──────────────────┤
+    │ [인사말]                         │
+    ├─────┬──────┬──┬──┬─────┬────┬──┤
+    │IMG  │품목정보│단위│수량│단가│금액│비고│  ← 품목 테이블
+    ├─────┴──────┴──┴──┴─────┴────┴──┤
+    │           자재비 합계             │
+    ├─────────────────────────────────┤
+    │  특약사항 및 비고                │
+    └─────────────────────────────────┘
+    """
     drive_file_map = get_drive_file_map()
     pdf = PDF()
-    pdf.title_text = '견 적 서 (Quotation)'
-    pdf.set_auto_page_break(False) 
+    pdf.title_text = '견 적 서'
+    pdf.set_auto_page_break(False)
     pdf.add_page()
-    
+
     has_font = os.path.exists(FONT_REGULAR)
     has_bold = os.path.exists(FONT_BOLD)
     font_name = 'NanumGothic' if has_font else 'Helvetica'
     b_style = 'B' if has_bold else ''
-    
-    pdf.set_font(font_name, '', 10)
-    pdf.set_fill_color(255, 255, 255)
-    pdf.cell(100, 8, f" 견적일 : {quote_date}", border=0)
-    pdf.cell(90, 8, f" 현장명 : {quote_name}", border=0, align='R', new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(2)
 
-    x_start = pdf.get_x(); half_w = 95; h_line = 6
-    pdf.set_fill_color(240, 240, 240)
-    pdf.set_font(font_name, b_style, 10)
-    pdf.cell(half_w, h_line, "  [공급받는 자]", border=1, fill=True)
-    pdf.cell(half_w, h_line, "  [공급자]", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font(font_name, '', 9)
-    
-    buy_lines = [f" 상호(현장): {quote_name}", f" 담당자: {buyer_info.get('manager', '')}", f" 연락처: {buyer_info.get('phone', '')}", f" 주소: {buyer_info.get('addr', '')}", ""]
-    sell_lines = [" 상호: 주식회사 신진켐텍", " 대표자: 박형석 (인)", " 주소: 경기도 이천시 부발읍 황무로 1859-157", " 전화: 031-638-1809 / 팩스: 031-635-1801", " 이메일: support@sjct.kr / 홈페이지: www.sjct.kr"]
-    for b, s in zip(buy_lines, sell_lines):
-        cur_y = pdf.get_y()
-        pdf.set_xy(x_start, cur_y); pdf.cell(half_w, h_line, " " + b, border=1)
-        pdf.set_xy(x_start + half_w, cur_y); pdf.cell(half_w, h_line, " " + s, border=1)
-        pdf.ln(h_line)
-    pdf.ln(5)
+    # ── 페이지 여백 기준 ──
+    L = pdf.l_margin  # 좌여백(기본 10mm)
+    PAGE_W = 190      # 유효 폭 (A4 210 - 여백 10*2)
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # [1] 2단 정보 테이블 (좌: 수신정보 | 우: 공급자정보)
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    LEFT_W  = 95   # 좌측 폭 (수신 정보)
+    RIGHT_W = 95   # 우측 폭 (공급자 정보)
+    LBL_W   = 22   # 레이블 셀 폭
+    VAL_W   = LEFT_W - LBL_W  # 값 셀 폭
+    H_ROW   = 6.5  # 행 높이
+
+    # 좌측 데이터 (수신 측 + 인사말)
+    serial    = buyer_info.get('serial', '')
+    recipient = buyer_info.get('recipient', '')
+    ref       = buyer_info.get('ref', '')
+    tel_buyer = buyer_info.get('phone', '')
+    pay_cond  = buyer_info.get('pay_cond', '/')
+    valid_period = buyer_info.get('valid_period', '견적 후 15일 이내')
+
+    left_rows = [
+        ("일련번호", serial if serial else quote_date.replace('-', '/') if quote_date else '/'),
+        ("수  신", recipient or '/'),
+        ("참  조", ref or '/'),
+        ("TEL / FAX", tel_buyer or '/'),
+        ("결재조건", pay_cond),
+        ("유효기간", valid_period),
+    ]
+
+    # 우측 데이터 (공급자)
+    RVAL_W = RIGHT_W - LBL_W
+    right_rows = [
+        ("사업자등록번호", "411-81-91898"),
+        ("회사명/대표", "주식회사 신진켐텍 / 박형석"),
+        ("주  소", "경기도 이천시 부발읍 황무로 1859-157"),
+        ("업태/종목", "제조,도소매/산업용 밸브, 파이프 및 부속품 제조업"),
+        ("담당자", buyer_info.get('manager', '문창근 부장')),
+        ("TEL/FAX", "031-638-1809 / 031-635-1801"),
+    ]
+
+    y_info = pdf.get_y()
+
+    for i, ((lbl, val), (rlbl, rval)) in enumerate(zip(left_rows, right_rows)):
+        cy = y_info + i * H_ROW
+
+        # 좌측 레이블 (회색 배경)
+        pdf.set_xy(L, cy)
+        pdf.set_fill_color(240, 240, 240)
+        pdf.set_font(font_name, b_style, 8)
+        pdf.cell(LBL_W, H_ROW, f" {lbl}", border=1, fill=True)
+        # 좌측 값
+        pdf.set_font(font_name, '', 8)
+        pdf.cell(VAL_W, H_ROW, f" {val}", border=1)
+
+        # 우측 레이블 (회색 배경)
+        pdf.set_xy(L + LEFT_W, cy)
+        pdf.set_fill_color(240, 240, 240)
+        pdf.set_font(font_name, b_style, 7)
+        pdf.cell(LBL_W, H_ROW, f" {rlbl}", border=1, fill=True)
+        # 우측 값
+        pdf.set_font(font_name, '', 7)
+        pdf.cell(RVAL_W, H_ROW, f" {rval}", border=1)
+
+    pdf.set_y(y_info + len(left_rows) * H_ROW)
+
+    # ── 인사말 셀 (좌측 전체 폭, 2줄) ──
+    greeting = (
+        "1.귀사의 일의 번창을 기원합니다.\n"
+        "2.하기와 같이 견적드리오니 검토하기 바랍니다."
+    )
+    pdf.set_xy(L, pdf.get_y())
+    pdf.set_font(font_name, '', 7.5)
+    pdf.set_fill_color(255, 255, 255)
+    pdf.multi_cell(LEFT_W, 4.5, greeting, border=1)
+
+    pdf.ln(3)
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # [2] 품목 테이블
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 컬럼 폭 (합계 = PAGE_W = 190)
+    # 이미지 양식: 이미지(25) | 품목정보(65) | 단위(12) | 수량(13) | 단가(30) | 금액(30) | 비고(15)
+    # basic 총 = 190, profit 모드는 단가/금액 열 분할
+    if form_type == "basic":
+        COL_IMG  = 25
+        COL_INFO = 63
+        COL_UNIT = 13
+        COL_QTY  = 13
+        COL_P1   = 29
+        COL_AMT  = 32
+        COL_RMK  = 15
+    else:
+        COL_IMG  = 25
+        COL_INFO = 55
+        COL_UNIT = 10
+        COL_QTY  = 10
+        COL_P1   = 18
+        COL_AMT1 = 22
+        COL_P2   = 18
+        COL_AMT2 = 22
+        COL_PROF = 10
+        # 합 = 190
 
     def draw_table_header():
         pdf.set_fill_color(240, 240, 240)
-        pdf.set_font(font_name, b_style, 10)
-        h_height = 10
-        pdf.cell(15, h_height, "IMG", border=1, align='C', fill=True)
-        pdf.cell(45, h_height, "품목정보 (명/규격/코드)", border=1, align='C', fill=True) 
-        pdf.cell(10, h_height, "단위", border=1, align='C', fill=True)
-        pdf.cell(12, h_height, "수량", border=1, align='C', fill=True)
-
+        pdf.set_font(font_name, b_style, 8.5)
+        H_HDR = 9
+        pdf.cell(COL_IMG,  H_HDR, "이미지",              border=1, align='C', fill=True)
+        pdf.cell(COL_INFO, H_HDR, "품목정보",             border=1, align='C', fill=True)
+        pdf.cell(COL_UNIT, H_HDR, "단위",                border=1, align='C', fill=True)
+        pdf.cell(COL_QTY,  H_HDR, "수량",                border=1, align='C', fill=True)
         if form_type == "basic":
-            pdf.cell(35, h_height, f"{price_labels[0]}", border=1, align='C', fill=True)
-            pdf.cell(35, h_height, "금액", border=1, align='C', fill=True)
-            pdf.cell(38, h_height, "비고", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(COL_P1,  H_HDR, price_labels[0] if price_labels else "소비자가", border=1, align='C', fill=True)
+            pdf.cell(COL_AMT, H_HDR, "금액",              border=1, align='C', fill=True)
+            pdf.cell(COL_RMK, H_HDR, "비고",              border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
         else:
-            l1, l2 = price_labels[0], price_labels[1]
-            pdf.set_font(font_name, '', 8)
-            pdf.cell(18, h_height, f"{l1}", border=1, align='C', fill=True)
-            pdf.cell(22, h_height, "금액", border=1, align='C', fill=True)
-            pdf.cell(18, h_height, f"{l2}", border=1, align='C', fill=True)
-            pdf.cell(22, h_height, "금액", border=1, align='C', fill=True)
-            pdf.cell(15, h_height, "이익", border=1, align='C', fill=True)
-            pdf.cell(13, h_height, "율(%)", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
-            pdf.set_font(font_name, '', 9)
+            l1 = price_labels[0] if price_labels else "단가1"
+            l2 = price_labels[1] if len(price_labels) > 1 else "단가2"
+            pdf.set_font(font_name, b_style, 7)
+            pdf.cell(COL_P1,   H_HDR, l1,   border=1, align='C', fill=True)
+            pdf.cell(COL_AMT1, H_HDR, "금액", border=1, align='C', fill=True)
+            pdf.cell(COL_P2,   H_HDR, l2,   border=1, align='C', fill=True)
+            pdf.cell(COL_AMT2, H_HDR, "금액", border=1, align='C', fill=True)
+            pdf.cell(COL_PROF, H_HDR, "이익율", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
 
     draw_table_header()
 
     sum_qty = 0; sum_a1 = 0; sum_a2 = 0; sum_profit = 0
+    ITEM_H = 17  # 품목 행 높이 (이미지 양식과 동일하게 충분한 높이)
 
     for item in final_data_list:
-        h = 15
-        
-        if pdf.get_y() > 260:
+        if pdf.get_y() + ITEM_H > 265:
             pdf.add_page()
-            draw_table_header() 
+            draw_table_header()
 
         x, y = pdf.get_x(), pdf.get_y()
         name = str(item.get("품목", "") or "")
         spec = str(item.get("규격", "-") or "-")
-        code = str(item.get("코드", "") or "").strip().zfill(5) 
-        
+        code = str(item.get("코드", "") or "").strip().zfill(5)
+
         try: qty = int(float(item.get("수량", 0)))
         except: qty = 0
-        
+
         img_id = get_best_image_id(code, item.get("image_data"), drive_file_map)
         img_b64 = download_image_by_id(img_id)
-        
+
         sum_qty += qty
         try: p1 = int(float(item.get("price_1", 0)))
         except: p1 = 0
         a1 = p1 * qty
         sum_a1 += a1
-        
+
         p2 = 0; a2 = 0; profit = 0; rate = 0
         if form_type == "profit":
             try: p2 = int(float(item.get("price_2", 0)))
             except: p2 = 0
             a2 = p2 * qty
-            sum_a2 += a2; profit = a2 - a1; sum_profit += profit
+            sum_a2 += a2
+            profit = a2 - a1
+            sum_profit += profit
             rate = (profit / a2 * 100) if a2 else 0
 
-        pdf.cell(15, h, "", border=1)
+        # ── 이미지 셀 ──
+        pdf.cell(COL_IMG, ITEM_H, "", border=1)
         if img_b64:
             try:
                 img_data_str = img_b64.split(",", 1)[1] if "," in img_b64 else img_b64
@@ -681,247 +787,343 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(img_bytes)
                     tmp_path = tmp.name
-                pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
+                # 이미지 셀 내 중앙 배치 (최대 13×13mm)
+                img_sz = min(COL_IMG - 4, ITEM_H - 4, 13)
+                pdf.image(tmp_path, x=x + (COL_IMG - img_sz) / 2,
+                          y=y + (ITEM_H - img_sz) / 2, w=img_sz, h=img_sz)
+                if os.path.exists(tmp_path): os.unlink(tmp_path)
             except: pass
 
-        pdf.set_xy(x+15, y); pdf.cell(45, h, "", border=1) 
-        pdf.set_xy(x+15, y+1.5); pdf.set_font(font_name, '', 8); pdf.multi_cell(45, 4, name, align='L')
-        pdf.set_xy(x+15, y+6.0); pdf.set_font(font_name, '', 7); pdf.cell(45, 3, f"{spec}", align='L') 
-        pdf.set_xy(x+15, y+10.0); pdf.set_font(font_name, '', 7); pdf.cell(45, 3, f"{code}", align='L') 
+        # ── 품목정보 셀 (품목명 / 규격 / 코드) ──
+        pdf.set_xy(x + COL_IMG, y)
+        pdf.cell(COL_INFO, ITEM_H, "", border=1)
+        # 품목명 — 굵게, 줄바꿈 허용
+        pdf.set_xy(x + COL_IMG + 1, y + 1)
+        pdf.set_font(font_name, b_style, 7.5)
+        # multi_cell 이후 위치 보정이 필요하므로 수동 처리
+        max_name_h = ITEM_H - 7
+        pdf.multi_cell(COL_INFO - 2, 3.8, name, align='L', max_line_height=3.8)
+        # 규격
+        pdf.set_xy(x + COL_IMG + 1, y + ITEM_H - 6)
+        pdf.set_font(font_name, '', 6.5)
+        pdf.cell(COL_INFO - 2, 3, spec, align='L')
+        # 코드
+        pdf.set_xy(x + COL_IMG + 1, y + ITEM_H - 3.5)
+        pdf.set_font(font_name, '', 6.5)
+        pdf.cell(COL_INFO - 2, 3, code, align='L')
 
-        pdf.set_xy(x+60, y); pdf.set_font(font_name, '', 9) 
-        pdf.cell(10, h, str(item.get("단위", "EA") or "EA"), border=1, align='C')
-        pdf.cell(12, h, str(qty), border=1, align='C')
+        # ── 단위 / 수량 ──
+        pdf.set_xy(x + COL_IMG + COL_INFO, y)
+        pdf.set_font(font_name, '', 8)
+        pdf.cell(COL_UNIT, ITEM_H, str(item.get("단위", "EA") or "EA"), border=1, align='C')
+        pdf.cell(COL_QTY,  ITEM_H, str(qty), border=1, align='C')
 
+        # ── 단가 / 금액 ──
         if form_type == "basic":
-            pdf.cell(35, h, f"{p1:,}", border=1, align='R')
-            pdf.cell(35, h, f"{a1:,}", border=1, align='R')
-            pdf.cell(38, h, "", border=1, align='C'); pdf.ln()
+            pdf.cell(COL_P1,  ITEM_H, f"{p1:,}", border=1, align='R')
+            pdf.cell(COL_AMT, ITEM_H, f"{a1:,}", border=1, align='R')
+            pdf.cell(COL_RMK, ITEM_H, "", border=1)
+            pdf.ln()
         else:
-            pdf.set_font(font_name, '', 8)
-            pdf.cell(18, h, f"{p1:,}", border=1, align='R')
-            pdf.cell(22, h, f"{a1:,}", border=1, align='R')
-            pdf.cell(18, h, f"{p2:,}", border=1, align='R')
-            pdf.cell(22, h, f"{a2:,}", border=1, align='R')
-            pdf.set_font(font_name, b_style, 8)
-            pdf.cell(15, h, f"{profit:,}", border=1, align='R')
-            pdf.cell(13, h, f"{rate:.1f}%", border=1, align='C')
-            pdf.set_font(font_name, '', 9); pdf.ln()
+            pdf.set_font(font_name, '', 7.5)
+            pdf.cell(COL_P1,   ITEM_H, f"{p1:,}", border=1, align='R')
+            pdf.cell(COL_AMT1, ITEM_H, f"{a1:,}", border=1, align='R')
+            pdf.cell(COL_P2,   ITEM_H, f"{p2:,}", border=1, align='R')
+            pdf.cell(COL_AMT2, ITEM_H, f"{a2:,}", border=1, align='R')
+            pdf.set_font(font_name, b_style, 7)
+            pdf.cell(COL_PROF, ITEM_H, f"{rate:.1f}%", border=1, align='C')
+            pdf.ln()
 
-    if pdf.get_y() + 10 > 260:
-        pdf.add_page()
-        draw_table_header()
-
-    pdf.set_fill_color(230, 230, 230); pdf.set_font(font_name, b_style, 9)
-    pdf.cell(15+45+10, 10, "소 계 (Sub Total)", border=1, align='C', fill=True)
-    pdf.cell(12, 10, f"{sum_qty:,}", border=1, align='C', fill=True)
-    
-    if form_type == "basic":
-        pdf.cell(35, 10, "", border=1, fill=True)
-        pdf.cell(35, 10, f"{sum_a1:,}", border=1, align='R', fill=True)
-        pdf.cell(38, 10, "", border=1, fill=True); pdf.ln()
-    else:
-        avg_rate = (sum_profit / sum_a2 * 100) if sum_a2 else 0
-        pdf.set_font(font_name, b_style, 8)
-        pdf.cell(18, 10, "", border=1, fill=True); pdf.cell(22, 10, f"{sum_a1:,}", border=1, align='R', fill=True)
-        pdf.cell(18, 10, "", border=1, fill=True); pdf.cell(22, 10, f"{sum_a2:,}", border=1, align='R', fill=True)
-        pdf.cell(15, 10, f"{sum_profit:,}", border=1, align='R', fill=True)
-        pdf.cell(13, 10, f"{avg_rate:.1f}%", border=1, align='C', fill=True); pdf.ln()
-
+    # ── 서비스 비용 ──
     svc_total = 0
     if service_items:
-        if pdf.get_y() + (len(service_items) * 6) + 10 > 260:
-             pdf.add_page()
-             pdf.ln(2)
+        if pdf.get_y() + (len(service_items) * 6) + 10 > 265:
+            pdf.add_page()
+            pdf.ln(2)
         else:
-             pdf.ln(2)
-             
+            pdf.ln(1)
         pdf.set_fill_color(255, 255, 224)
-        pdf.cell(190, 6, " [ 추가 비용 ] ", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font(font_name, b_style, 8)
+        pdf.cell(PAGE_W, 6, " [ 추가 비용 ]", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
         for s in service_items:
-            svc_total += s['금액']; pdf.cell(155, 6, s['항목'], border=1)
+            svc_total += s['금액']
+            pdf.set_font(font_name, '', 8)
+            pdf.cell(PAGE_W - 35, 6, f"  {s['항목']}", border=1)
             pdf.cell(35, 6, f"{s['금액']:,} 원", border=1, align='R', new_x="LMARGIN", new_y="NEXT")
 
-    pdf.ln(5); pdf.set_font(font_name, b_style, 12)
-    
-    if pdf.get_y() + 30 > 270:
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # [3] 자재비 합계 행 (이미지 양식과 동일: "자재비 합계" 좌측 병합, 금액 우측)
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    if pdf.get_y() + 10 > 265:
         pdf.add_page()
-    
-    pdf.multi_cell(0, 5, remarks, align='R')
-    pdf.ln(2)
+
+    final_total = (sum_a1 if form_type == "basic" else sum_a2) + svc_total
+    TOTAL_H = 10
+
+    pdf.set_fill_color(230, 230, 230)
+    pdf.set_font(font_name, b_style, 9)
 
     if form_type == "basic":
-        final_total = sum_a1 + svc_total
-        pdf.cell(120, 10, "", border=0); pdf.cell(35, 10, "총 합계", border=1, align='C', fill=True)
-        pdf.cell(35, 10, f"{final_total:,} 원", border=1, align='R')
+        label_w = COL_IMG + COL_INFO + COL_UNIT + COL_QTY + COL_P1
+        pdf.cell(label_w, TOTAL_H, "자재비 합계", border=1, align='C', fill=True)
+        pdf.cell(COL_AMT, TOTAL_H, f"{final_total:,}", border=1, align='R', fill=True)
+        pdf.cell(COL_RMK, TOTAL_H, "", border=1, fill=True)
+        pdf.ln()
     else:
-        t1_final = sum_a1 + svc_total; t2_final = sum_a2 + svc_total; total_profit = t2_final - t1_final
-        pdf.set_font(font_name, '', 10)
-        pdf.cell(82, 10, "총 합계 (VAT 포함)", border=1, align='C', fill=True)
-        pdf.cell(40, 10, f"{t1_final:,}", border=1, align='R')
-        pdf.set_font(font_name, b_style, 10)
-        pdf.cell(40, 10, f"{t2_final:,}", border=1, align='R')
-        pdf.cell(28, 10, f"({total_profit:,})", border=1, align='R')
-        
+        label_w = COL_IMG + COL_INFO + COL_UNIT + COL_QTY + COL_P1 + COL_AMT1 + COL_P2
+        pdf.cell(label_w, TOTAL_H, "자재비 합계", border=1, align='C', fill=True)
+        pdf.cell(COL_AMT2, TOTAL_H, f"{final_total:,}", border=1, align='R', fill=True)
+        pdf.cell(COL_PROF, TOTAL_H, "", border=1, fill=True)
+        pdf.ln()
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # [4] 특약사항 및 비고 박스
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    if remarks:
+        pdf.ln(2)
+        if pdf.get_y() + 20 > 270:
+            pdf.add_page()
+
+        pdf.set_fill_color(240, 240, 240)
+        pdf.set_font(font_name, b_style, 8.5)
+        pdf.cell(PAGE_W, 7, "  특약사항 및 비고", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font(font_name, '', 8)
+        pdf.set_fill_color(255, 255, 255)
+        pdf.multi_cell(PAGE_W, 5.5, remarks, border=1)
+
     return bytes(pdf.output())
 
 def create_quote_excel(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, buyer_info, remarks):
+    """
+    견적서 Excel 생성 — 첨부 이미지 양식과 동일한 레이아웃
+    행 구조:
+      row 0      : 제목 "견 적 서" (전체 병합)
+      row 1~6    : 좌측 수신정보 | 우측 공급자정보 (각 6행)
+      row 7      : 인사말 (좌측 병합)
+      row 8      : 품목 테이블 헤더
+      row 9~     : 품목 데이터
+      마지막-2   : 자재비 합계
+      마지막-1   : 특약사항 헤더
+      마지막     : 특약사항 내용
+    """
     output = io.BytesIO()
     workbook = xlsxwriter.Workbook(output, {'in_memory': True})
     ws = workbook.add_worksheet("견적서")
-    
     drive_file_map = get_drive_file_map()
 
-    # Formats
-    fmt_title = workbook.add_format({'bold': True, 'font_size': 16, 'align': 'center', 'valign': 'vcenter'})
-    fmt_header = workbook.add_format({'bold': True, 'bg_color': '#f0f0f0', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
-    fmt_text_wrap = workbook.add_format({'border': 1, 'valign': 'vcenter', 'text_wrap': True}) 
-    fmt_text = workbook.add_format({'border': 1, 'valign': 'vcenter'})
-    fmt_num = workbook.add_format({'border': 1, 'num_format': '#,##0', 'valign': 'vcenter'})
-    fmt_center = workbook.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'})
+    # ── 포맷 정의 ──
+    def fmt(**kw):
+        base = {'font_name': '맑은 고딕', 'font_size': 9, 'valign': 'vcenter', 'border': 1}
+        base.update(kw)
+        return workbook.add_format(base)
 
-    ws.merge_range('A1:F1', '견 적 서', fmt_title)
-    ws.write(1, 0, f"현장명: {quote_name}")
-    ws.write(1, 4, f"견적일: {quote_date}")
-    ws.write(2, 0, f"담당자: {buyer_info.get('manager', '')}")
-    ws.write(2, 4, f"연락처: {buyer_info.get('phone', '')}")
+    f_title   = fmt(bold=True, font_size=18, align='center', border=0)
+    f_lbl     = fmt(bold=True, bg_color='#F0F0F0', align='center', text_wrap=True, font_size=8)
+    f_val     = fmt(align='left',  text_wrap=True, font_size=8)
+    f_val_r   = fmt(align='right', text_wrap=True, font_size=8)
+    f_hdr     = fmt(bold=True, bg_color='#F0F0F0', align='center', text_wrap=True)
+    f_name    = fmt(bold=True, align='left', text_wrap=True, font_size=8)
+    f_spec    = fmt(align='left', text_wrap=True, font_size=7, font_color='#555555')
+    f_center  = fmt(align='center')
+    f_num     = fmt(align='right',  num_format='#,##0')
+    f_total   = fmt(bold=True, bg_color='#E6E6E6', align='center', num_format='#,##0')
+    f_total_v = fmt(bold=True, bg_color='#E6E6E6', align='right',  num_format='#,##0')
+    f_rmk_hdr = fmt(bold=True, bg_color='#F0F0F0', align='left', font_size=9)
+    f_rmk_val = fmt(align='left', text_wrap=True, font_size=8)
+    f_img_cell= fmt(align='center')
+    f_greet   = fmt(align='left', text_wrap=True, font_size=8, border=1)
 
-    headers = ["이미지", "품목정보", "단위", "수량"]
+    # ── 컬럼 인덱스 & 폭 (단위: 엑셀 문자 폭)
+    # basic 모드: A(이미지) B(품목정보) C(단위) D(수량) E(단가) F(금액) G(비고)
+    # profit 모드: A B C D E F(금액1) G(단가2) H(금액2) I(이익율)
     if form_type == "basic":
-        headers.extend([price_labels[0], "금액", "비고"])
+        NUM_COLS = 7
+        # 컬럼 폭
+        col_widths = [14, 30, 6, 6, 14, 14, 8]
+        COL_IMG, COL_INFO, COL_UNIT, COL_QTY, COL_P1, COL_AMT, COL_RMK = range(7)
+        LAST_COL = 6
     else:
-        headers.extend([price_labels[0], "금액(1)", price_labels[1], "금액(2)", "이익", "율(%)"])
+        NUM_COLS = 9
+        col_widths = [14, 28, 6, 6, 12, 14, 12, 14, 10]
+        COL_IMG, COL_INFO, COL_UNIT, COL_QTY, COL_P1, COL_AMT1, COL_P2, COL_AMT2, COL_PROF = range(9)
+        LAST_COL = 8
 
-    for col, h in enumerate(headers):
-        ws.write(4, col, h, fmt_header)
+    for ci, cw in enumerate(col_widths):
+        ws.set_column(ci, ci, cw)
 
-    ws.set_column(0, 0, 15)
-    ws.set_column(1, 1, 40)
-    ws.set_column(2, 2, 8)
-    ws.set_column(3, 3, 8)
+    # ── ROW 0: 제목 ──
+    ws.merge_range(0, 0, 0, LAST_COL, '견 적 서', f_title)
+    ws.set_row(0, 30)
 
-    row = 5
-    total_a1 = 0
-    total_a2 = 0
-    total_profit = 0
-    
-    temp_files = [] 
-    ROW_HEIGHT_PT = 80
+    # ── ROW 1~6: 정보 2단 테이블 ──
+    # 좌측: 컬럼 0(레이블), 1(값)   /   우측: 컬럼 4(레이블), 5(값) — 컬럼 2,3은 좌측 값에 병합
+    serial    = buyer_info.get('serial', quote_date or '')
+    recipient = buyer_info.get('recipient', '')
+    ref       = buyer_info.get('ref', '')
+    tel_buyer = buyer_info.get('phone', '/')
+    pay_cond  = buyer_info.get('pay_cond', '/')
+    valid_per = buyer_info.get('valid_period', '견적 후 15일 이내')
+    manager   = buyer_info.get('manager', '문창근 부장')
+
+    left_rows  = [("일련번호", serial), ("수  신", recipient or '/'), ("참  조", ref or '/'),
+                  ("TEL / FAX", tel_buyer), ("결재조건", pay_cond), ("유효기간", valid_per)]
+    right_rows = [("사업자등록번호", "411-81-91898"),
+                  ("회사명/대표", "주식회사 신진켐텍 / 박형석"),
+                  ("주  소", "경기도 이천시 부발읍 황무로 1859-157"),
+                  ("업태/종목", "제조,도소매/산업용 밸브, 파이프 및 부속품 제조업"),
+                  ("담당자", manager),
+                  ("TEL/FAX", "031-638-1809 / 031-635-1801")]
+
+    # 좌측 값 열: 0,1,2 / 우측: 3,4 + 나머지
+    L_LBL = 0; L_VAL_S = 1; L_VAL_E = 2   # 좌 레이블·값 범위
+    R_LBL = 3; R_VAL_S = 4; R_VAL_E = LAST_COL  # 우 레이블·값 범위
+
+    for i, ((ll, lv), (rl, rv)) in enumerate(zip(left_rows, right_rows)):
+        r = i + 1
+        ws.set_row(r, 14)
+        ws.write(r, L_LBL, ll, f_lbl)
+        ws.merge_range(r, L_VAL_S, r, L_VAL_E, lv, f_val)
+        ws.write(r, R_LBL, rl, f_lbl)
+        ws.merge_range(r, R_VAL_S, r, R_VAL_E, rv, f_val)
+
+    # ── ROW 7: 인사말 ──
+    greeting = "1.귀사의 일의 번창을 기원합니다.\n2.하기와 같이 견적드리오니 검토하기 바랍니다."
+    ws.merge_range(7, 0, 7, LAST_COL, greeting, f_greet)
+    ws.set_row(7, 28)
+
+    # ── ROW 8: 테이블 헤더 ──
+    ws.set_row(8, 18)
+    ws.write(8, COL_IMG,  "이미지", f_hdr)
+    ws.write(8, COL_INFO, "품목정보", f_hdr)
+    ws.write(8, COL_UNIT, "단위", f_hdr)
+    ws.write(8, COL_QTY,  "수량", f_hdr)
+    if form_type == "basic":
+        ws.write(8, COL_P1,  price_labels[0] if price_labels else "소비자가", f_hdr)
+        ws.write(8, COL_AMT, "금액", f_hdr)
+        ws.write(8, COL_RMK, "비고", f_hdr)
+    else:
+        l1 = price_labels[0] if price_labels else "단가1"
+        l2 = price_labels[1] if len(price_labels) > 1 else "단가2"
+        ws.write(8, COL_P1,   l1,     f_hdr)
+        ws.write(8, COL_AMT1, "금액",  f_hdr)
+        ws.write(8, COL_P2,   l2,     f_hdr)
+        ws.write(8, COL_AMT2, "금액",  f_hdr)
+        ws.write(8, COL_PROF, "이익율", f_hdr)
+
+    # ── 품목 데이터 ──
+    ROW_H_PT = 60   # 이미지 여유 있게
+    data_row  = 9
+    total_a1  = 0; total_a2 = 0; total_profit = 0; svc_total = 0
+    temp_files = []
 
     for item in final_data_list:
-        ws.set_row(row, ROW_HEIGHT_PT)
-        
+        ws.set_row(data_row, ROW_H_PT)
+
         try: qty = int(float(item.get("수량", 0)))
         except: qty = 0
-        try: p1 = int(float(item.get("price_1", 0)))
+        try: p1  = int(float(item.get("price_1", 0)))
         except: p1 = 0
         a1 = p1 * qty
         total_a1 += a1
-        
+
         code = str(item.get("코드", "") or "").strip().zfill(5)
-        
-        img_id = get_best_image_id(code, item.get("image_data"), drive_file_map)
+        img_id  = get_best_image_id(code, item.get("image_data"), drive_file_map)
         img_b64 = download_image_by_id(img_id)
-            
+
+        # 이미지 삽입
+        ws.write(data_row, COL_IMG, "", f_img_cell)
         if img_b64:
             try:
                 img_data_str = img_b64.split(",", 1)[1] if "," in img_b64 else img_b64
-                img_bytes = base64.b64decode(img_data_str)
-                
+                img_bytes    = base64.b64decode(img_data_str)
                 with Image.open(io.BytesIO(img_bytes)) as pil_img:
                     orig_w, orig_h = pil_img.size
-                    pil_img.close()
-                
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(img_bytes)
-                    tmp_path = tmp.name
+                    tmp.write(img_bytes); tmp_path = tmp.name
                     temp_files.append(tmp_path)
-                
-                cell_w_px = 110 
-                cell_h_px = 106
-                
-                scale_x = cell_w_px / orig_w
-                scale_y = cell_h_px / orig_h
-                scale = min(scale_x, scale_y) * 0.9 
-                
-                final_w = orig_w * scale
-                final_h = orig_h * scale
-                
-                offset_x = (cell_w_px - final_w) / 2
-                offset_y = (cell_h_px - final_h) / 2
-                
-                ws.insert_image(row, 0, tmp_path, {
-                    'x_scale': scale, 
-                    'y_scale': scale, 
-                    'x_offset': offset_x, 
-                    'y_offset': offset_y,
+                cell_w_px = 105; cell_h_px = 80
+                scale = min(cell_w_px / orig_w, cell_h_px / orig_h) * 0.88
+                fw = orig_w * scale; fh = orig_h * scale
+                ws.insert_image(data_row, COL_IMG, tmp_path, {
+                    'x_scale': scale, 'y_scale': scale,
+                    'x_offset': (cell_w_px - fw) / 2,
+                    'y_offset': (cell_h_px - fh) / 2,
                     'object_position': 1
                 })
-            except:
-                ws.write(row, 0, "No Img", fmt_center)
+            except: ws.write(data_row, COL_IMG, "No Img", f_center)
         else:
-            ws.write(row, 0, "", fmt_center)
+            ws.write(data_row, COL_IMG, "", f_img_cell)
 
-        item_info_text = f"{item.get('품목', '')}\n{item.get('규격', '')}\n{item.get('코드', '')}"
-        ws.write(row, 1, item_info_text, fmt_text_wrap)
-
-        ws.write(row, 2, item.get("단위", "EA"), fmt_center)
-        ws.write(row, 3, qty, fmt_center)
+        # 품목정보 (품목명 굵게 + 규격·코드 작게 — text_wrap으로 3줄)
+        item_text = (f"{item.get('품목', '')}\n"
+                     f"{item.get('규격', '')}\n"
+                     f"{code}")
+        ws.write(data_row, COL_INFO, item_text, f_name)
+        ws.write(data_row, COL_UNIT, item.get("단위", "EA") or "EA", f_center)
+        ws.write(data_row, COL_QTY,  qty, f_center)
 
         if form_type == "basic":
-            ws.write(row, 4, p1, fmt_num)
-            ws.write(row, 5, a1, fmt_num)
-            ws.write(row, 6, "", fmt_text)
+            ws.write(data_row, COL_P1,  p1, f_num)
+            ws.write(data_row, COL_AMT, a1, f_num)
+            ws.write(data_row, COL_RMK, "", f_img_cell)
         else:
             try: p2 = int(float(item.get("price_2", 0)))
             except: p2 = 0
             a2 = p2 * qty
             profit = a2 - a1
             rate = (profit / a2 * 100) if a2 else 0
-            total_a2 += a2
-            total_profit += profit
+            total_a2 += a2; total_profit += profit
+            ws.write(data_row, COL_P1,   p1,            f_num)
+            ws.write(data_row, COL_AMT1, a1,            f_num)
+            ws.write(data_row, COL_P2,   p2,            f_num)
+            ws.write(data_row, COL_AMT2, a2,            f_num)
+            ws.write(data_row, COL_PROF, f"{rate:.1f}%", f_center)
 
-            ws.write(row, 4, p1, fmt_num)
-            ws.write(row, 5, a1, fmt_num)
-            ws.write(row, 6, p2, fmt_num)
-            ws.write(row, 7, a2, fmt_num)
-            ws.write(row, 8, profit, fmt_num)
-            ws.write(row, 9, f"{rate:.1f}%", fmt_center)
-        row += 1
+        data_row += 1
 
-    svc_total = 0
+    # ── 추가 비용 ──
     if service_items:
-        row += 1
-        ws.write(row, 1, "[추가 비용]", fmt_header)
-        row += 1
+        ws.set_row(data_row, 14)
+        ws.merge_range(data_row, 0, data_row, LAST_COL, "[ 추가 비용 ]", f_rmk_hdr)
+        data_row += 1
         for s in service_items:
-            ws.write(row, 1, s['항목'], fmt_text)
-            price_col = 5 if form_type == "basic" else 7
-            ws.write(row, price_col, s['금액'], fmt_num)
+            ws.set_row(data_row, 14)
+            amt_col = COL_AMT if form_type == "basic" else COL_AMT2
+            ws.merge_range(data_row, 0, data_row, amt_col - 1, s['항목'], f_val)
+            ws.write(data_row, amt_col, s['금액'], f_num)
+            # 나머지 빈 셀
+            for c in range(amt_col + 1, NUM_COLS):
+                ws.write(data_row, c, "", f_img_cell)
             svc_total += s['금액']
-            row += 1
+            data_row += 1
 
-    row += 1
-    ws.write(row, 1, "총 합계", fmt_header)
-    final_sum = (total_a1 if form_type == "basic" else total_a2) + svc_total
-    col_idx = 5 if form_type == "basic" else 7
-    ws.write(row, col_idx, final_sum, fmt_num)
+    # ── 자재비 합계 행 ──
+    final_total = (total_a1 if form_type == "basic" else total_a2) + svc_total
+    ws.set_row(data_row, 18)
+    if form_type == "basic":
+        ws.merge_range(data_row, 0, data_row, COL_P1, "자재비 합계", f_total)
+        ws.write(data_row, COL_AMT, final_total, f_total_v)
+        ws.write(data_row, COL_RMK, "", f_total)
+    else:
+        ws.merge_range(data_row, 0, data_row, COL_P2, "자재비 합계", f_total)
+        ws.write(data_row, COL_AMT2, final_total, f_total_v)
+        ws.write(data_row, COL_PROF, "", f_total)
+    data_row += 1
 
-    row += 2
-    ws.write(row, 1, "특약사항 및 비고", fmt_header)
-    row += 1
-    ws.write(row, 1, remarks, fmt_text_wrap)
+    # ── 특약사항 및 비고 ──
+    if remarks:
+        ws.set_row(data_row, 14)
+        ws.merge_range(data_row, 0, data_row, LAST_COL, "특약사항 및 비고", f_rmk_hdr)
+        data_row += 1
+        line_count = max(remarks.count('\n') + 1, 2)
+        ws.set_row(data_row, max(14 * line_count, 30))
+        ws.merge_range(data_row, 0, data_row, LAST_COL, remarks, f_rmk_val)
 
     workbook.close()
-    
     for f in temp_files:
-        try: 
-            if os.path.exists(f):
-                os.unlink(f)
+        try:
+            if os.path.exists(f): os.unlink(f)
         except: pass
-        
     return output.getvalue()
 
 def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db_sets, quote_name):
@@ -1446,7 +1648,7 @@ if "pipe_cart" not in st.session_state: st.session_state.pipe_cart = []
 if "set_cart" not in st.session_state: st.session_state.set_cart = [] 
 if "temp_set_recipe" not in st.session_state: st.session_state.temp_set_recipe = {}
 if "current_quote_name" not in st.session_state: st.session_state.current_quote_name = ""
-if "buyer_info" not in st.session_state: st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}
+if "buyer_info" not in st.session_state: st.session_state.buyer_info = {"manager": "", "phone": "", "addr": "", "serial": "", "recipient": "", "ref": "", "pay_cond": "/", "valid_period": "견적 후 15일 이내"}
 if "auth_admin" not in st.session_state: st.session_state.auth_admin = False
 if "auth_price" not in st.session_state: st.session_state.auth_price = False
 if "final_edit_df" not in st.session_state: st.session_state.final_edit_df = None
@@ -1552,7 +1754,7 @@ with st.sidebar:
 
     if btn_init:
         st.session_state.quote_items = {}; st.session_state.services = []; st.session_state.pipe_cart = []; st.session_state.set_cart = []; st.session_state.quote_step = 1
-        st.session_state.current_quote_name = ""; st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}; st.session_state.step3_ready=False; st.session_state.files_ready = False
+        st.session_state.current_quote_name = ""; st.session_state.buyer_info = {"manager": "", "phone": "", "addr": "", "serial": "", "recipient": "", "ref": "", "pay_cond": "/", "valid_period": "견적 후 15일 이내"}; st.session_state.step3_ready=False; st.session_state.files_ready = False
         st.session_state.quote_remarks = "1. 견적 유효기간: 견적일로부터 15일 이내\n2. 출고: 결재 완료 후 즉시 또는 7일 이내"
         st.session_state.custom_prices = []
         st.session_state.ui_state = {
@@ -2439,10 +2641,15 @@ else:
                 new_q_name = st.text_input("현장명(거래처명)", value=st.session_state.current_quote_name)
                 if new_q_name != st.session_state.current_quote_name: st.session_state.current_quote_name = new_q_name
                 manager = st.text_input("담당자", value=st.session_state.buyer_info.get("manager",""))
+                recipient = st.text_input("수신", value=st.session_state.buyer_info.get("recipient",""), placeholder="예: 9878부대")
+                pay_cond = st.text_input("결재조건", value=st.session_state.buyer_info.get("pay_cond","/"))
             with c_info2:
                 phone = st.text_input("전화번호", value=st.session_state.buyer_info.get("phone",""))
                 addr = st.text_input("주소", value=st.session_state.buyer_info.get("addr",""))
-            st.session_state.buyer_info.update({"manager": manager, "phone": phone, "addr": addr})
+                ref = st.text_input("참조", value=st.session_state.buyer_info.get("ref",""), placeholder="예: /")
+                valid_period = st.text_input("유효기간", value=st.session_state.buyer_info.get("valid_period","견적 후 15일 이내"))
+            st.session_state.buyer_info.update({"manager": manager, "phone": phone, "addr": addr,
+                "recipient": recipient, "ref": ref, "pay_cond": pay_cond, "valid_period": valid_period})
         st.divider()
         sets = st.session_state.db.get("sets", {})
         with st.expander("1. 주배관 및 가지관 세트 선택", True):
@@ -3130,7 +3337,7 @@ else:
                 st.session_state.services = []
                 st.session_state.pipe_cart = []
                 st.session_state.set_cart = []
-                st.session_state.buyer_info = {"manager": "", "phone": "", "addr": ""}
+                st.session_state.buyer_info = {"manager": "", "phone": "", "addr": "", "serial": "", "recipient": "", "ref": "", "pay_cond": "/", "valid_period": "견적 후 15일 이내"}
                 st.session_state.current_quote_name = ""
                 st.session_state.step3_ready = False
                 st.session_state.files_ready = False

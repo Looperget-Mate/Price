@@ -590,19 +590,6 @@ class PDF(FPDF):
 def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, buyer_info, remarks):
     """
     견적서 PDF 생성 — 첨부 이미지 양식과 동일한 레이아웃
-    ┌─────────────────────────────────┐
-    │        견 적 서  [로고]          │  ← 헤더
-    ├──────────────┬──────────────────┤
-    │ 일련번호 등   │ 사업자번호 등     │  ← 2단 정보
-    ├──────────────┴──────────────────┤
-    │ [인사말]                         │
-    ├─────┬──────┬──┬──┬─────┬────┬──┤
-    │IMG  │품목정보│단위│수량│단가│금액│비고│  ← 품목 테이블
-    ├─────┴──────┴──┴──┴─────┴────┴──┤
-    │           자재비 합계             │
-    ├─────────────────────────────────┤
-    │  특약사항 및 비고                │
-    └─────────────────────────────────┘
     """
     drive_file_map = get_drive_file_map()
     pdf = PDF()
@@ -615,20 +602,18 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     font_name = 'NanumGothic' if has_font else 'Helvetica'
     b_style = 'B' if has_bold else ''
 
-    # ── 페이지 여백 기준 ──
-    L = pdf.l_margin  # 좌여백(기본 10mm)
-    PAGE_W = 190      # 유효 폭 (A4 210 - 여백 10*2)
+    L = pdf.l_margin
+    PAGE_W = 190
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # [1] 2단 정보 테이블 (좌: 수신정보 | 우: 공급자정보)
+    # [1] 2단 정보 테이블
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    LEFT_W  = 95   # 좌측 폭 (수신 정보)
-    RIGHT_W = 95   # 우측 폭 (공급자 정보)
-    LBL_W   = 22   # 레이블 셀 폭
-    VAL_W   = LEFT_W - LBL_W  # 값 셀 폭
-    H_ROW   = 6.5  # 행 높이
+    LEFT_W  = 95
+    RIGHT_W = 95
+    LBL_W   = 24
+    VAL_W   = LEFT_W - LBL_W
+    H_ROW   = 7.0  # 행 높이 증가
 
-    # 좌측 데이터 (수신 측 + 인사말)
     serial    = buyer_info.get('serial', '')
     recipient = buyer_info.get('recipient', '')
     ref       = buyer_info.get('ref', '')
@@ -645,7 +630,6 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         ("유효기간", valid_period),
     ]
 
-    # 우측 데이터 (공급자)
     RVAL_W = RIGHT_W - LBL_W
     right_rows = [
         ("사업자등록번호", "411-81-91898"),
@@ -661,44 +645,36 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     for i, ((lbl, val), (rlbl, rval)) in enumerate(zip(left_rows, right_rows)):
         cy = y_info + i * H_ROW
 
-        # 좌측 레이블 (회색 배경)
         pdf.set_xy(L, cy)
         pdf.set_fill_color(240, 240, 240)
-        pdf.set_font(font_name, b_style, 8)
+        pdf.set_font(font_name, b_style, 9)   # ↑ 8→9
         pdf.cell(LBL_W, H_ROW, f" {lbl}", border=1, fill=True)
-        # 좌측 값
-        pdf.set_font(font_name, '', 8)
+        pdf.set_font(font_name, '', 9)         # ↑ 8→9
         pdf.cell(VAL_W, H_ROW, f" {val}", border=1)
 
-        # 우측 레이블 (회색 배경)
         pdf.set_xy(L + LEFT_W, cy)
         pdf.set_fill_color(240, 240, 240)
-        pdf.set_font(font_name, b_style, 7)
+        pdf.set_font(font_name, b_style, 8)   # ↑ 7→8
         pdf.cell(LBL_W, H_ROW, f" {rlbl}", border=1, fill=True)
-        # 우측 값
-        pdf.set_font(font_name, '', 7)
+        pdf.set_font(font_name, '', 8)         # ↑ 7→8
         pdf.cell(RVAL_W, H_ROW, f" {rval}", border=1)
 
     pdf.set_y(y_info + len(left_rows) * H_ROW)
 
-    # ── 인사말 셀 (좌측 전체 폭, 2줄) ──
     greeting = (
         "1.귀사의 일의 번창을 기원합니다.\n"
         "2.하기와 같이 견적드리오니 검토하기 바랍니다."
     )
     pdf.set_xy(L, pdf.get_y())
-    pdf.set_font(font_name, '', 7.5)
+    pdf.set_font(font_name, '', 8.5)   # ↑ 7.5→8.5
     pdf.set_fill_color(255, 255, 255)
-    pdf.multi_cell(LEFT_W, 4.5, greeting, border=1)
+    pdf.multi_cell(LEFT_W, 5, greeting, border=1)
 
     pdf.ln(3)
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # [2] 품목 테이블
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # 컬럼 폭 (합계 = PAGE_W = 190)
-    # 이미지 양식: 이미지(25) | 품목정보(65) | 단위(12) | 수량(13) | 단가(30) | 금액(30) | 비고(15)
-    # basic 총 = 190, profit 모드는 단가/금액 열 분할
     if form_type == "basic":
         COL_IMG  = 25
         COL_INFO = 63
@@ -717,34 +693,33 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         COL_P2   = 18
         COL_AMT2 = 22
         COL_PROF = 10
-        # 합 = 190
 
     def draw_table_header():
         pdf.set_fill_color(240, 240, 240)
-        pdf.set_font(font_name, b_style, 8.5)
-        H_HDR = 9
-        pdf.cell(COL_IMG,  H_HDR, "이미지",              border=1, align='C', fill=True)
-        pdf.cell(COL_INFO, H_HDR, "품목정보",             border=1, align='C', fill=True)
-        pdf.cell(COL_UNIT, H_HDR, "단위",                border=1, align='C', fill=True)
-        pdf.cell(COL_QTY,  H_HDR, "수량",                border=1, align='C', fill=True)
+        pdf.set_font(font_name, b_style, 9.5)   # ↑ 8.5→9.5
+        H_HDR = 10
+        pdf.cell(COL_IMG,  H_HDR, "이미지",    border=1, align='C', fill=True)
+        pdf.cell(COL_INFO, H_HDR, "품목정보",   border=1, align='C', fill=True)
+        pdf.cell(COL_UNIT, H_HDR, "단위",      border=1, align='C', fill=True)
+        pdf.cell(COL_QTY,  H_HDR, "수량",      border=1, align='C', fill=True)
         if form_type == "basic":
             pdf.cell(COL_P1,  H_HDR, price_labels[0] if price_labels else "소비자가", border=1, align='C', fill=True)
-            pdf.cell(COL_AMT, H_HDR, "금액",              border=1, align='C', fill=True)
-            pdf.cell(COL_RMK, H_HDR, "비고",              border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(COL_AMT, H_HDR, "금액",   border=1, align='C', fill=True)
+            pdf.cell(COL_RMK, H_HDR, "비고",   border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
         else:
             l1 = price_labels[0] if price_labels else "단가1"
             l2 = price_labels[1] if len(price_labels) > 1 else "단가2"
-            pdf.set_font(font_name, b_style, 7)
-            pdf.cell(COL_P1,   H_HDR, l1,   border=1, align='C', fill=True)
-            pdf.cell(COL_AMT1, H_HDR, "금액", border=1, align='C', fill=True)
-            pdf.cell(COL_P2,   H_HDR, l2,   border=1, align='C', fill=True)
-            pdf.cell(COL_AMT2, H_HDR, "금액", border=1, align='C', fill=True)
+            pdf.set_font(font_name, b_style, 8)
+            pdf.cell(COL_P1,   H_HDR, l1,     border=1, align='C', fill=True)
+            pdf.cell(COL_AMT1, H_HDR, "금액",  border=1, align='C', fill=True)
+            pdf.cell(COL_P2,   H_HDR, l2,     border=1, align='C', fill=True)
+            pdf.cell(COL_AMT2, H_HDR, "금액",  border=1, align='C', fill=True)
             pdf.cell(COL_PROF, H_HDR, "이익율", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
 
     draw_table_header()
 
     sum_qty = 0; sum_a1 = 0; sum_a2 = 0; sum_profit = 0
-    ITEM_H = 17  # 품목 행 높이 (이미지 양식과 동일하게 충분한 높이)
+    ITEM_H = 18  # ↑ 17→18
 
     for item in final_data_list:
         if pdf.get_y() + ITEM_H > 265:
@@ -778,7 +753,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
             sum_profit += profit
             rate = (profit / a2 * 100) if a2 else 0
 
-        # ── 이미지 셀 ──
+        # 이미지 셀
         pdf.cell(COL_IMG, ITEM_H, "", border=1)
         if img_b64:
             try:
@@ -787,81 +762,79 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(img_bytes)
                     tmp_path = tmp.name
-                # 이미지 셀 내 중앙 배치 (최대 13×13mm)
-                img_sz = min(COL_IMG - 4, ITEM_H - 4, 13)
+                img_sz = min(COL_IMG - 4, ITEM_H - 4, 14)
                 pdf.image(tmp_path, x=x + (COL_IMG - img_sz) / 2,
                           y=y + (ITEM_H - img_sz) / 2, w=img_sz, h=img_sz)
                 if os.path.exists(tmp_path): os.unlink(tmp_path)
             except: pass
 
-        # ── 품목정보 셀 (품목명 / 규격 / 코드) ──
+        # 품목정보 셀
         pdf.set_xy(x + COL_IMG, y)
         pdf.cell(COL_INFO, ITEM_H, "", border=1)
-        # 품목명 — 굵게, 줄바꿈 허용
-        pdf.set_xy(x + COL_IMG + 1, y + 1)
-        pdf.set_font(font_name, b_style, 7.5)
-        # multi_cell 이후 위치 보정이 필요하므로 수동 처리
-        max_name_h = ITEM_H - 7
-        pdf.multi_cell(COL_INFO - 2, 3.8, name, align='L', max_line_height=3.8)
+        # 품목명 — 굵게 9pt
+        pdf.set_xy(x + COL_IMG + 1.5, y + 1.5)
+        pdf.set_font(font_name, b_style, 9)    # ↑ 7.5→9
+        pdf.multi_cell(COL_INFO - 3, 4.2, name, align='L', max_line_height=4.2)
         # 규격
-        pdf.set_xy(x + COL_IMG + 1, y + ITEM_H - 6)
-        pdf.set_font(font_name, '', 6.5)
-        pdf.cell(COL_INFO - 2, 3, spec, align='L')
+        pdf.set_xy(x + COL_IMG + 1.5, y + ITEM_H - 6.5)
+        pdf.set_font(font_name, '', 7.5)        # ↑ 6.5→7.5
+        pdf.cell(COL_INFO - 3, 3.2, spec, align='L')
         # 코드
-        pdf.set_xy(x + COL_IMG + 1, y + ITEM_H - 3.5)
-        pdf.set_font(font_name, '', 6.5)
-        pdf.cell(COL_INFO - 2, 3, code, align='L')
+        pdf.set_xy(x + COL_IMG + 1.5, y + ITEM_H - 3.5)
+        pdf.set_font(font_name, '', 7.5)        # ↑ 6.5→7.5
+        pdf.cell(COL_INFO - 3, 3.2, code, align='L')
 
-        # ── 단위 / 수량 ──
+        # 단위 / 수량
         pdf.set_xy(x + COL_IMG + COL_INFO, y)
-        pdf.set_font(font_name, '', 8)
+        pdf.set_font(font_name, '', 9.5)        # ↑ 8→9.5
         pdf.cell(COL_UNIT, ITEM_H, str(item.get("단위", "EA") or "EA"), border=1, align='C')
         pdf.cell(COL_QTY,  ITEM_H, str(qty), border=1, align='C')
 
-        # ── 단가 / 금액 ──
+        # 단가 / 금액
         if form_type == "basic":
+            pdf.set_font(font_name, '', 9)      # ↑ 명시 설정
             pdf.cell(COL_P1,  ITEM_H, f"{p1:,}", border=1, align='R')
             pdf.cell(COL_AMT, ITEM_H, f"{a1:,}", border=1, align='R')
             pdf.cell(COL_RMK, ITEM_H, "", border=1)
             pdf.ln()
         else:
-            pdf.set_font(font_name, '', 7.5)
+            pdf.set_font(font_name, '', 8.5)
             pdf.cell(COL_P1,   ITEM_H, f"{p1:,}", border=1, align='R')
             pdf.cell(COL_AMT1, ITEM_H, f"{a1:,}", border=1, align='R')
             pdf.cell(COL_P2,   ITEM_H, f"{p2:,}", border=1, align='R')
             pdf.cell(COL_AMT2, ITEM_H, f"{a2:,}", border=1, align='R')
-            pdf.set_font(font_name, b_style, 7)
+            pdf.set_font(font_name, b_style, 8)
             pdf.cell(COL_PROF, ITEM_H, f"{rate:.1f}%", border=1, align='C')
             pdf.ln()
 
-    # ── 서비스 비용 ──
+    # 서비스 비용
     svc_total = 0
     if service_items:
-        if pdf.get_y() + (len(service_items) * 6) + 10 > 265:
+        if pdf.get_y() + (len(service_items) * 7) + 10 > 265:
             pdf.add_page()
-            pdf.ln(2)
+            pdf.ln(1)
         else:
             pdf.ln(1)
         pdf.set_fill_color(255, 255, 224)
-        pdf.set_font(font_name, b_style, 8)
-        pdf.cell(PAGE_W, 6, " [ 추가 비용 ]", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font(font_name, b_style, 9)
+        pdf.cell(PAGE_W, 7, " [ 추가 비용 ]", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
         for s in service_items:
             svc_total += s['금액']
-            pdf.set_font(font_name, '', 8)
-            pdf.cell(PAGE_W - 35, 6, f"  {s['항목']}", border=1)
-            pdf.cell(35, 6, f"{s['금액']:,} 원", border=1, align='R', new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font(font_name, '', 9)
+            pdf.cell(PAGE_W - 35, 7, f"  {s['항목']}", border=1)
+            pdf.cell(35, 7, f"{s['금액']:,} 원", border=1, align='R', new_x="LMARGIN", new_y="NEXT")
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # [3] 자재비 합계 행 (이미지 양식과 동일: "자재비 합계" 좌측 병합, 금액 우측)
+    # [3] 자재비 합계 행
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    if pdf.get_y() + 10 > 265:
+    if pdf.get_y() + 12 > 265:
         pdf.add_page()
 
     final_total = (sum_a1 if form_type == "basic" else sum_a2) + svc_total
-    TOTAL_H = 10
+    TOTAL_H = 11
 
     pdf.set_fill_color(230, 230, 230)
-    pdf.set_font(font_name, b_style, 9)
+    pdf.set_font(font_name, b_style, 10)   # ↑ 9→10
 
     if form_type == "basic":
         label_w = COL_IMG + COL_INFO + COL_UNIT + COL_QTY + COL_P1
@@ -877,19 +850,18 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
         pdf.ln()
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # [4] 특약사항 및 비고 박스
+    # [4] 특약사항 및 비고
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if remarks:
         pdf.ln(2)
         if pdf.get_y() + 20 > 270:
             pdf.add_page()
-
         pdf.set_fill_color(240, 240, 240)
-        pdf.set_font(font_name, b_style, 8.5)
-        pdf.cell(PAGE_W, 7, "  특약사항 및 비고", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
-        pdf.set_font(font_name, '', 8)
+        pdf.set_font(font_name, b_style, 9.5)  # ↑ 8.5→9.5
+        pdf.cell(PAGE_W, 8, "  특약사항 및 비고", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font(font_name, '', 9)          # ↑ 8→9
         pdf.set_fill_color(255, 255, 255)
-        pdf.multi_cell(PAGE_W, 5.5, remarks, border=1)
+        pdf.multi_cell(PAGE_W, 6, remarks, border=1)
 
     return bytes(pdf.output())
 
@@ -913,38 +885,38 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
 
     # ── 포맷 정의 ──
     def fmt(**kw):
-        base = {'font_name': '맑은 고딕', 'font_size': 9, 'valign': 'vcenter', 'border': 1}
+        base = {'font_name': '맑은 고딕', 'font_size': 10, 'valign': 'vcenter', 'border': 1}
         base.update(kw)
         return workbook.add_format(base)
 
     f_title   = fmt(bold=True, font_size=18, align='center', border=0)
-    f_lbl     = fmt(bold=True, bg_color='#F0F0F0', align='center', text_wrap=True, font_size=8)
-    f_val     = fmt(align='left',  text_wrap=True, font_size=8)
-    f_val_r   = fmt(align='right', text_wrap=True, font_size=8)
-    f_hdr     = fmt(bold=True, bg_color='#F0F0F0', align='center', text_wrap=True)
-    f_name    = fmt(bold=True, align='left', text_wrap=True, font_size=8)
-    f_spec    = fmt(align='left', text_wrap=True, font_size=7, font_color='#555555')
-    f_center  = fmt(align='center')
-    f_num     = fmt(align='right',  num_format='#,##0')
-    f_total   = fmt(bold=True, bg_color='#E6E6E6', align='center', num_format='#,##0')
-    f_total_v = fmt(bold=True, bg_color='#E6E6E6', align='right',  num_format='#,##0')
-    f_rmk_hdr = fmt(bold=True, bg_color='#F0F0F0', align='left', font_size=9)
-    f_rmk_val = fmt(align='left', text_wrap=True, font_size=8)
-    f_img_cell= fmt(align='center')
-    f_greet   = fmt(align='left', text_wrap=True, font_size=8, border=1)
+    f_lbl     = fmt(bold=True, bg_color='#F0F0F0', align='center', text_wrap=False, font_size=9)
+    f_val     = fmt(align='left',  text_wrap=False, font_size=9)   # ← text_wrap 제거
+    f_val_r   = fmt(align='right', text_wrap=False, font_size=9)
+    f_hdr     = fmt(bold=True, bg_color='#F0F0F0', align='center', text_wrap=True, font_size=10)
+    f_name    = fmt(bold=True, align='left', text_wrap=True, font_size=10)
+    f_spec    = fmt(align='left', text_wrap=True, font_size=8, font_color='#555555')
+    f_center  = fmt(align='center', font_size=10)
+    f_num     = fmt(align='right',  num_format='#,##0', font_size=10)
+    f_total   = fmt(bold=True, bg_color='#E6E6E6', align='center', num_format='#,##0', font_size=11)
+    f_total_v = fmt(bold=True, bg_color='#E6E6E6', align='right',  num_format='#,##0', font_size=11)
+    f_rmk_hdr = fmt(bold=True, bg_color='#F0F0F0', align='left', font_size=10)
+    f_rmk_val = fmt(align='left', text_wrap=True, font_size=10)
+    f_img_cell= fmt(align='center', font_size=10)
+    f_greet   = fmt(align='left', text_wrap=True, font_size=9, border=1)
 
     # ── 컬럼 인덱스 & 폭 (단위: 엑셀 문자 폭)
     # basic 모드: A(이미지) B(품목정보) C(단위) D(수량) E(단가) F(금액) G(비고)
     # profit 모드: A B C D E F(금액1) G(단가2) H(금액2) I(이익율)
     if form_type == "basic":
         NUM_COLS = 7
-        # 컬럼 폭
-        col_widths = [14, 30, 6, 6, 14, 14, 8]
+        # 컬럼 폭 확대 — 특히 품목정보(B) 넓게
+        col_widths = [14, 34, 7, 7, 15, 15, 9]
         COL_IMG, COL_INFO, COL_UNIT, COL_QTY, COL_P1, COL_AMT, COL_RMK = range(7)
         LAST_COL = 6
     else:
         NUM_COLS = 9
-        col_widths = [14, 28, 6, 6, 12, 14, 12, 14, 10]
+        col_widths = [14, 30, 7, 7, 13, 15, 13, 15, 11]
         COL_IMG, COL_INFO, COL_UNIT, COL_QTY, COL_P1, COL_AMT1, COL_P2, COL_AMT2, COL_PROF = range(9)
         LAST_COL = 8
 
@@ -980,7 +952,7 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
 
     for i, ((ll, lv), (rl, rv)) in enumerate(zip(left_rows, right_rows)):
         r = i + 1
-        ws.set_row(r, 14)
+        ws.set_row(r, 18)   # ↑ 14→18
         ws.write(r, L_LBL, ll, f_lbl)
         ws.merge_range(r, L_VAL_S, r, L_VAL_E, lv, f_val)
         ws.write(r, R_LBL, rl, f_lbl)
@@ -1201,35 +1173,58 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
     pdf.set_font(font_name, b_style, 12)
     pdf.cell(0, 10, "1. 부속 세트 구성 (Fitting Sets)", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
     
-    pdf.set_font(font_name, '', 10)
-    row_h = 35 
     header_h = 8
-    
-    col_w_img = 50
-    col_w_name = 70
-    col_w_type = 40
-    col_w_qty = 30
-    
+    # ── 컬럼 폭 재배분: 구분·수량 줄이고 세트명 늘림 ──
+    col_w_img  = 40   # 이미지
+    col_w_name = 105  # 세트명 + 구성품 목록 (↑ 70→105)
+    col_w_type = 25   # 구분 (↓ 40→25)
+    col_w_qty  = 20   # 수량 (↓ 30→20)
+    # 합계 = 190
+
     pdf.set_fill_color(240, 240, 240)
-    pdf.cell(col_w_img, header_h, "IMG", border=1, align='C', fill=True) 
+    pdf.set_font(font_name, b_style, 9)
+    pdf.cell(col_w_img,  header_h, "IMG",            border=1, align='C', fill=True)
     pdf.cell(col_w_name, header_h, "세트명 (Set Name)", border=1, align='C', fill=True)
-    pdf.cell(col_w_type, header_h, "구분", border=1, align='C', fill=True)
-    pdf.cell(col_w_qty, header_h, "수량", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(col_w_type, header_h, "구분",            border=1, align='C', fill=True)
+    pdf.cell(col_w_qty,  header_h, "수량",            border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
+
+    # 품목 코드 → 이름 맵
+    prod_code_to_name = {str(p.get("code","")).strip().zfill(5): p.get("name","") for p in db_products}
 
     for item in set_cart:
-        check_page_break(row_h)
-        name = item.get('name')
-        qty = item.get('qty')
+        name  = item.get('name')
+        qty   = item.get('qty')
         stype = item.get('type')
-        
+
+        # 세트의 레시피(구성품) 가져오기
+        recipe = {}
+        for cat, sets in db_sets.items():
+            if name in sets:
+                recipe = sets[name].get('recipe', {})
+                break
+
+        # 구성품 텍스트 (코드 → 이름 변환)
+        recipe_lines = []
+        for p_code, p_qty in recipe.items():
+            p_name = prod_code_to_name.get(str(p_code).strip().zfill(5), str(p_code))
+            recipe_lines.append(f"  · {p_name}  ×{p_qty}")
+        recipe_text = "\n".join(recipe_lines)
+
+        # 행 높이: 세트명 1줄 + 구성품 줄 수 기준
+        n_lines = max(len(recipe_lines), 1)
+        # 세트명 11pt(5mm) + 구성품 1줄당 4.5mm + 상하 여백 4mm
+        row_h = max(5 + n_lines * 4.5 + 4, 22)
+
+        check_page_break(row_h)
+
+        # 이미지 셀
         img_id = None
         for cat, sets in db_sets.items():
             if name in sets:
                 img_id = sets[name].get('image')
                 break
-        
         img_b64 = download_image_by_id(img_id)
-        
+
         x, y = pdf.get_x(), pdf.get_y()
         pdf.cell(col_w_img, row_h, "", border=1)
         if img_b64:
@@ -1239,16 +1234,33 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(img_bytes)
                     tmp_path = tmp.name
-                
-                pdf.image(tmp_path, x=x+6.25, y=y+2.5, w=37.5, h=30)
+                img_sz = min(col_w_img - 6, row_h - 5, 32)
+                pdf.image(tmp_path, x=x + (col_w_img - img_sz) / 2,
+                          y=y + (row_h - img_sz) / 2, w=img_sz, h=img_sz)
                 os.unlink(tmp_path)
             except: pass
-            
-        pdf.set_xy(x+col_w_img, y)
-        pdf.cell(col_w_name, row_h, name, border=1, align='L')
+
+        # 세트명 셀 — 세트명(굵게 11pt) + 구성품(9pt)
+        pdf.set_xy(x + col_w_img, y)
+        pdf.cell(col_w_name, row_h, "", border=1)
+
+        # 세트명 텍스트 (굵게, 크게)
+        pdf.set_xy(x + col_w_img + 2, y + 2)
+        pdf.set_font(font_name, b_style, 11)
+        pdf.cell(col_w_name - 4, 5.5, name, align='L')
+
+        # 구성품 텍스트 (보통, 9pt)
+        if recipe_text:
+            pdf.set_xy(x + col_w_img + 2, y + 8)
+            pdf.set_font(font_name, '', 8.5)
+            pdf.multi_cell(col_w_name - 4, 4.5, recipe_text, align='L', max_line_height=4.5)
+
+        # 구분 / 수량 셀
+        pdf.set_xy(x + col_w_img + col_w_name, y)
+        pdf.set_font(font_name, '', 10)
         pdf.cell(col_w_type, row_h, stype, border=1, align='C')
-        pdf.cell(col_w_qty, row_h, str(qty), border=1, align='C', new_x="LMARGIN", new_y="NEXT")
-    
+        pdf.cell(col_w_qty,  row_h, str(qty), border=1, align='C', new_x="LMARGIN", new_y="NEXT")
+
     pdf.ln(5)
 
     # 2. 배관 물량
@@ -1257,12 +1269,12 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
     check_page_break(20)
     pdf.cell(0, 10, "2. 배관 물량 (Pipe Quantities)", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
     
-    pdf.set_font(font_name, '', 10)
     pdf.set_fill_color(240, 240, 240)
-    pdf.cell(20, header_h, "IMG", border=1, align='C', fill=True)
-    pdf.cell(100, header_h, "품목명 (Product Name)", border=1, align='C', fill=True)
-    pdf.cell(40, header_h, "총 길이(m)", border=1, align='C', fill=True)
-    pdf.cell(30, header_h, "롤 수(EA)", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font(font_name, b_style, 9)
+    pdf.cell(22, header_h, "IMG", border=1, align='C', fill=True)
+    pdf.cell(108, header_h, "품목명 (Product Name)", border=1, align='C', fill=True)
+    pdf.cell(35, header_h, "총 길이(m)", border=1, align='C', fill=True)
+    pdf.cell(25, header_h, "롤 수(EA)", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
 
     pipe_summary = {}
     for p in pipe_cart:
@@ -1273,7 +1285,7 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
         pipe_summary[code]['len'] += p.get('len', 0)
 
     for code, info in pipe_summary.items():
-        check_page_break(15)
+        check_page_break(16)
         prod_info = next((item for item in db_products if str(item["code"]) == str(code)), None)
         unit_len = prod_info.get("len_per_unit", 4) if prod_info else 4
         if unit_len <= 0: unit_len = 4
@@ -1284,7 +1296,7 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
         img_b64 = download_image_by_id(img_id)
 
         x, y = pdf.get_x(), pdf.get_y()
-        pdf.cell(20, 15, "", border=1)
+        pdf.cell(22, 16, "", border=1)
         if img_b64:
             try:
                 img_data = img_b64.split(",", 1)[1]
@@ -1292,15 +1304,16 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(img_bytes)
                     tmp_path = tmp.name
-                pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
+                pdf.image(tmp_path, x=x+2, y=y+2, w=13, h=13)
                 if os.path.exists(tmp_path):
                     os.unlink(tmp_path)
             except: pass
             
-        pdf.set_xy(x+20, y)
-        pdf.cell(100, 15, f"{info['name']} ({info['spec']})", border=1, align='L')
-        pdf.cell(40, 15, f"{info['len']} m", border=1, align='C')
-        pdf.cell(30, 15, f"{rolls} 롤", border=1, align='C', new_x="LMARGIN", new_y="NEXT")
+        pdf.set_xy(x+22, y)
+        pdf.set_font(font_name, '', 10)
+        pdf.cell(108, 16, f"{info['name']} ({info['spec']})", border=1, align='L')
+        pdf.cell(35,  16, f"{info['len']} m", border=1, align='C')
+        pdf.cell(25,  16, f"{rolls} 롤", border=1, align='C', new_x="LMARGIN", new_y="NEXT")
 
     pdf.ln(5)
 
@@ -1311,14 +1324,14 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
         check_page_break(20)
         pdf.cell(0, 10, "3. 추가 자재 (Additional Components / Spares)", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
         
-        pdf.set_font(font_name, '', 10)
         pdf.set_fill_color(240, 240, 240)
-        pdf.cell(20, header_h, "IMG", border=1, align='C', fill=True)
-        pdf.cell(130, header_h, "품목정보 (Name/Spec)", border=1, align='C', fill=True)
-        pdf.cell(40, header_h, "추가 수량", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font(font_name, b_style, 9)
+        pdf.cell(22, header_h, "IMG", border=1, align='C', fill=True)
+        pdf.cell(133, header_h, "품목정보 (Name/Spec)", border=1, align='C', fill=True)
+        pdf.cell(35, header_h, "추가 수량", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
 
         for item in additional_items_list:
-            check_page_break(15)
+            check_page_break(16)
             name = item['name']
             spec = item['spec'] if item['spec'] else '-'
             qty = item['qty']
@@ -1329,7 +1342,7 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
             img_b64 = download_image_by_id(img_id)
 
             x, y = pdf.get_x(), pdf.get_y()
-            pdf.cell(20, 15, "", border=1)
+            pdf.cell(22, 16, "", border=1)
             if img_b64:
                 try:
                     img_data = img_b64.split(",", 1)[1]
@@ -1337,14 +1350,15 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                         tmp.write(img_bytes)
                         tmp_path = tmp.name
-                    pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
+                    pdf.image(tmp_path, x=x+2, y=y+2, w=13, h=13)
                     if os.path.exists(tmp_path):
                         os.unlink(tmp_path)
                 except: pass
                 
-            pdf.set_xy(x+20, y)
-            pdf.cell(130, 15, f"{name} ({spec})", border=1, align='L')
-            pdf.cell(40, 15, f"{int(qty)} EA", border=1, align='C', new_x="LMARGIN", new_y="NEXT")
+            pdf.set_xy(x+22, y)
+            pdf.set_font(font_name, '', 10)
+            pdf.cell(133, 16, f"{name} ({spec})", border=1, align='L')
+            pdf.cell(35,  16, f"{int(qty)} EA", border=1, align='C', new_x="LMARGIN", new_y="NEXT")
         
         pdf.ln(5)
 
@@ -1355,18 +1369,18 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
     idx_num = "4" if additional_items_list else "3"
     pdf.cell(0, 10, f"{idx_num}. 전체 자재 산출 목록 (Total Components)", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
     
-    pdf.set_font(font_name, '', 10)
     pdf.set_fill_color(240, 240, 240)
-    pdf.cell(20, header_h, "IMG", border=1, align='C', fill=True)
-    pdf.cell(130, header_h, "품목정보 (Name/Spec)", border=1, align='C', fill=True)
-    pdf.cell(40, header_h, "총 수량", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font(font_name, b_style, 9)
+    pdf.cell(22, header_h, "IMG", border=1, align='C', fill=True)
+    pdf.cell(133, header_h, "품목정보 (Name/Spec)", border=1, align='C', fill=True)
+    pdf.cell(35, header_h, "총 수량", border=1, align='C', fill=True, new_x="LMARGIN", new_y="NEXT")
 
     for item in final_data_list:
         try: qty = int(float(item.get("수량", 0)))
         except: qty = 0
         if qty == 0: continue
 
-        check_page_break(15)
+        check_page_break(16)
         name = item.get("품목", "")
         spec = item.get("규격", "-")
         code = item.get("코드", "")
@@ -1376,7 +1390,7 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
         img_b64 = download_image_by_id(img_id)
 
         x, y = pdf.get_x(), pdf.get_y()
-        pdf.cell(20, 15, "", border=1)
+        pdf.cell(22, 16, "", border=1)
         if img_b64:
             try:
                 img_data = img_b64.split(",", 1)[1]
@@ -1384,14 +1398,15 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(img_bytes)
                     tmp_path = tmp.name
-                pdf.image(tmp_path, x=x+2, y=y+2, w=11, h=11)
+                pdf.image(tmp_path, x=x+2, y=y+2, w=13, h=13)
                 if os.path.exists(tmp_path):
                     os.unlink(tmp_path)
             except: pass
             
-        pdf.set_xy(x+20, y)
-        pdf.cell(130, 15, f"{name} ({spec})", border=1, align='L')
-        pdf.cell(40, 15, f"{int(qty)} EA", border=1, align='C', new_x="LMARGIN", new_y="NEXT")
+        pdf.set_xy(x+22, y)
+        pdf.set_font(font_name, '', 10)
+        pdf.cell(133, 16, f"{name} ({spec})", border=1, align='L')
+        pdf.cell(35,  16, f"{int(qty)} EA", border=1, align='C', new_x="LMARGIN", new_y="NEXT")
 
     return bytes(pdf.output())
 

@@ -934,14 +934,14 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
     #   col2~3(C~D)=우레이블 병합 | col4~6(E~G)=우값 병합
     if form_type == "basic":
         NUM_COLS = 7
-        # A=14, B=25, C=8, D=8, E=11, F=13, G=10
-        col_widths = [14, 25, 8, 8, 11, 13, 10]
+        # A=14, B=25, C=6, D=8, E=10, F=13, G=10
+        col_widths = [14, 25, 6, 8, 10, 13, 10]
         COL_IMG, COL_INFO, COL_UNIT, COL_QTY, COL_P1, COL_AMT, COL_RMK = range(7)
         LAST_COL = 6
     else:
         NUM_COLS = 9
-        # A=14, B=25, C=8, D=8, E=11, F=13, G=11, H=13, I=10
-        col_widths = [14, 25, 8, 8, 11, 13, 11, 13, 10]
+        # A=14, B=25, C=6, D=8, E=10, F=13, G=10, H=13, I=10
+        col_widths = [14, 25, 6, 8, 10, 13, 10, 13, 10]
         COL_IMG, COL_INFO, COL_UNIT, COL_QTY, COL_P1, COL_AMT1, COL_P2, COL_AMT2, COL_PROF = range(9)
         LAST_COL = 8
 
@@ -951,6 +951,14 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
     # 합계 금액 — shrink_to_fit 버전 포맷 (####방지)
     f_total_val_shrink = fmt(bold=True, bg_color='#E6E6E6', align='right',
                              font_size=16, num_format='#,##0', shrink=True)
+
+    # 수량 / 소비자가 / 금액 — 14pt + shrink_to_fit (셀 폭 부족 시 자동 축소)
+    f_center_14_shrink = fmt(align='center', font_size=14, shrink=True)
+    f_num_14_shrink    = fmt(align='right',  font_size=14, num_format='#,##0', shrink=True)
+
+    # A열(이미지 열) 폭을 픽셀로 환산: 14 chars * 7.5px/char ≈ 105px
+    # 이미지가 이 셀 폭을 절대 넘지 않도록 cell_w_px를 A열 실제 폭에 맞춤
+    IMG_COL_PX = 100  # A열 14 chars 기준 안전 픽셀 폭
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # ROW 0 : 제목
@@ -1065,7 +1073,7 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
         img_id  = get_best_image_id(code, item.get("image_data"), drive_file_map)
         img_b64 = download_image_by_id(img_id)
 
-        # 이미지
+        # 이미지 — A열 셀 안에서만 표시 (다른 셀 침범 방지)
         ws.write(data_row, COL_IMG, "", f_img_cell)
         if img_b64:
             try:
@@ -1076,14 +1084,17 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(img_bytes); tmp_path = tmp.name
                     temp_files.append(tmp_path)
-                cell_w_px = 120; cell_h_px = 96
-                scale = min(cell_w_px / orig_w, cell_h_px / orig_h) * 0.88
+                # 셀 폭·높이 모두 제한 — 이미지가 셀 바깥으로 절대 나가지 않음
+                cell_w_px = IMG_COL_PX
+                cell_h_px = int(ROW_H_ITEM * 0.96)  # 행 높이(pt) → 픽셀 근사
+                scale = min(cell_w_px / orig_w, cell_h_px / orig_h) * 0.85
                 fw = orig_w * scale; fh = orig_h * scale
                 ws.insert_image(data_row, COL_IMG, tmp_path, {
                     'x_scale': scale, 'y_scale': scale,
                     'x_offset': max((cell_w_px - fw) / 2, 0),
                     'y_offset': max((cell_h_px - fh) / 2, 0),
-                    'object_position': 1
+                    'object_position': 2,   # 셀 크기에 맞춰 이동·크기조절 안 함(셀 밖 미침범)
+                    'url': None
                 })
             except:
                 ws.write(data_row, COL_IMG, "No Img", f_img_cell)
@@ -1092,15 +1103,15 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
         item_text = f"{item.get('품목', '')}\n{item.get('규격', '')}\n{code}"
         ws.write(data_row, COL_INFO, item_text, f_item_name)
 
-        # 단위 / 수량 — 14pt
+        # 단위 — 14pt
         ws.write(data_row, COL_UNIT, item.get("단위", "EA") or "EA", f_center_14)
-        ws.write(data_row, COL_QTY,  qty,                             f_center_14)
 
-        # 단가 / 금액 — 14pt
+        # 수량 / 단가 / 금액 — 14pt + shrink_to_fit
         if form_type == "basic":
-            ws.write(data_row, COL_P1,  p1, f_num_14)
-            ws.write(data_row, COL_AMT, a1, f_num_14)
-            ws.write(data_row, COL_RMK, "", f_img_cell)
+            ws.write(data_row, COL_QTY,  qty, f_center_14_shrink)
+            ws.write(data_row, COL_P1,   p1,  f_num_14_shrink)
+            ws.write(data_row, COL_AMT,  a1,  f_num_14_shrink)
+            ws.write(data_row, COL_RMK,  "",  f_img_cell)
         else:
             try: p2 = int(float(item.get("price_2", 0)))
             except: p2 = 0
@@ -1108,10 +1119,11 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
             profit = a2 - a1
             rate = (profit / a2 * 100) if a2 else 0
             total_a2 += a2
-            ws.write(data_row, COL_P1,   p1,            f_num_14)
-            ws.write(data_row, COL_AMT1, a1,            f_num_14)
-            ws.write(data_row, COL_P2,   p2,            f_num_14)
-            ws.write(data_row, COL_AMT2, a2,            f_num_14)
+            ws.write(data_row, COL_QTY,  qty,            f_center_14_shrink)
+            ws.write(data_row, COL_P1,   p1,             f_num_14_shrink)
+            ws.write(data_row, COL_AMT1, a1,             f_num_14_shrink)
+            ws.write(data_row, COL_P2,   p2,             f_num_14_shrink)
+            ws.write(data_row, COL_AMT2, a2,             f_num_14_shrink)
             ws.write(data_row, COL_PROF, f"{rate:.1f}%", f_center_14)
 
         data_row += 1

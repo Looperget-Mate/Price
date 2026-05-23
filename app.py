@@ -928,19 +928,29 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
     # ── 컬럼 구성 ──
     # basic : A(이미지) B(품목정보) C(단위) D(수량) E(단가) F(금액) G(비고)  → 7컬럼
     # profit: A B C D E F(금액1) G(단가2) H(금액2) I(이익율)               → 9컬럼
+    #
+    # 정보 테이블 열 역할 (basic 기준):
+    #   col0(A)=좌레이블 | col1(B)=좌값(단독)
+    #   col2~3(C~D)=우레이블 병합 | col4~6(E~G)=우값 병합
     if form_type == "basic":
         NUM_COLS = 7
-        col_widths = [16, 36, 8, 8, 16, 16, 10]
+        # A=14, B=25, C=8, D=8, E=11, F=13, G=10
+        col_widths = [14, 25, 8, 8, 11, 13, 10]
         COL_IMG, COL_INFO, COL_UNIT, COL_QTY, COL_P1, COL_AMT, COL_RMK = range(7)
         LAST_COL = 6
     else:
         NUM_COLS = 9
-        col_widths = [16, 32, 8, 8, 14, 16, 14, 16, 12]
+        # A=14, B=25, C=8, D=8, E=11, F=13, G=11, H=13, I=10
+        col_widths = [14, 25, 8, 8, 11, 13, 11, 13, 10]
         COL_IMG, COL_INFO, COL_UNIT, COL_QTY, COL_P1, COL_AMT1, COL_P2, COL_AMT2, COL_PROF = range(9)
         LAST_COL = 8
 
     for ci, cw in enumerate(col_widths):
         ws.set_column(ci, ci, cw)
+
+    # 합계 금액 — shrink_to_fit 버전 포맷 (####방지)
+    f_total_val_shrink = fmt(bold=True, bg_color='#E6E6E6', align='right',
+                             font_size=16, num_format='#,##0', shrink=True)
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # ROW 0 : 제목
@@ -950,8 +960,8 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # ROW 1~6 : 정보 2단 테이블
-    #   좌: col0(레이블) | col1(값, 단독 — 병합 안 함)
-    #   우: col2(레이블) | col3~LAST_COL(값 병합)
+    #   좌: col0(A)=레이블 단독 | col1(B)=값 단독
+    #   우: col2~3(C~D)=레이블 병합, 가운데 | col4~LAST(E~)=값 병합, 왼쪽
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     serial    = buyer_info.get('serial', quote_date or '')
     recipient = buyer_info.get('recipient', '')
@@ -978,23 +988,27 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
         ("TEL/FAX",       "031-638-1809 / 031-635-1801"),
     ]
 
-    # 좌: col0=레이블, col1=값(단독)
-    # 우: col2=레이블, col3~LAST_COL=값 병합
-    L_LBL = 0; L_VAL = 1
-    R_LBL = 2; R_VAL_S = 3; R_VAL_E = LAST_COL
+    # 컬럼 인덱스
+    L_LBL   = 0          # 좌 레이블: A (단독)
+    L_VAL   = 1          # 좌 값:     B (단독)
+    R_LBL_S = 2          # 우 레이블 시작: C
+    R_LBL_E = 3          # 우 레이블 끝:   D  → C~D 병합
+    R_VAL_S = 4          # 우 값 시작: E
+    R_VAL_E = LAST_COL   # 우 값 끝:   G(basic) or I(profit) → E~끝 병합
 
     for i, ((ll, lv), (rl, rv)) in enumerate(zip(left_rows, right_rows)):
         r = i + 1
-        ws.set_row(r, 22)  # 행 높이 22pt
+        ws.set_row(r, 22)
 
-        # 좌측
+        # 좌측 레이블(단독) / 값(단독)
         ws.write(r, L_LBL, ll, f_lbl)
         ws.write(r, L_VAL, lv, f_val_11)
 
-        # 우측 레이블
-        ws.write(r, R_LBL, rl, f_lbl)
+        # 우측 레이블: C~D 병합, 가운데 정렬
+        ws.merge_range(r, R_LBL_S, r, R_LBL_E, rl, f_lbl)
 
-        # 우측 값 — 업태/종목(i==3)은 10pt, 나머지 11pt
+        # 우측 값: E~LAST 병합, 왼쪽 정렬
+        # 업태/종목(i==3)은 10pt, 나머지 11pt
         rv_fmt = f_val_10 if i == 3 else f_val_11
         if R_VAL_S < R_VAL_E:
             ws.merge_range(r, R_VAL_S, r, R_VAL_E, rv, rv_fmt)
@@ -1127,11 +1141,11 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
     ws.set_row(data_row, 30)
     if form_type == "basic":
         ws.merge_range(data_row, 0, data_row, COL_P1, "자재비 합계", f_total_lbl)
-        ws.write(data_row, COL_AMT, final_total, f_total_val)
+        ws.write(data_row, COL_AMT, final_total, f_total_val_shrink)
         ws.write(data_row, COL_RMK, "",          f_total_emp)
     else:
         ws.merge_range(data_row, 0, data_row, COL_P2, "자재비 합계", f_total_lbl)
-        ws.write(data_row, COL_AMT2, final_total, f_total_val)
+        ws.write(data_row, COL_AMT2, final_total, f_total_val_shrink)
         ws.write(data_row, COL_PROF, "",           f_total_emp)
     data_row += 1
 

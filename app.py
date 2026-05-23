@@ -1073,7 +1073,7 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
         img_id  = get_best_image_id(code, item.get("image_data"), drive_file_map)
         img_b64 = download_image_by_id(img_id)
 
-        # 이미지 — A열 셀 안에서만 표시 (다른 셀 침범 방지)
+        # 이미지 — A열 셀 안에서만 표시, 셀 내 최대 크기로 배치
         ws.write(data_row, COL_IMG, "", f_img_cell)
         if img_b64:
             try:
@@ -1084,16 +1084,17 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(img_bytes); tmp_path = tmp.name
                     temp_files.append(tmp_path)
-                # 셀 폭·높이 모두 제한 — 이미지가 셀 바깥으로 절대 나가지 않음
-                cell_w_px = IMG_COL_PX
-                cell_h_px = int(ROW_H_ITEM * 0.96)  # 행 높이(pt) → 픽셀 근사
-                scale = min(cell_w_px / orig_w, cell_h_px / orig_h) * 0.85
+                # A열 폭 14chars → 약 100px, 행 높이 72pt → 약 96px
+                # 여백 4px씩 제외한 실사용 영역으로 scale 계산
+                cell_w_px = 96   # 100 - 4px 여백
+                cell_h_px = 92   # 96 - 4px 여백
+                scale = min(cell_w_px / orig_w, cell_h_px / orig_h)  # 0.85 제거 → 최대화
                 fw = orig_w * scale; fh = orig_h * scale
                 ws.insert_image(data_row, COL_IMG, tmp_path, {
                     'x_scale': scale, 'y_scale': scale,
-                    'x_offset': max((cell_w_px - fw) / 2, 0),
-                    'y_offset': max((cell_h_px - fh) / 2, 0),
-                    'object_position': 2,   # 셀 크기에 맞춰 이동·크기조절 안 함(셀 밖 미침범)
+                    'x_offset': max(int((cell_w_px - fw) / 2), 0),
+                    'y_offset': max(int((cell_h_px - fh) / 2), 0),
+                    'object_position': 2,
                     'url': None
                 })
             except:

@@ -867,104 +867,151 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
 
 def create_quote_excel(final_data_list, service_items, quote_name, quote_date, form_type, price_labels, buyer_info, remarks):
     """
-    견적서 Excel 생성 — 첨부 이미지 양식과 동일한 레이아웃
-    행 구조:
-      row 0      : 제목 "견 적 서" (전체 병합)
-      row 1~6    : 좌측 수신정보 | 우측 공급자정보 (각 6행)
-      row 7      : 인사말 (좌측 병합)
-      row 8      : 품목 테이블 헤더
-      row 9~     : 품목 데이터
-      마지막-2   : 자재비 합계
-      마지막-1   : 특약사항 헤더
-      마지막     : 특약사항 내용
+    견적서 Excel 생성
+    ─ 사용자 지정 폰트 크기 기준 ─
+    정보 레이블/값(업태 제외): 11pt  |  업태/종목 값: 10pt
+    인사말: 11pt  |  헤더행(9행): 12pt
+    품목정보: 12pt  |  단위/수량/단가/금액: 14pt
+    자재비합계: 16pt  |  특약사항 헤더+내용: 14pt
     """
     output = io.BytesIO()
     workbook = xlsxwriter.Workbook(output, {'in_memory': True})
     ws = workbook.add_worksheet("견적서")
     drive_file_map = get_drive_file_map()
 
-    # ── 포맷 정의 ──
+    FN = '맑은 고딕'  # 기본 폰트
+
     def fmt(**kw):
-        base = {'font_name': '맑은 고딕', 'font_size': 10, 'valign': 'vcenter', 'border': 1}
+        base = {'font_name': FN, 'valign': 'vcenter', 'border': 1}
         base.update(kw)
         return workbook.add_format(base)
 
-    f_title   = fmt(bold=True, font_size=18, align='center', border=0)
-    f_lbl     = fmt(bold=True, bg_color='#F0F0F0', align='center', text_wrap=False, font_size=9)
-    f_val     = fmt(align='left',  text_wrap=False, font_size=9)   # ← text_wrap 제거
-    f_val_r   = fmt(align='right', text_wrap=False, font_size=9)
-    f_hdr     = fmt(bold=True, bg_color='#F0F0F0', align='center', text_wrap=True, font_size=10)
-    f_name    = fmt(bold=True, align='left', text_wrap=True, font_size=10)
-    f_spec    = fmt(align='left', text_wrap=True, font_size=8, font_color='#555555')
-    f_center  = fmt(align='center', font_size=10)
-    f_num     = fmt(align='right',  num_format='#,##0', font_size=10)
-    f_total   = fmt(bold=True, bg_color='#E6E6E6', align='center', num_format='#,##0', font_size=11)
-    f_total_v = fmt(bold=True, bg_color='#E6E6E6', align='right',  num_format='#,##0', font_size=11)
-    f_rmk_hdr = fmt(bold=True, bg_color='#F0F0F0', align='left', font_size=10)
-    f_rmk_val = fmt(align='left', text_wrap=True, font_size=10)
-    f_img_cell= fmt(align='center', font_size=10)
-    f_greet   = fmt(align='left', text_wrap=True, font_size=9, border=1)
+    # ── 폰트 크기별 포맷 ──
+    # 제목
+    f_title    = fmt(bold=True, font_size=20, align='center', border=0)
 
-    # ── 컬럼 인덱스 & 폭 (단위: 엑셀 문자 폭)
-    # basic 모드: A(이미지) B(품목정보) C(단위) D(수량) E(단가) F(금액) G(비고)
-    # profit 모드: A B C D E F(금액1) G(단가2) H(금액2) I(이익율)
+    # 정보 영역 (레이블 굵게, 값 일반) — 11pt 기본
+    f_lbl      = fmt(bold=True, bg_color='#F0F0F0', align='center', font_size=11, text_wrap=False)
+    f_val_11   = fmt(align='left', font_size=11, text_wrap=False)          # 일반 정보값 11pt
+    f_val_10   = fmt(align='left', font_size=10, text_wrap=False)          # 업태/종목 값 10pt (긴 텍스트)
+
+    # 인사말 — 11pt
+    f_greet    = fmt(align='left', font_size=11, text_wrap=True, border=1)
+
+    # 테이블 헤더 (9행) — 12pt 굵게
+    f_hdr      = fmt(bold=True, bg_color='#F0F0F0', align='center', font_size=12, text_wrap=True)
+
+    # 품목정보 — 12pt (품목명 굵게, 규격·코드 보통)
+    f_item_name = fmt(bold=True, align='left', font_size=12, text_wrap=True)
+
+    # 단위 / 수량 / 단가 / 금액 — 14pt
+    f_center_14 = fmt(align='center', font_size=14)
+    f_num_14    = fmt(align='right',  font_size=14, num_format='#,##0')
+
+    # 이미지 셀
+    f_img_cell  = fmt(align='center', font_size=11)
+
+    # 자재비 합계 — 16pt 굵게
+    f_total_lbl = fmt(bold=True, bg_color='#E6E6E6', align='center', font_size=16)
+    f_total_val = fmt(bold=True, bg_color='#E6E6E6', align='right',  font_size=16, num_format='#,##0')
+    f_total_emp = fmt(bold=True, bg_color='#E6E6E6', align='center', font_size=16)
+
+    # 추가비용
+    f_svc_hdr  = fmt(bold=True, bg_color='#FFF9C4', align='center', font_size=13)
+    f_svc_val  = fmt(align='left', font_size=12)
+    f_svc_num  = fmt(align='right', font_size=12, num_format='#,##0')
+
+    # 특약사항 — 14pt
+    f_rmk_hdr  = fmt(bold=True, bg_color='#F0F0F0', align='center', font_size=14)
+    f_rmk_val  = fmt(align='left', font_size=14, text_wrap=True)
+
+    # ── 컬럼 구성 ──
+    # basic : A(이미지) B(품목정보) C(단위) D(수량) E(단가) F(금액) G(비고)  → 7컬럼
+    # profit: A B C D E F(금액1) G(단가2) H(금액2) I(이익율)               → 9컬럼
     if form_type == "basic":
         NUM_COLS = 7
-        # 컬럼 폭 확대 — 특히 품목정보(B) 넓게
-        col_widths = [14, 34, 7, 7, 15, 15, 9]
+        col_widths = [16, 36, 8, 8, 16, 16, 10]
         COL_IMG, COL_INFO, COL_UNIT, COL_QTY, COL_P1, COL_AMT, COL_RMK = range(7)
         LAST_COL = 6
     else:
         NUM_COLS = 9
-        col_widths = [14, 30, 7, 7, 13, 15, 13, 15, 11]
+        col_widths = [16, 32, 8, 8, 14, 16, 14, 16, 12]
         COL_IMG, COL_INFO, COL_UNIT, COL_QTY, COL_P1, COL_AMT1, COL_P2, COL_AMT2, COL_PROF = range(9)
         LAST_COL = 8
 
     for ci, cw in enumerate(col_widths):
         ws.set_column(ci, ci, cw)
 
-    # ── ROW 0: 제목 ──
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # ROW 0 : 제목
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     ws.merge_range(0, 0, 0, LAST_COL, '견 적 서', f_title)
-    ws.set_row(0, 30)
+    ws.set_row(0, 36)
 
-    # ── ROW 1~6: 정보 2단 테이블 ──
-    # 좌측: 컬럼 0(레이블), 1(값)   /   우측: 컬럼 4(레이블), 5(값) — 컬럼 2,3은 좌측 값에 병합
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # ROW 1~6 : 정보 2단 테이블
+    #   좌: col0(레이블) | col1(값, 단독 — 병합 안 함)
+    #   우: col2(레이블) | col3~LAST_COL(값 병합)
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     serial    = buyer_info.get('serial', quote_date or '')
     recipient = buyer_info.get('recipient', '')
     ref       = buyer_info.get('ref', '')
     tel_buyer = buyer_info.get('phone', '/')
     pay_cond  = buyer_info.get('pay_cond', '/')
     valid_per = buyer_info.get('valid_period', '견적 후 15일 이내')
-    manager   = buyer_info.get('manager', '문창근 부장')
+    manager   = buyer_info.get('manager', '')
 
-    left_rows  = [("일련번호", serial), ("수  신", recipient or '/'), ("참  조", ref or '/'),
-                  ("TEL / FAX", tel_buyer), ("결재조건", pay_cond), ("유효기간", valid_per)]
-    right_rows = [("사업자등록번호", "411-81-91898"),
-                  ("회사명/대표", "주식회사 신진켐텍 / 박형석"),
-                  ("주  소", "경기도 이천시 부발읍 황무로 1859-157"),
-                  ("업태/종목", "제조,도소매/산업용 밸브, 파이프 및 부속품 제조업"),
-                  ("담당자", manager),
-                  ("TEL/FAX", "031-638-1809 / 031-635-1801")]
+    left_rows  = [
+        ("일련번호",  serial or '/'),
+        ("수  신",    recipient or '/'),
+        ("참  조",    ref or '/'),
+        ("TEL / FAX", tel_buyer or '/'),
+        ("결재조건",  pay_cond),
+        ("유효기간",  valid_per),
+    ]
+    right_rows = [
+        ("사업자등록번호", "411-81-91898"),
+        ("회사명/대표",   "주식회사 신진켐텍 / 박형석"),
+        ("주  소",        "경기도 이천시 부발읍 황무로 1859-157"),
+        ("업태/종목",     "제조,도소매/산업용 밸브, 파이프 및 부속품 제조업"),
+        ("담당자",        manager),
+        ("TEL/FAX",       "031-638-1809 / 031-635-1801"),
+    ]
 
-    # 좌측 값 열: 0,1,2 / 우측: 3,4 + 나머지
-    L_LBL = 0; L_VAL_S = 1; L_VAL_E = 2   # 좌 레이블·값 범위
-    R_LBL = 3; R_VAL_S = 4; R_VAL_E = LAST_COL  # 우 레이블·값 범위
+    # 좌: col0=레이블, col1=값(단독)
+    # 우: col2=레이블, col3~LAST_COL=값 병합
+    L_LBL = 0; L_VAL = 1
+    R_LBL = 2; R_VAL_S = 3; R_VAL_E = LAST_COL
 
     for i, ((ll, lv), (rl, rv)) in enumerate(zip(left_rows, right_rows)):
         r = i + 1
-        ws.set_row(r, 18)   # ↑ 14→18
-        ws.write(r, L_LBL, ll, f_lbl)
-        ws.merge_range(r, L_VAL_S, r, L_VAL_E, lv, f_val)
-        ws.write(r, R_LBL, rl, f_lbl)
-        ws.merge_range(r, R_VAL_S, r, R_VAL_E, rv, f_val)
+        ws.set_row(r, 22)  # 행 높이 22pt
 
-    # ── ROW 7: 인사말 ──
+        # 좌측
+        ws.write(r, L_LBL, ll, f_lbl)
+        ws.write(r, L_VAL, lv, f_val_11)
+
+        # 우측 레이블
+        ws.write(r, R_LBL, rl, f_lbl)
+
+        # 우측 값 — 업태/종목(i==3)은 10pt, 나머지 11pt
+        rv_fmt = f_val_10 if i == 3 else f_val_11
+        if R_VAL_S < R_VAL_E:
+            ws.merge_range(r, R_VAL_S, r, R_VAL_E, rv, rv_fmt)
+        else:
+            ws.write(r, R_VAL_S, rv, rv_fmt)
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # ROW 7 : 인사말 — 11pt, 행 높이 36.4
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     greeting = "1.귀사의 일의 번창을 기원합니다.\n2.하기와 같이 견적드리오니 검토하기 바랍니다."
     ws.merge_range(7, 0, 7, LAST_COL, greeting, f_greet)
-    ws.set_row(7, 28)
+    ws.set_row(7, 36.4)
 
-    # ── ROW 8: 테이블 헤더 ──
-    ws.set_row(8, 18)
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # ROW 8 : 테이블 헤더 — 12pt
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ws.set_row(8, 24)
     ws.write(8, COL_IMG,  "이미지", f_hdr)
     ws.write(8, COL_INFO, "품목정보", f_hdr)
     ws.write(8, COL_UNIT, "단위", f_hdr)
@@ -976,20 +1023,22 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
     else:
         l1 = price_labels[0] if price_labels else "단가1"
         l2 = price_labels[1] if len(price_labels) > 1 else "단가2"
-        ws.write(8, COL_P1,   l1,     f_hdr)
-        ws.write(8, COL_AMT1, "금액",  f_hdr)
-        ws.write(8, COL_P2,   l2,     f_hdr)
-        ws.write(8, COL_AMT2, "금액",  f_hdr)
+        ws.write(8, COL_P1,   l1,      f_hdr)
+        ws.write(8, COL_AMT1, "금액",   f_hdr)
+        ws.write(8, COL_P2,   l2,      f_hdr)
+        ws.write(8, COL_AMT2, "금액",   f_hdr)
         ws.write(8, COL_PROF, "이익율", f_hdr)
 
-    # ── 품목 데이터 ──
-    ROW_H_PT = 60   # 이미지 여유 있게
-    data_row  = 9
-    total_a1  = 0; total_a2 = 0; total_profit = 0; svc_total = 0
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # ROW 9~ : 품목 데이터
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ROW_H_ITEM = 72   # 품목 행 높이(이미지 충분히)
+    data_row = 9
+    total_a1 = 0; total_a2 = 0; svc_total = 0
     temp_files = []
 
     for item in final_data_list:
-        ws.set_row(data_row, ROW_H_PT)
+        ws.set_row(data_row, ROW_H_ITEM)
 
         try: qty = int(float(item.get("수량", 0)))
         except: qty = 0
@@ -1002,7 +1051,7 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
         img_id  = get_best_image_id(code, item.get("image_data"), drive_file_map)
         img_b64 = download_image_by_id(img_id)
 
-        # 이미지 삽입
+        # 이미지
         ws.write(data_row, COL_IMG, "", f_img_cell)
         if img_b64:
             try:
@@ -1013,30 +1062,30 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(img_bytes); tmp_path = tmp.name
                     temp_files.append(tmp_path)
-                cell_w_px = 105; cell_h_px = 80
+                cell_w_px = 120; cell_h_px = 96
                 scale = min(cell_w_px / orig_w, cell_h_px / orig_h) * 0.88
                 fw = orig_w * scale; fh = orig_h * scale
                 ws.insert_image(data_row, COL_IMG, tmp_path, {
                     'x_scale': scale, 'y_scale': scale,
-                    'x_offset': (cell_w_px - fw) / 2,
-                    'y_offset': (cell_h_px - fh) / 2,
+                    'x_offset': max((cell_w_px - fw) / 2, 0),
+                    'y_offset': max((cell_h_px - fh) / 2, 0),
                     'object_position': 1
                 })
-            except: ws.write(data_row, COL_IMG, "No Img", f_center)
-        else:
-            ws.write(data_row, COL_IMG, "", f_img_cell)
+            except:
+                ws.write(data_row, COL_IMG, "No Img", f_img_cell)
 
-        # 품목정보 (품목명 굵게 + 규격·코드 작게 — text_wrap으로 3줄)
-        item_text = (f"{item.get('품목', '')}\n"
-                     f"{item.get('규격', '')}\n"
-                     f"{code}")
-        ws.write(data_row, COL_INFO, item_text, f_name)
-        ws.write(data_row, COL_UNIT, item.get("단위", "EA") or "EA", f_center)
-        ws.write(data_row, COL_QTY,  qty, f_center)
+        # 품목정보 (품목명\n규격\n코드) — 12pt 굵게
+        item_text = f"{item.get('품목', '')}\n{item.get('규격', '')}\n{code}"
+        ws.write(data_row, COL_INFO, item_text, f_item_name)
 
+        # 단위 / 수량 — 14pt
+        ws.write(data_row, COL_UNIT, item.get("단위", "EA") or "EA", f_center_14)
+        ws.write(data_row, COL_QTY,  qty,                             f_center_14)
+
+        # 단가 / 금액 — 14pt
         if form_type == "basic":
-            ws.write(data_row, COL_P1,  p1, f_num)
-            ws.write(data_row, COL_AMT, a1, f_num)
+            ws.write(data_row, COL_P1,  p1, f_num_14)
+            ws.write(data_row, COL_AMT, a1, f_num_14)
             ws.write(data_row, COL_RMK, "", f_img_cell)
         else:
             try: p2 = int(float(item.get("price_2", 0)))
@@ -1044,51 +1093,65 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
             a2 = p2 * qty
             profit = a2 - a1
             rate = (profit / a2 * 100) if a2 else 0
-            total_a2 += a2; total_profit += profit
-            ws.write(data_row, COL_P1,   p1,            f_num)
-            ws.write(data_row, COL_AMT1, a1,            f_num)
-            ws.write(data_row, COL_P2,   p2,            f_num)
-            ws.write(data_row, COL_AMT2, a2,            f_num)
-            ws.write(data_row, COL_PROF, f"{rate:.1f}%", f_center)
+            total_a2 += a2
+            ws.write(data_row, COL_P1,   p1,            f_num_14)
+            ws.write(data_row, COL_AMT1, a1,            f_num_14)
+            ws.write(data_row, COL_P2,   p2,            f_num_14)
+            ws.write(data_row, COL_AMT2, a2,            f_num_14)
+            ws.write(data_row, COL_PROF, f"{rate:.1f}%", f_center_14)
 
         data_row += 1
 
     # ── 추가 비용 ──
     if service_items:
-        ws.set_row(data_row, 14)
-        ws.merge_range(data_row, 0, data_row, LAST_COL, "[ 추가 비용 ]", f_rmk_hdr)
+        ws.set_row(data_row, 20)
+        ws.merge_range(data_row, 0, data_row, LAST_COL, "[ 추가 비용 ]", f_svc_hdr)
         data_row += 1
         for s in service_items:
-            ws.set_row(data_row, 14)
+            ws.set_row(data_row, 20)
             amt_col = COL_AMT if form_type == "basic" else COL_AMT2
-            ws.merge_range(data_row, 0, data_row, amt_col - 1, s['항목'], f_val)
-            ws.write(data_row, amt_col, s['금액'], f_num)
-            # 나머지 빈 셀
+            if amt_col > 0:
+                ws.merge_range(data_row, 0, data_row, amt_col - 1, s['항목'], f_svc_val)
+            else:
+                ws.write(data_row, 0, s['항목'], f_svc_val)
+            ws.write(data_row, amt_col, s['금액'], f_svc_num)
             for c in range(amt_col + 1, NUM_COLS):
                 ws.write(data_row, c, "", f_img_cell)
             svc_total += s['금액']
             data_row += 1
 
-    # ── 자재비 합계 행 ──
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 자재비 합계 — 16pt, 행 높이 30
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     final_total = (total_a1 if form_type == "basic" else total_a2) + svc_total
-    ws.set_row(data_row, 18)
+    ws.set_row(data_row, 30)
     if form_type == "basic":
-        ws.merge_range(data_row, 0, data_row, COL_P1, "자재비 합계", f_total)
-        ws.write(data_row, COL_AMT, final_total, f_total_v)
-        ws.write(data_row, COL_RMK, "", f_total)
+        ws.merge_range(data_row, 0, data_row, COL_P1, "자재비 합계", f_total_lbl)
+        ws.write(data_row, COL_AMT, final_total, f_total_val)
+        ws.write(data_row, COL_RMK, "",          f_total_emp)
     else:
-        ws.merge_range(data_row, 0, data_row, COL_P2, "자재비 합계", f_total)
-        ws.write(data_row, COL_AMT2, final_total, f_total_v)
-        ws.write(data_row, COL_PROF, "", f_total)
+        ws.merge_range(data_row, 0, data_row, COL_P2, "자재비 합계", f_total_lbl)
+        ws.write(data_row, COL_AMT2, final_total, f_total_val)
+        ws.write(data_row, COL_PROF, "",           f_total_emp)
     data_row += 1
 
-    # ── 특약사항 및 비고 ──
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 빈 행 (합계 ~ 특약사항 사이)
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ws.set_row(data_row, 10)
+    for c in range(NUM_COLS):
+        ws.write(data_row, c, "", fmt(border=0))
+    data_row += 1
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 특약사항 및 비고 — 14pt, 가운데 정렬 헤더
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if remarks:
-        ws.set_row(data_row, 14)
+        ws.set_row(data_row, 24)
         ws.merge_range(data_row, 0, data_row, LAST_COL, "특약사항 및 비고", f_rmk_hdr)
         data_row += 1
         line_count = max(remarks.count('\n') + 1, 2)
-        ws.set_row(data_row, max(14 * line_count, 30))
+        ws.set_row(data_row, max(20 * line_count, 40))
         ws.merge_range(data_row, 0, data_row, LAST_COL, remarks, f_rmk_val)
 
     workbook.close()

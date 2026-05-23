@@ -1073,7 +1073,7 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
         img_id  = get_best_image_id(code, item.get("image_data"), drive_file_map)
         img_b64 = download_image_by_id(img_id)
 
-        # 이미지 — A열 셀 안에서만 표시, 셀 내 최대 크기로 배치
+        # 이미지 — 셀 안에서만 (가로·세로 침범 없음), 셀 내 최대 크기·중앙 배치
         ws.write(data_row, COL_IMG, "", f_img_cell)
         if img_b64:
             try:
@@ -1084,16 +1084,26 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(img_bytes); tmp_path = tmp.name
                     temp_files.append(tmp_path)
-                # A열 폭 14chars → 약 100px, 행 높이 72pt → 약 96px
-                # 여백 4px씩 제외한 실사용 영역으로 scale 계산
-                cell_w_px = 96   # 100 - 4px 여백
-                cell_h_px = 92   # 96 - 4px 여백
-                scale = min(cell_w_px / orig_w, cell_h_px / orig_h)  # 0.85 제거 → 최대화
-                fw = orig_w * scale; fh = orig_h * scale
+
+                # 엑셀 행 높이(pt) → 픽셀: 1pt = 4/3 px (96dpi 기준)
+                # ROW_H_ITEM=72pt → 96px
+                MARGIN = 4  # 상하좌우 여백(px)
+                cell_w_px = int(14 * 7.5) - MARGIN * 2   # A열 14chars → ≈105px → 여백 제외 97px
+                cell_h_px = int(ROW_H_ITEM * 4 / 3) - MARGIN * 2  # 72pt → 96px → 여백 제외 88px
+
+                scale = min(cell_w_px / orig_w, cell_h_px / orig_h)
+                fw = orig_w * scale
+                fh = orig_h * scale
+
+                # 중앙 정렬 offset (여백 + 남은 공간의 절반)
+                x_off = MARGIN + int((cell_w_px - fw) / 2)
+                y_off = MARGIN + int((cell_h_px - fh) / 2)
+
                 ws.insert_image(data_row, COL_IMG, tmp_path, {
-                    'x_scale': scale, 'y_scale': scale,
-                    'x_offset': max(int((cell_w_px - fw) / 2), 0),
-                    'y_offset': max(int((cell_h_px - fh) / 2), 0),
+                    'x_scale':  scale,
+                    'y_scale':  scale,
+                    'x_offset': x_off,
+                    'y_offset': y_off,
                     'object_position': 2,
                     'url': None
                 })

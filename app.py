@@ -3474,45 +3474,39 @@ else:
                 grouped[sc][k] = v
             mt1, mt2, mt3, mt4 = st.tabs(["50mm", "40mm", "기타", "전체"])
             # ── V12: 세션 캐시 + 카드 + 툴팁 렌더 ──────────────────────────
-        def get_cached_set_image(set_name, img_ref):
-            if "_img_cache" not in st.session_state:
-                st.session_state._img_cache = {}
-            if set_name not in st.session_state._img_cache:
-                st.session_state._img_cache[set_name] = get_image_from_drive(img_ref)
-            return st.session_state._img_cache.get(set_name)
+            def get_cached_set_image(set_name, img_ref):
+                if "_img_cache" not in st.session_state:
+                    st.session_state._img_cache = {}
+                if set_name not in st.session_state._img_cache:
+                    st.session_state._img_cache[set_name] = get_image_from_drive(img_ref)
+                return st.session_state._img_cache.get(set_name)
 
-        def render_inputs_with_key(d, pf):
-            cols = st.columns(4); res = {}
-            for i, (n, v) in enumerate(d.items()):
-                with cols[i % 4]:
-                    img_name = v.get("image") if isinstance(v, dict) else None
-                    # 구성품 툴팁 텍스트 생성
-                    recipe = v.get("recipe", {}) if isinstance(v, dict) else {}
-                    if recipe:
-                        pdb_local = {str(p.get("code","")): p.get("name","") for p in st.session_state.db.get("products", [])}
-                        tip_lines = [f"· {pdb_local.get(str(c), c)} ×{q}" for c, q in recipe.items()]
-                        tooltip_html = "<br>".join(tip_lines)
-                    else:
-                        tooltip_html = ""
-                    # 이미지 (세션 캐시 순차 로드)
-                    if img_name:
-                        b64 = get_cached_set_image(n, img_name)
-                    else:
-                        b64 = None
-                    # 카드 렌더
-                    img_html = f'<img src="{b64}" style="width:100%;border-radius:6px 6px 0 0;">' if b64 else '<div style="width:100%;height:110px;background:#2a2a2a;border-radius:6px 6px 0 0;display:flex;align-items:center;justify-content:center;color:#666;font-size:12px;">No Image</div>'
-                    tooltip_block = f'<div class="set-card-tooltip">{tooltip_html}</div>' if tooltip_html else ""
-                    st.markdown(f"""
-                    <div class="set-card-wrap">
-                        {img_html}
-                        {tooltip_block}
-                    </div>""", unsafe_allow_html=True)
-                    res[n] = st.number_input(n, 0, key=f"{pf}_{n}_input")
-            return res
+            def render_inputs_with_key(d, pf):
+                cols = st.columns(4); res = {}
+                for i, (n, v) in enumerate(d.items()):
+                    with cols[i % 4]:
+                        img_name = v.get("image") if isinstance(v, dict) else None
+                        recipe = v.get("recipe", {}) if isinstance(v, dict) else {}
+                        if recipe:
+                            pdb_local = {str(p.get("code","")): p.get("name","") for p in st.session_state.db.get("products", [])}
+                            tip_lines = [f"· {pdb_local.get(str(c), c)} ×{q}" for c, q in recipe.items()]
+                            tooltip_html = "<br>".join(tip_lines)
+                        else:
+                            tooltip_html = ""
+                        if img_name:
+                            b64 = get_cached_set_image(n, img_name)
+                        else:
+                            b64 = None
+                        img_html = f'<img src="{b64}" style="width:100%;border-radius:6px 6px 0 0;">' if b64 else '<div style="width:100%;height:110px;background:#2a2a2a;border-radius:6px 6px 0 0;display:flex;align-items:center;justify-content:center;color:#666;font-size:12px;">No Image</div>'
+                        tooltip_block = f'<div class="set-card-tooltip">{tooltip_html}</div>' if tooltip_html else ""
+                        st.markdown(f'<div class="set-card-wrap">{img_html}{tooltip_block}</div>', unsafe_allow_html=True)
+                        res[n] = st.number_input(n, 0, key=f"{pf}_{n}_input")
+                return res
+
             with mt1: inp_m_50 = render_inputs_with_key(grouped.get("50mm", {}), "m50")
             with mt2: inp_m_40 = render_inputs_with_key(grouped.get("40mm", {}), "m40")
             with mt3: inp_m_etc = render_inputs_with_key(grouped.get("기타", {}), "metc")
-            with mt4: inp_m_all = render_inputs_with_key(m_sets, "mall") 
+            with mt4: inp_m_all = render_inputs_with_key(m_sets, "mall")
             
             st.write("")
             if st.button("➕ 입력한 수량 세트 목록에 추가"):

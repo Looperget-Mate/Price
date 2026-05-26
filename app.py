@@ -80,39 +80,39 @@ DRIVE_SET_FOLDER_NAME = "Looperget_Images"
 ADMIN_FOLDER_NAME = "Looperget_Admin"
 ADMIN_PPT_NAME = "Set_Composition_Master.pptx"
 
+def _get_ds():
+    """항상 최신 drive_service 반환 (ttl=1800 캐시 기반)"""
+    return get_google_services()[1]
+
 def get_or_create_drive_folder():
-    if not drive_service: return None
+    ds = _get_ds()
+    if not ds: return None
     try:
         query_shared = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and sharedWithMe=true and trashed=false"
-        results_shared = drive_service.files().list(q=query_shared, fields="files(id)").execute()
+        results_shared = ds.files().list(q=query_shared, fields="files(id)").execute()
         files_shared = results_shared.get('files', [])
         if files_shared: return files_shared[0]['id']
-        
         query = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        results = drive_service.files().list(q=query, fields="files(id)").execute()
+        results = ds.files().list(q=query, fields="files(id)").execute()
         files = results.get('files', [])
         if files: return files[0]['id']
-        else:
-            file_metadata = {'name': DRIVE_FOLDER_NAME, 'mimeType': 'application/vnd.google-apps.folder'}
-            folder = drive_service.files().create(body=file_metadata, fields='id').execute()
-            return folder.get('id')
+        file_metadata = {'name': DRIVE_FOLDER_NAME, 'mimeType': 'application/vnd.google-apps.folder'}
+        folder = ds.files().create(body=file_metadata, fields='id').execute()
+        return folder.get('id')
     except Exception as e:
         err = str(e)
         if "Broken pipe" in err or "Errno 32" in err:
-            # 연결 끊김 → 재인증 후 재시도
             try:
                 get_google_services.clear()
-                ds2 = get_google_services()[1]
+                ds2 = _get_ds()
                 if ds2:
-                    query2 = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-                    r2 = ds2.files().list(q=query2, fields="files(id)").execute()
+                    q2 = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+                    r2 = ds2.files().list(q=q2, fields="files(id)").execute()
                     f2 = r2.get('files', [])
                     if f2: return f2[0]['id']
             except Exception:
                 pass
-        else:
-            st.warning(f"드라이브 연결 오류 (자동 재시도): {e}")
-        return None
+        return None  # st.warning 제거 → 반복 오류 메시지 차단
 
 def get_or_create_set_drive_folder():
     return get_or_create_drive_folder()
@@ -126,7 +126,7 @@ def upload_image_to_drive(file_obj, filename):
         buffer.seek(0)
         file_metadata = {'name': filename, 'parents': [folder_id]}
         media = MediaIoBaseUpload(buffer, mimetype=file_obj.type, resumable=False)
-        drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        _get_ds().files().create(body=file_metadata, media_body=media, fields='id').execute()
         return filename
     except Exception as e:
         st.error(f"업로드 실패: {e}")
@@ -141,7 +141,7 @@ def upload_set_image_to_drive(file_obj, filename):
         buffer.seek(0)
         file_metadata = {'name': filename, 'parents': [folder_id]}
         media = MediaIoBaseUpload(buffer, mimetype=file_obj.type, resumable=False)
-        file_info = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        file_info = _get_ds().files().create(body=file_metadata, media_body=media, fields='id').execute()
         return file_info.get('id')
     except Exception as e:
         error_msg = str(e)
@@ -161,7 +161,7 @@ def upload_bytes_to_drive(byte_data: bytes, filename: str, mimetype: str = "imag
         buffer.seek(0)
         file_metadata = {'name': filename, 'parents': [folder_id]}
         media = MediaIoBaseUpload(buffer, mimetype=mimetype, resumable=False)
-        file_info = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        file_info = _get_ds().files().create(body=file_metadata, media_body=media, fields='id').execute()
         return file_info.get('id')
     except Exception as e:
         st.error(f"업로드 실패: {e}")
@@ -204,9 +204,9 @@ def _do_download_image(ds, file_id):
     downloader = request.execute()
     with Image.open(io.BytesIO(downloader)) as img:
         img_rgb = img.convert('RGB')
-        img_rgb.thumbnail((120, 90))
+        img_rgb.thumbnail((300, 225))
         buffer = io.BytesIO()
-        img_rgb.save(buffer, format="JPEG", quality=70)
+        img_rgb.save(buffer, format="JPEG", quality=85)
         img_rgb.close()
     return f"data:image/jpeg;base64,{base64.b64encode(buffer.getvalue()).decode()}"
 
@@ -246,16 +246,16 @@ def get_admin_ppt_content():
     if not drive_service: return None
     try:
         q_folder = f"name='{ADMIN_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        res_folder = drive_service.files().list(q=q_folder, fields="files(id)").execute()
+        res_folder = _get_ds().files().list(q=q_folder, fields="files(id)").execute()
         folders = res_folder.get('files', [])
         if not folders: return None
         folder_id = folders[0]['id']
         q_file = f"name='{ADMIN_PPT_NAME}' and '{folder_id}' in parents and trashed=false"
-        res_file = drive_service.files().list(q=q_file, fields="files(id)").execute()
+        res_file = _get_ds().files().list(q=q_file, fields="files(id)").execute()
         files = res_file.get('files', [])
         if not files: return None
         file_id = files[0]['id']
-        request = drive_service.files().get_media(fileId=file_id)
+        request = _get_ds().files().get_media(fileId=file_id)
         return request.execute()
     except Exception:
         return None
@@ -1218,7 +1218,7 @@ document.addEventListener('DOMContentLoaded', function() {{
                     fmap = get_drive_file_map()
                     old_id = fmap.get(new_sname)
                     if old_id and drive_service:
-                        drive_service.files().delete(fileId=old_id).execute()
+                        _get_ds().files().delete(fileId=old_id).execute()
                 except: pass
                 new_id = upload_bytes_to_drive(uploaded_png.getvalue(), fname, "image/png")
                 if new_id:

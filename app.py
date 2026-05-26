@@ -577,26 +577,19 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
     """
     import streamlit.components.v1 as components
 
-    # ── 부속 팔레트 데이터 준비 (병렬 로딩으로 속도 개선) ──────────────
-    import concurrent.futures
-
-    def fetch_palette_item(p):
+    # ── 부속 팔레트 데이터 준비 (캐시 기반 순차 로딩) ──────────────────
+    # ※ ThreadPoolExecutor는 Streamlit Cloud에서 @st.cache_data 충돌 유발 -> 사용 금지
+    palette_items = []
+    for p in db_products:
         code = str(p.get("code", "")).strip().zfill(5)
         name = p.get("name", "")
         spec = p.get("spec", "-")
         img_id = drive_file_map.get(code) or (p.get("image") if len(str(p.get("image","") or "")) > 10 else None)
         if not img_id:
-            return None
-        b64 = get_image_from_drive(img_id)
-        if not b64:
-            return None
-        return {"code": code, "name": name, "spec": spec, "b64": b64}
-
-    palette_items = []
-    candidates = [p for p in db_products if drive_file_map.get(str(p.get("code","")).strip().zfill(5)) or len(str(p.get("image","") or "")) > 10]
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-        results = executor.map(fetch_palette_item, candidates)
-    palette_items = [r for r in results if r is not None]
+            continue
+        b64 = get_image_from_drive(img_id)  # ttl=3600 캐시 -> 최초 1회만 실제 다운로드
+        if b64:
+            palette_items.append({"code": code, "name": name, "spec": spec, "b64": b64})
 
     # ── 모드 선택 ─────────────────────────────────────────────────────
     builder_mode = st.radio("빌더 작업 모드", ["🖼️ 기존 세트 이미지 편집", "✨ 새 세트 만들기"], horizontal=True, key="builder_mode")

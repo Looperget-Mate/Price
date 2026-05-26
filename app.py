@@ -56,8 +56,8 @@ if not os.path.exists(FONT_BOLD):
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
-@st.cache_resource
-def get_google_services():
+def _build_google_services():
+    """구글 서비스 객체 생성 (재연결용)"""
     try:
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
@@ -67,6 +67,10 @@ def get_google_services():
     except Exception as e:
         st.error(f"구글 서비스 인증 실패: {e}")
         return None, None
+
+@st.cache_resource(ttl=1800)  # 30분마다 자동 재인증 → Broken Pipe 방지
+def get_google_services():
+    return _build_google_services()
 
 gc, drive_service = get_google_services()
 
@@ -93,7 +97,21 @@ def get_or_create_drive_folder():
             folder = drive_service.files().create(body=file_metadata, fields='id').execute()
             return folder.get('id')
     except Exception as e:
-        st.error(f"드라이브 폴더 오류: {e}")
+        err = str(e)
+        if "Broken pipe" in err or "Errno 32" in err:
+            # 연결 끊김 → 재인증 후 재시도
+            try:
+                get_google_services.clear()
+                ds2 = get_google_services()[1]
+                if ds2:
+                    query2 = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+                    r2 = ds2.files().list(q=query2, fields="files(id)").execute()
+                    f2 = r2.get('files', [])
+                    if f2: return f2[0]['id']
+            except Exception:
+                pass
+        else:
+            st.warning(f"드라이브 연결 오류 (자동 재시도): {e}")
         return None
 
 def get_or_create_set_drive_folder():
@@ -154,11 +172,13 @@ def get_drive_file_map():
     folder_id = get_or_create_drive_folder()
     if not folder_id: return {}
     file_map = {}
+    ds = get_google_services()[1]
+    if not ds: return {}
     try:
         query = f"'{folder_id}' in parents and trashed=false"
         page_token = None
         while True:
-            response = drive_service.files().list(q=query, spaces='drive', fields='nextPageToken, files(id, name)', pageToken=page_token).execute()
+            response = ds.files().list(q=query, spaces='drive', fields='nextPageToken, files(id, name)', pageToken=page_token).execute()
             files = response.get('files', [])
             for f in files:
                 name_stem = os.path.splitext(f['name'])[0]
@@ -168,29 +188,47 @@ def get_drive_file_map():
                 file_map[name_stem] = f['id']
             page_token = response.get('nextPageToken', None)
             if page_token is None: break
-    except Exception: pass
+    except Exception as e:
+        err = str(e)
+        if "Broken pipe" in err or "Errno 32" in err:
+            get_google_services.clear()  # 다음 호출 시 재인증
     return file_map
 
 @st.cache_data(ttl=600)
 def get_set_drive_file_map():
     return get_drive_file_map()
 
-# 이미지 다운로드 + 캐시 (ttl=3600, 팔레트 반복 로드 방지)
+def _do_download_image(ds, file_id):
+    """실제 드라이브 다운로드 (재시도 로직 분리)"""
+    request = ds.files().get_media(fileId=file_id)
+    downloader = request.execute()
+    with Image.open(io.BytesIO(downloader)) as img:
+        img_rgb = img.convert('RGB')
+        img_rgb.thumbnail((120, 90))
+        buffer = io.BytesIO()
+        img_rgb.save(buffer, format="JPEG", quality=70)
+        img_rgb.close()
+    return f"data:image/jpeg;base64,{base64.b64encode(buffer.getvalue()).decode()}"
+
+# 이미지 다운로드 + 캐시 (ttl=3600)
 @st.cache_data(ttl=3600, show_spinner=False)
 def download_image_by_id(file_id):
-    if not file_id or not drive_service: return None
+    if not file_id: return None
+    ds = get_google_services()[1]  # 항상 최신 서비스 객체 사용
+    if not ds: return None
     try:
-        request = drive_service.files().get_media(fileId=file_id)
-        downloader = request.execute()
-        with Image.open(io.BytesIO(downloader)) as img:
-            img_rgb = img.convert('RGB')
-            # 팔레트용: 120×90으로 축소 (메모리/전송량 대폭 절감)
-            img_rgb.thumbnail((120, 90))
-            buffer = io.BytesIO()
-            img_rgb.save(buffer, format="JPEG", quality=70)
-            img_rgb.close()
-        return f"data:image/jpeg;base64,{base64.b64encode(buffer.getvalue()).decode()}"
-    except Exception:
+        return _do_download_image(ds, file_id)
+    except Exception as e:
+        err = str(e)
+        if "Broken pipe" in err or "Errno 32" in err or "ConnectionReset" in err:
+            # 소켓 끊김 → 서비스 재생성 후 1회 재시도
+            try:
+                get_google_services.clear()  # cache_resource 강제 갱신
+                ds2 = get_google_services()[1]
+                if ds2:
+                    return _do_download_image(ds2, file_id)
+            except Exception:
+                pass
         return None
 
 @st.cache_data(ttl=3600)

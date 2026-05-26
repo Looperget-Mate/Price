@@ -577,17 +577,26 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
     """
     import streamlit.components.v1 as components
 
-    # ── 부속 팔레트 데이터 준비 ────────────────────────────────────────
-    palette_items = []
-    for p in db_products:
+    # ── 부속 팔레트 데이터 준비 (병렬 로딩으로 속도 개선) ──────────────
+    import concurrent.futures
+
+    def fetch_palette_item(p):
         code = str(p.get("code", "")).strip().zfill(5)
         name = p.get("name", "")
         spec = p.get("spec", "-")
         img_id = drive_file_map.get(code) or (p.get("image") if len(str(p.get("image","") or "")) > 10 else None)
-        if img_id:
-            b64 = get_image_from_drive(img_id)
-            if b64:
-                palette_items.append({"code": code, "name": name, "spec": spec, "b64": b64})
+        if not img_id:
+            return None
+        b64 = get_image_from_drive(img_id)
+        if not b64:
+            return None
+        return {"code": code, "name": name, "spec": spec, "b64": b64}
+
+    palette_items = []
+    candidates = [p for p in db_products if drive_file_map.get(str(p.get("code","")).strip().zfill(5)) or len(str(p.get("image","") or "")) > 10]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        results = executor.map(fetch_palette_item, candidates)
+    palette_items = [r for r in results if r is not None]
 
     # ── 모드 선택 ─────────────────────────────────────────────────────
     builder_mode = st.radio("빌더 작업 모드", ["🖼️ 기존 세트 이미지 편집", "✨ 새 세트 만들기"], horizontal=True, key="builder_mode")
@@ -606,6 +615,18 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
     palette_json = json.dumps(palette_items, ensure_ascii=False)
     mode_new = "true" if builder_mode == "✨ 새 세트 만들기" else "false"
     target_set_json = json.dumps(target_set_name)
+
+    # 기존 세트 이미지 b64 준비 (편집 모드)
+    target_set_img_b64 = "null"
+    if builder_mode == "🖼️ 기존 세트 이미지 편집" and target_set_name:
+        for cat_items in db_sets.values():
+            if target_set_name in cat_items:
+                img_ref = cat_items[target_set_name].get("image")
+                if img_ref and len(str(img_ref)) > 10:
+                    b64 = get_image_from_drive(img_ref)
+                    if b64:
+                        target_set_img_b64 = json.dumps(b64)
+                break
 
     html_code = f"""
 <!DOCTYPE html>
@@ -671,6 +692,15 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
     <button onclick="doRedo()">↪ 다시실행</button>
     <div class="sep"></div>
     <button onclick="clearCanvas()" style="color:#f88;">🗑 캔버스비우기</button>
+    <div class="sep"></div>
+    <label style="font-size:11px;color:#aaa;">캔버스</label>
+    <select id="canvas-size" onchange="resizeCanvas(this.value)"
+      style="background:#2d2d4e;color:#eee;border:1px solid #444;border-radius:4px;padding:3px 6px;font-size:12px;">
+      <option value="720,540">4:3 기본</option>
+      <option value="720,720">1:1 정방형</option>
+      <option value="960,540">16:9 와이드</option>
+      <option value="540,720">3:4 세로형</option>
+    </select>
     <div id="pipe-props" style="display:flex;align-items:center;gap:6px;">
       <label style="font-size:11px;color:#aaa;">색상</label>
       <input type="color" id="pipe-color" value="#333333" style="width:30px;height:22px;padding:0;border:none;background:none;cursor:pointer;">
@@ -765,8 +795,9 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
 <script>
 const MODE_NEW = {mode_new};
 const TARGET_SET = {target_set_json};
+const TARGET_SET_IMG_B64 = {target_set_img_b64};
 const PALETTE = {palette_json};
-const CW = 720, CH = 540;
+let CW = 720, CH = 540;
 
 let canvas, curMode = 'select';
 let pipeStart = null, isPiping = false;
@@ -807,6 +838,25 @@ window.onload = function() {{
 
     pushUndo();
     setMode('select');
+
+    // ── 기존 세트 이미지 캔버스 로드 (편집 모드) ─────────────────────
+    if (!MODE_NEW && TARGET_SET_IMG_B64) {{
+        fabric.Image.fromURL(TARGET_SET_IMG_B64, function(img) {{
+            const scale = Math.min(CW / img.width, CH / img.height);
+            img.set({{
+                left: 0, top: 0,
+                scaleX: scale, scaleY: scale,
+                selectable: false,
+                evented: false,
+                opacity: 0.82,
+                _isBgImage: true,
+            }});
+            canvas.add(img);
+            canvas.sendToBack(img);
+            canvas.renderAll();
+            setStatus('기존 이미지 로드됨 — 위에 부속을 배치하거나 PNG로 교체하세요.');
+        }});
+    }}
 }};
 
 // ── 팔레트 빌드 ─────────────────────────────────────────────────────
@@ -1067,6 +1117,15 @@ function saveAll() {{
 
 function setStatus(msg) {{ document.getElementById('status').textContent = msg; }}
 function setStatus2(msg) {{ document.getElementById('status2').textContent = msg; }}
+
+// ── 캔버스 크기 변경 ────────────────────────────────────────────────
+function resizeCanvas(val) {{
+    const parts = val.split(',');
+    CW = parseInt(parts[0]); CH = parseInt(parts[1]);
+    canvas.setWidth(CW); canvas.setHeight(CH);
+    canvas.renderAll();
+    setStatus(`캔버스 크기: ${{CW}}×${{CH}}`);
+}}
 
 // ── set-name-row 표시/숨김 ───────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', function() {{
@@ -1923,11 +1982,16 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
                 recipe = sets[name].get('recipe', {})
                 break
 
-        # 구성품 텍스트 (코드 → 이름 변환)
+        # 구성품 텍스트 (코드 → 이름+규격+코드 변환)
         recipe_lines = []
         for p_code, p_qty in recipe.items():
-            p_name = prod_code_to_name.get(str(p_code).strip().zfill(5), str(p_code))
-            recipe_lines.append(f"  · {p_name}  ×{p_qty}")
+            norm_code = str(p_code).strip().zfill(5)
+            p_name = prod_code_to_name.get(norm_code, str(p_code))
+            # 규격 조회
+            p_prod = next((p for p in db_products if str(p.get("code","")).strip().zfill(5) == norm_code), None)
+            p_spec = p_prod.get("spec", "") if p_prod else ""
+            spec_str = f" [{p_spec}]" if p_spec and p_spec != "-" else ""
+            recipe_lines.append(f"  · {p_name}{spec_str}  ×{p_qty}  (#{norm_code})")
         recipe_text = "\n".join(recipe_lines)
 
         # 행 높이: 세트명 1줄 + 구성품 줄 수 기준
@@ -2223,15 +2287,48 @@ def create_composition_excel(set_cart, pipe_cart, final_data_list, db_products, 
     ws1 = workbook.add_worksheet("부속세트")
     ws1.write(0, 0, "이미지", fmt_header)
     ws1.write(0, 1, "세트명", fmt_header)
-    ws1.write(0, 2, "구분", fmt_header)
-    ws1.write(0, 3, "수량", fmt_header)
+    ws1.write(0, 2, "구성품 (품목명 / 규격 / 코드 / 수량)", fmt_header)
+    ws1.write(0, 3, "구분", fmt_header)
+    ws1.write(0, 4, "수량", fmt_header)
     ws1.set_column(0, 0, 15)
-    ws1.set_column(1, 1, 30)
-    
+    ws1.set_column(1, 1, 22)
+    ws1.set_column(2, 2, 55)
+    ws1.set_column(3, 3, 12)
+    ws1.set_column(4, 4, 8)
+
+    # 엑셀용 구성품 포맷
+    fmt_recipe = workbook.add_format({'border': 1, 'align': 'left', 'valign': 'top', 'text_wrap': True, 'font_size': 9})
+
+    prod_code_to_info = {
+        str(p.get("code","")).strip().zfill(5): p
+        for p in db_products
+    }
+
     row = 1
     for item in set_cart:
-        ws1.set_row(row, 80)
         name = item.get('name')
+        # 세트 레시피 조회
+        recipe = {}
+        for cat, sets in db_sets.items():
+            if name in sets:
+                recipe = sets[name].get('recipe', {})
+                break
+
+        # 구성품 텍스트 조합
+        recipe_lines = []
+        for p_code, p_qty in recipe.items():
+            norm = str(p_code).strip().zfill(5)
+            p_info = prod_code_to_info.get(norm, {})
+            p_name = p_info.get("name", norm)
+            p_spec = p_info.get("spec", "")
+            spec_str = f" [{p_spec}]" if p_spec and p_spec != "-" else ""
+            recipe_lines.append(f"· {p_name}{spec_str}  #{norm}  ×{p_qty}")
+        recipe_text = "\n".join(recipe_lines) if recipe_lines else "-"
+
+        n_lines = max(len(recipe_lines), 1)
+        row_h = max(80, n_lines * 18)
+        ws1.set_row(row, row_h)
+
         img_id = None
         for cat, sets in db_sets.items():
             if name in sets:
@@ -2239,8 +2336,9 @@ def create_composition_excel(set_cart, pipe_cart, final_data_list, db_products, 
                 break
         insert_scaled_image(ws1, row, 0, download_image_by_id(img_id))
         ws1.write(row, 1, name, fmt_left)
-        ws1.write(row, 2, item.get('type'), fmt_center)
-        ws1.write(row, 3, item.get('qty'), fmt_center)
+        ws1.write(row, 2, recipe_text, fmt_recipe)
+        ws1.write(row, 3, item.get('type'), fmt_center)
+        ws1.write(row, 4, item.get('qty'), fmt_center)
         row += 1
 
     ws2 = workbook.add_worksheet("배관물량")

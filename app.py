@@ -175,7 +175,8 @@ def get_drive_file_map():
 def get_set_drive_file_map():
     return get_drive_file_map()
 
-# 메모리 누수 방지 (with 구문 및 img.close() 사용)
+# 이미지 다운로드 + 캐시 (ttl=3600, 팔레트 반복 로드 방지)
+@st.cache_data(ttl=3600, show_spinner=False)
 def download_image_by_id(file_id):
     if not file_id or not drive_service: return None
     try:
@@ -183,9 +184,10 @@ def download_image_by_id(file_id):
         downloader = request.execute()
         with Image.open(io.BytesIO(downloader)) as img:
             img_rgb = img.convert('RGB')
-            img_rgb.thumbnail((300, 225))
+            # 팔레트용: 120×90으로 축소 (메모리/전송량 대폭 절감)
+            img_rgb.thumbnail((120, 90))
             buffer = io.BytesIO()
-            img_rgb.save(buffer, format="JPEG")
+            img_rgb.save(buffer, format="JPEG", quality=70)
             img_rgb.close()
         return f"data:image/jpeg;base64,{base64.b64encode(buffer.getvalue()).decode()}"
     except Exception:
@@ -577,19 +579,39 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
     """
     import streamlit.components.v1 as components
 
-    # ── 부속 팔레트 데이터 준비 (캐시 기반 순차 로딩) ──────────────────
-    # ※ ThreadPoolExecutor는 Streamlit Cloud에서 @st.cache_data 충돌 유발 -> 사용 금지
+    # ── 부속 팔레트 데이터 준비 ────────────────────────────────────────
+    # 전략: 이미지 있는 품목만, 최대 80개, 캐시 활용
+    PALETTE_MAX = 80
     palette_items = []
-    for p in db_products:
+    # 부속 카테고리 우선 정렬 (캔버스에서 주로 사용하는 것이 먼저 오도록)
+    priority_cats = ["부속", "주배관", "가지관"]
+    def cat_priority(p):
+        cat = p.get("category", "")
+        for i, c in enumerate(priority_cats):
+            if c in cat:
+                return i
+        return 99
+    sorted_products = sorted(db_products, key=cat_priority)
+
+    palette_ph = st.empty()
+    palette_ph.info("⏳ 부속 팔레트 이미지 로딩 중...")
+    loaded = 0
+    for p in sorted_products:
+        if loaded >= PALETTE_MAX:
+            break
         code = str(p.get("code", "")).strip().zfill(5)
         name = p.get("name", "")
         spec = p.get("spec", "-")
-        img_id = drive_file_map.get(code) or (p.get("image") if len(str(p.get("image","") or "")) > 10 else None)
+        img_id = drive_file_map.get(code) or (
+            p.get("image") if len(str(p.get("image","") or "")) > 10 else None
+        )
         if not img_id:
             continue
-        b64 = get_image_from_drive(img_id)  # ttl=3600 캐시 -> 최초 1회만 실제 다운로드
+        b64 = get_image_from_drive(img_id)
         if b64:
             palette_items.append({"code": code, "name": name, "spec": spec, "b64": b64})
+            loaded += 1
+    palette_ph.empty()
 
     # ── 모드 선택 ─────────────────────────────────────────────────────
     builder_mode = st.radio("빌더 작업 모드", ["🖼️ 기존 세트 이미지 편집", "✨ 새 세트 만들기"], horizontal=True, key="builder_mode")

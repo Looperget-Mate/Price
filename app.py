@@ -199,15 +199,25 @@ def get_set_drive_file_map():
     return get_drive_file_map()
 
 def _do_download_image(ds, file_id):
-    """실제 드라이브 다운로드 (재시도 로직 분리)"""
+    """실제 드라이브 다운로드 (재시도 로직 분리)
+    - 원본 비율 유지 (지주대 등 세장형 품목 대응)
+    - 300×225 박스 안에 중앙 패딩 배치
+    - 드라이브 파일 원본은 건드리지 않음
+    """
     request = ds.files().get_media(fileId=file_id)
     downloader = request.execute()
     with Image.open(io.BytesIO(downloader)) as img:
         img_rgb = img.convert('RGB')
-        img_rgb.thumbnail((300, 225))
-        buffer = io.BytesIO()
-        img_rgb.save(buffer, format="JPEG", quality=85)
+        # 비율 유지하면서 300×225 박스 안에 맞춤 (LANCZOS: 고품질 다운샘플링)
+        img_rgb.thumbnail((300, 225), Image.LANCZOS)
+        # 흰 배경 300×225 캔버스에 중앙 배치 (비율이 달라도 여백으로 채움)
+        padded = Image.new('RGB', (300, 225), (255, 255, 255))
+        offset_x = (300 - img_rgb.width) // 2
+        offset_y = (225 - img_rgb.height) // 2
+        padded.paste(img_rgb, (offset_x, offset_y))
         img_rgb.close()
+        buffer = io.BytesIO()
+        padded.save(buffer, format="JPEG", quality=85)
     return f"data:image/jpeg;base64,{base64.b64encode(buffer.getvalue()).decode()}"
 
 # 이미지 다운로드 + 캐시 (ttl=3600)

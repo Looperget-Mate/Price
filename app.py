@@ -80,45 +80,50 @@ DRIVE_SET_FOLDER_NAME = "Looperget_Images"
 ADMIN_FOLDER_NAME = "Looperget_Admin"
 ADMIN_PPT_NAME = "Set_Composition_Master.pptx"
 
+# ==========================================
+# [A-1] 드라이브 이미지 폴더 분리
+#   products/ : 품목 이미지 (파일명 = 품목코드)
+#   sets/     : 세트 이미지 (파일명 = 세트명)
+#   폴더 ID는 변경 시 이 두 상수만 교체 (코드 재배포 불필요하도록 한 곳에 모음)
+#   기존 Looperget_Images 루트는 fallback 스캔으로 계속 인식 → 점진 이행/롤백 안전
+# ==========================================
+PRODUCT_IMG_FOLDER_ID = "19rurab1aTRfECIL2VT81qjSGHru4K4Nm"
+SET_IMG_FOLDER_ID     = "1T9KRG297qSSEDYdNxHr2eHinWplwJ42V"
+
 def _get_ds():
     """항상 최신 drive_service 반환 (ttl=1800 캐시 기반)"""
     return get_google_services()[1]
 
-def get_or_create_drive_folder():
+def _find_legacy_root_folder():
+    """기존 Looperget_Images 루트 폴더 ID 조회 (fallback 스캔용).
+    분리 전 루트에 남아있을 수 있는 파일 인식을 위해 유지."""
     ds = _get_ds()
     if not ds: return None
     try:
         query_shared = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and sharedWithMe=true and trashed=false"
-        results_shared = ds.files().list(q=query_shared, fields="files(id)").execute()
-        files_shared = results_shared.get('files', [])
-        if files_shared: return files_shared[0]['id']
+        rs = ds.files().list(q=query_shared, fields="files(id)").execute().get('files', [])
+        if rs: return rs[0]['id']
         query = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        results = ds.files().list(q=query, fields="files(id)").execute()
-        files = results.get('files', [])
-        if files: return files[0]['id']
-        file_metadata = {'name': DRIVE_FOLDER_NAME, 'mimeType': 'application/vnd.google-apps.folder'}
-        folder = ds.files().create(body=file_metadata, fields='id').execute()
-        return folder.get('id')
-    except Exception as e:
-        err = str(e)
-        if "Broken pipe" in err or "Errno 32" in err:
-            try:
-                get_google_services.clear()
-                ds2 = _get_ds()
-                if ds2:
-                    q2 = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-                    r2 = ds2.files().list(q=q2, fields="files(id)").execute()
-                    f2 = r2.get('files', [])
-                    if f2: return f2[0]['id']
-            except Exception:
-                pass
-        return None  # st.warning 제거 → 반복 오류 메시지 차단
+        r = ds.files().list(q=query, fields="files(id)").execute().get('files', [])
+        if r: return r[0]['id']
+    except Exception:
+        get_google_services.clear()
+    return None
+
+def get_or_create_drive_folder(kind="product"):
+    """용도별 폴더 ID 반환.
+    kind="product" → PRODUCT_IMG_FOLDER_ID
+    kind="set"     → SET_IMG_FOLDER_ID
+    (하위 호환: 인자 없이 호출하면 품목 폴더 반환)"""
+    if kind == "set":
+        return SET_IMG_FOLDER_ID
+    return PRODUCT_IMG_FOLDER_ID
 
 def get_or_create_set_drive_folder():
-    return get_or_create_drive_folder()
+    return get_or_create_drive_folder(kind="set")
 
-def upload_image_to_drive(file_obj, filename):
-    folder_id = get_or_create_drive_folder()
+def upload_image_to_drive(file_obj, filename, kind="product"):
+    folder_id = get_or_create_drive_folder(kind=kind)
     if not folder_id: return None
     try:
         file_content = file_obj.getvalue()
@@ -132,8 +137,8 @@ def upload_image_to_drive(file_obj, filename):
         st.error(f"업로드 실패: {e}")
         return None
 
-def upload_set_image_to_drive(file_obj, filename):
-    folder_id = get_or_create_drive_folder()
+def upload_set_image_to_drive(file_obj, filename, kind="set"):
+    folder_id = get_or_create_drive_folder(kind=kind)
     if not folder_id: return None
     try:
         file_content = file_obj.getvalue()
@@ -152,9 +157,10 @@ def upload_set_image_to_drive(file_obj, filename):
             st.error(f"세트 이미지 업로드 실패: {e}")
         return None
 
-def upload_bytes_to_drive(byte_data: bytes, filename: str, mimetype: str = "image/png") -> str | None:
-    """bytes 데이터를 드라이브에 직접 업로드. 빌더 PNG/PPTX 저장에 사용."""
-    folder_id = get_or_create_drive_folder()
+def upload_bytes_to_drive(byte_data: bytes, filename: str, mimetype: str = "image/png", kind="set") -> str | None:
+    """bytes 데이터를 드라이브에 직접 업로드. 빌더 PNG/PPTX 저장에 사용.
+    빌더 산출물은 세트 이미지이므로 기본 kind='set'."""
+    folder_id = get_or_create_drive_folder(kind=kind)
     if not folder_id: return None
     try:
         buffer = io.BytesIO(byte_data)
@@ -167,31 +173,45 @@ def upload_bytes_to_drive(byte_data: bytes, filename: str, mimetype: str = "imag
         st.error(f"업로드 실패: {e}")
         return None
 
-@st.cache_data(ttl=600)
-def get_drive_file_map():
-    folder_id = get_or_create_drive_folder()
-    if not folder_id: return {}
-    file_map = {}
-    ds = get_google_services()[1]
-    if not ds: return {}
+def _scan_folder_files(ds, folder_id):
+    """단일 폴더의 파일을 {name_stem: id} 맵으로 반환."""
+    result = {}
+    if not folder_id: return result
     try:
         query = f"'{folder_id}' in parents and trashed=false"
         page_token = None
         while True:
             response = ds.files().list(q=query, spaces='drive', fields='nextPageToken, files(id, name)', pageToken=page_token).execute()
-            files = response.get('files', [])
-            for f in files:
+            for f in response.get('files', []):
                 name_stem = os.path.splitext(f['name'])[0]
                 if name_stem.isdigit():
-                    norm_name = str(name_stem).zfill(5)
-                    file_map[norm_name] = f['id']
-                file_map[name_stem] = f['id']
+                    result[str(name_stem).zfill(5)] = f['id']
+                result[name_stem] = f['id']
             page_token = response.get('nextPageToken', None)
             if page_token is None: break
     except Exception as e:
         err = str(e)
         if "Broken pipe" in err or "Errno 32" in err:
-            get_google_services.clear()  # 다음 호출 시 재인증
+            get_google_services.clear()
+    return result
+
+@st.cache_data(ttl=600)
+def get_drive_file_map():
+    """품목/세트 이미지 통합 맵.
+    스캔 순서: 레거시 루트 → sets/ → products/
+    뒤에 스캔한 것이 우선(덮어쓰기)되므로, 분리된 폴더가 레거시보다 우선.
+    호출처(품목/세트 양쪽)는 변경 없이 동작."""
+    ds = get_google_services()[1]
+    if not ds: return {}
+    file_map = {}
+    # 1) 레거시 루트(분리 전 잔존 파일) — 있으면 먼저 채움
+    legacy_id = _find_legacy_root_folder()
+    if legacy_id and legacy_id not in (PRODUCT_IMG_FOLDER_ID, SET_IMG_FOLDER_ID):
+        file_map.update(_scan_folder_files(ds, legacy_id))
+    # 2) 세트 폴더
+    file_map.update(_scan_folder_files(ds, SET_IMG_FOLDER_ID))
+    # 3) 품목 폴더 (최우선)
+    file_map.update(_scan_folder_files(ds, PRODUCT_IMG_FOLDER_ID))
     return file_map
 
 @st.cache_data(ttl=600)

@@ -918,7 +918,7 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
 const MODE_NEW = {mode_new};
 const TARGET_SET = {target_set_json};
 const TARGET_SET_IMG_B64 = {target_set_img_b64};
-const PENDING_ITEMS = {pending_json};  // Python에서 "추가" 버튼 누른 품목 [{code,name,spec,qty,b64}]
+const PENDING_ITEMS = {pending_json};  // Python에서 "추가" 버튼 누른 품목 [code/name/spec/qty/b64]
 let CW = 720, CH = 540;
 
 let canvas, curMode = 'select';
@@ -984,7 +984,7 @@ window.onload = function() {{
 }};
 
 // ── 대기열 품목 캔버스 자동 추가 ────────────────────────────────────
-// PENDING_ITEMS: [{code, name, spec, qty, b64}, ...]
+// PENDING_ITEMS: [code, name, spec, qty, b64 ...]
 // qty만큼 이미지를 격자 배치, b64 없으면 텍스트 라벨로 대체
 function applyPendingItems() {{
     let col = 0, row = 0;
@@ -3682,6 +3682,10 @@ else:
                 st.header("🏁 最終見積")
                 q_date = st.date_input("見積日", datetime.datetime.now())
                 if st.session_state.final_edit_df is not None:
+                    # [V13] 規格/コード/品目/単位 강제 문자열화 — Arrow 직렬화 에러 방지
+                    for _c in ["規格", "コード", "品目", "単位"]:
+                        if _c in st.session_state.final_edit_df.columns:
+                            st.session_state.final_edit_df[_c] = st.session_state.final_edit_df[_c].astype(str)
                     edited_jp = st.data_editor(st.session_state.final_edit_df[["品目","規格","コード","単位","数量","price_1"]], num_rows="dynamic", hide_index=True, column_config={"price_1": st.column_config.NumberColumn("消費者価格(¥)", format="%d")}, use_container_width=True, key="jp_final_editor")
                     st.session_state.final_edit_df = edited_jp
                     total_jpy = (edited_jp["数量"] * edited_jp["price_1"]).sum()
@@ -4155,6 +4159,11 @@ else:
             if c not in st.session_state.final_edit_df.columns:
                 st.session_state.final_edit_df[c] = 0 if "price" in c or "수량" in c else ""
 
+        # [V13] 규격/코드/품목/단위 강제 문자열화 — Arrow 직렬화(ArrowTypeError) 방지
+        for _c in ["규격", "코드", "품목", "단위"]:
+            if _c in st.session_state.final_edit_df.columns:
+                st.session_state.final_edit_df[_c] = st.session_state.final_edit_df[_c].astype(str)
+
         def on_data_change():
             st.session_state.files_ready = False
 
@@ -4209,7 +4218,36 @@ else:
                 with st.spinner("파일을 생성하고 있습니다... (이미지 다운로드 및 변환 중)"):
                     fmode = "basic" if "기본" in form_type else "profit"
                     safe_data = edited.fillna(0).to_dict('records')
-                    
+
+                    # [V13 IMG-FIX] data_editor가 image_data 컬럼을 떨어뜨리므로,
+                    # final_edit_df 원본에서 코드(우선)·품목명(차선) 기준으로 image_data 복원
+                    try:
+                        _src_df = st.session_state.get("final_edit_df")
+                        if _src_df is not None and "image_data" in _src_df.columns:
+                            _img_by_code = {}
+                            _img_by_name = {}
+                            for _r in _src_df.to_dict("records"):
+                                _iv = _r.get("image_data", "")
+                                if not _iv:
+                                    continue
+                                _ck = str(_r.get("코드", "")).strip().zfill(5)
+                                if _ck and _ck != "00000":
+                                    _img_by_code[_ck] = _iv
+                                _nm = str(_r.get("품목", "")).strip()
+                                if _nm:
+                                    _img_by_name[_nm] = _iv
+                            for _it in safe_data:
+                                if _it.get("image_data"):
+                                    continue
+                                _ck = str(_it.get("코드", "")).strip().zfill(5)
+                                _nm = str(_it.get("품목", "")).strip()
+                                if _ck in _img_by_code:
+                                    _it["image_data"] = _img_by_code[_ck]
+                                elif _nm in _img_by_name:
+                                    _it["image_data"] = _img_by_name[_nm]
+                    except Exception:
+                        pass
+
                     pdf_excel_services = []
                     for s in st.session_state.services:
                         pdf_excel_services.append(s.copy())

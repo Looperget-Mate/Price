@@ -4209,6 +4209,25 @@ else:
                 with st.spinner("파일을 생성하고 있습니다... (이미지 다운로드 및 변환 중)"):
                     fmode = "basic" if "기본" in form_type else "profit"
                     safe_data = edited.fillna(0).to_dict('records')
+
+                     # ── [IMG-FIX] data_editor가 누락시킨 image_data 복원 ──
+                    # disp_cols에 image_data가 없어 자재명세서 PDF/Excel에서
+                    # 부속 이미지가 누락되는 문제 해결 (코드 우선, 품목명 폴백)
+                    _img_lookup = {}
+                    if st.session_state.final_edit_df is not None:
+                        for _r in st.session_state.final_edit_df.to_dict('records'):
+                            _c = str(_r.get("코드", "")).strip().zfill(5)
+                            _key = _c if _c and _c != "00000" else str(_r.get("품목", "")).strip()
+                            _iv = _r.get("image_data")
+                            if _key and _iv:
+                                _img_lookup[_key] = _iv
+                    for _it in safe_data:
+                        if _it.get("image_data"):
+                            continue
+                        _c = str(_it.get("코드", "")).strip().zfill(5)
+                        _key = _c if _c and _c != "00000" else str(_it.get("품목", "")).strip()
+                        if _key in _img_lookup:
+                            _it["image_data"] = _img_lookup[_key]
                     
                     pdf_excel_services = []
                     for s in st.session_state.services:

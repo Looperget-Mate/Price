@@ -627,69 +627,27 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
     """
     import streamlit.components.v1 as components
 
-    # ── 부속 메타데이터 준비 (이미지 사전 로딩 없음) ──────────────────
-    # 전략: 코드/이름/규격/이미지ID만 전달 → 검색 결과 클릭 시 그때 이미지 로드
+    # ── 부속 메타데이터 준비 (이미지 b64 포함, 세션 캐시 활용) ──────────
+    # 전략: 품목별 b64를 세션캐시에서 먼저 찾고, 없으면 드라이브에서 로드
+    # JS 내부 검색창에서 필터링하므로 Python에서 검색 로직 불필요
+    if "_img_cache" not in st.session_state:
+        st.session_state._img_cache = {}
+
     palette_meta = []
     for p in db_products:
         code = str(p.get("code", "")).strip().zfill(5)
-        name = p.get("name", "")
-        spec = p.get("spec", "-")
-        cat  = p.get("category", "")
+        name = p.get("name", "") or ""
+        spec = p.get("spec", "") or ""
+        cat  = p.get("category", "") or ""
         img_id = drive_file_map.get(code) or (
             p.get("image") if len(str(p.get("image", "") or "")) > 10 else None
         )
-        # 이미지 없는 품목도 메타에는 포함 (검색은 가능, 이미지 없으면 표시만 안 됨)
+        # b64: 이미 캐시된 것만 즉시 포함, 없으면 빈 문자열 (JS에서 no-image 표시)
+        b64 = st.session_state._img_cache.get(code, "") if img_id else ""
         palette_meta.append({
             "code": code, "name": name, "spec": spec, "cat": cat,
-            "img_id": img_id or ""
+            "img_id": img_id or "", "b64": b64
         })
-
-    # 검색 결과용: 이미지가 있는 품목의 b64를 세션캐시에서 즉시 제공
-    # (이미 캐시된 것만 — 새 검색어 클릭 시 Python 사이드에서 추가 로드)
-    search_query = st.text_input(
-        "🔍 부속 검색 (이름/규격/코드)",
-        placeholder="예: 카플러, 25mm, 01733",
-        key="builder_search_query"
-    )
-
-    search_results = []  # [{code, name, spec, b64}]
-    if search_query and search_query.strip():
-        q = search_query.strip().lower()
-        matched = [
-            p for p in palette_meta
-            if q in p["name"].lower() or q in p["spec"].lower() or q in p["code"]
-        ][:12]  # 최대 12개만 표시
-
-        if matched:
-            cols = st.columns(4)
-            for i, m in enumerate(matched):
-                b64 = None
-                if m["img_id"]:
-                    # 세션 캐시 → 드라이브 순서로 로드
-                    cache_key = m["code"]
-                    if "_img_cache" not in st.session_state:
-                        st.session_state._img_cache = {}
-                    if cache_key not in st.session_state._img_cache:
-                        st.session_state._img_cache[cache_key] = get_image_from_drive(m["img_id"])
-                    b64 = st.session_state._img_cache.get(cache_key)
-
-                with cols[i % 4]:
-                    if b64:
-                        st.image(b64, caption=f"[{m['code']}] {m['name']}", use_container_width=True)
-                    else:
-                        st.markdown(
-                            f'<div style="height:80px;background:#2a2a2a;border-radius:4px;'
-                            f'display:flex;align-items:center;justify-content:center;'
-                            f'color:#666;font-size:10px;margin-bottom:4px;">No Image</div>',
-                            unsafe_allow_html=True
-                        )
-                        st.caption(f"[{m['code']}] {m['name']}")
-                    if b64:
-                        search_results.append({"code": m["code"], "name": m["name"], "spec": m["spec"], "b64": b64})
-        else:
-            st.caption("검색 결과가 없습니다.")
-    else:
-        st.caption("품목명, 규격, 코드로 검색하면 이미지를 확인하고 캔버스에 추가할 수 있습니다.")
 
     # ── 모드 선택 ─────────────────────────────────────────────────────
     builder_mode = st.radio("빌더 작업 모드", ["🖼️ 기존 세트 이미지 편집", "✨ 새 세트 만들기"], horizontal=True, key="builder_mode")
@@ -705,8 +663,8 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
         target_set_name = st.selectbox("편집할 세트 선택", all_set_names, key="builder_target_set")
 
     # ── Fabric.js 캔버스 HTML 생성 ────────────────────────────────────
-    # 검색 결과 이미지(b64)만 캔버스 JS로 전달 (최대 12개)
-    palette_json = json.dumps(search_results, ensure_ascii=False)
+    # 전체 품목 메타(코드/이름/규격/캐시된b64)를 JS로 전달 → JS 내부 검색창에서 필터링
+    palette_json = json.dumps(palette_meta, ensure_ascii=False)
     mode_new = "true" if builder_mode == "✨ 새 세트 만들기" else "false"
     target_set_json = json.dumps(target_set_name)
 
@@ -738,14 +696,20 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
 #toolbar button.active {{ background:#e94560; border-color:#e94560; color:#fff; }}
 .sep {{ width:1px; height:20px; background:#444; margin:0 4px; }}
 #main {{ display:flex; flex:1; overflow:hidden; }}
-#palette-panel {{ width:200px; background:#16213e; border-right:1px solid #0f3460; overflow-y:auto; padding:8px; flex-shrink:0; }}
-#palette-panel h4 {{ font-size:11px; color:#aaa; margin-bottom:6px; }}
-#search-hint {{ font-size:10px; color:#666; margin-bottom:8px; line-height:1.5; }}
+#palette-panel {{ width:210px; background:#16213e; border-right:1px solid #0f3460; display:flex; flex-direction:column; flex-shrink:0; }}
+#palette-panel h4 {{ font-size:11px; color:#aaa; margin-bottom:6px; padding:8px 8px 0; }}
+#search-box {{ padding:0 8px 6px; flex-shrink:0; }}
+#search-input {{ width:100%; background:#0d1b2a; border:1px solid #555; color:#eee; border-radius:4px; padding:5px 7px; font-size:12px; box-sizing:border-box; }}
+#search-input:focus {{ outline:none; border-color:#e94560; }}
+#search-status {{ font-size:10px; color:#666; padding:0 8px 4px; flex-shrink:0; }}
+#palette-items {{ flex:1; overflow-y:auto; padding:0 8px 8px; }}
+#search-hint {{ font-size:10px; color:#555; line-height:1.6; margin-top:6px; }}
 .pal-item {{ border:1px solid #333; border-radius:4px; margin-bottom:6px; cursor:pointer; padding:4px; background:#0d1b2a; transition:.2s; }}
 .pal-item:hover {{ border-color:#e94560; background:#1a1a3e; }}
 .pal-item img {{ width:100%; border-radius:3px; display:block; }}
-.pal-item .pal-label {{ font-size:10px; color:#aaa; text-align:center; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
-.pal-item .pal-code {{ font-size:9px; color:#666; text-align:center; }}
+.pal-item .pal-label {{ font-size:10px; color:#ccc; text-align:center; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:600; }}
+.pal-item .pal-code {{ font-size:9px; color:#666; text-align:center; margin-top:1px; }}
+.pal-item .pal-noimg {{ width:100%; height:70px; background:#1a1a2e; border-radius:3px; display:flex; align-items:center; justify-content:center; color:#555; font-size:10px; }}
 #canvas-area {{ flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding:10px; overflow:auto; background:#0d1b2a; position:relative; }}
 #canvas-wrap {{ position:relative; display:inline-block; }}
 #fabric-canvas {{ border:2px solid #0f3460; border-radius:4px; background:#fff; display:block; }}
@@ -806,11 +770,16 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
     </div>
   </div>
   <div id="main">
-    <!-- 왼쪽: 검색 결과 패널 (Python에서 전달된 검색 결과 렌더) -->
+    <!-- 왼쪽: 부속 검색 패널 (JS 내부에서 필터링 — 캔버스 리렌더 없음) -->
     <div id="palette-panel">
-      <h4>🔍 검색 결과</h4>
-      <div id="search-hint">위 검색창에서 부속을 검색하면 여기에 이미지가 표시됩니다.<br>클릭하여 캔버스에 추가하세요.</div>
-      <div id="palette-items"></div>
+      <h4>🔍 부속 검색</h4>
+      <div id="search-box">
+        <input type="text" id="search-input" placeholder="이름 / 규격 / 코드 입력" oninput="onSearch(this.value)">
+      </div>
+      <div id="search-status">검색어를 입력하세요</div>
+      <div id="palette-items">
+        <div id="search-hint">품목명, 규격, 코드로 검색하면<br>이미지가 여기 표시됩니다.<br>클릭 → 캔버스에 추가</div>
+      </div>
     </div>
     <!-- 캔버스 -->
     <div id="canvas-area">
@@ -956,31 +925,110 @@ window.onload = function() {{
     }}
 }};
 
-// ── 검색 결과 렌더 (Python이 전달한 PALETTE = 검색 결과 b64 목록) ────
-function buildPalette() {{
-    const container = document.getElementById('palette-items');
-    const hint = document.getElementById('search-hint');
-    container.innerHTML = '';
+// ── 부속 검색 + 팔레트 렌더 (JS 내부 — 캔버스 리렌더 없음) ────────
+// PALETTE = 전체 품목 메타 [{code, name, spec, cat, img_id, b64}, ...]
+// b64가 있으면 즉시 표시, 없으면 "No Image" 표시 후 클릭 시 드라이브 로드
 
-    if (!PALETTE || PALETTE.length === 0) {{
-        // 검색 결과 없거나 아직 검색 전
-        hint.style.display = 'block';
+const IMG_CACHE = {{}};  // code → b64 메모리 캐시 (새로고침 전까지 유지)
+
+// 초기 로딩: Python 세션캐시에 이미 있는 b64를 IMG_CACHE에 채움
+PALETTE.forEach(item => {{
+    if (item.b64) IMG_CACHE[item.code] = item.b64;
+}});
+
+function buildPalette() {{
+    // 초기 실행 시 아무것도 렌더하지 않음 — 검색 후 표시
+    document.getElementById('search-status').textContent = `총 ${{PALETTE.length}}개 품목 준비됨 — 검색하세요`;
+}}
+
+function onSearch(q) {{
+    const container = document.getElementById('palette-items');
+    const hint      = document.getElementById('search-hint');
+    const statusEl  = document.getElementById('search-status');
+    q = q.trim().toLowerCase();
+
+    if (!q) {{
+        container.innerHTML = '';
+        hint && (hint.style.display = 'block');
+        container.appendChild(hint || document.createElement('div'));
+        statusEl.textContent = `총 ${{PALETTE.length}}개 품목 — 검색하세요`;
         return;
     }}
-    hint.style.display = 'none';
 
-    PALETTE.forEach(item => {{
+    // 메타에서 매칭 (최대 20개)
+    const matched = PALETTE.filter(p =>
+        p.name.toLowerCase().includes(q) ||
+        (p.spec || '').toLowerCase().includes(q) ||
+        p.code.includes(q) ||
+        (p.cat || '').toLowerCase().includes(q)
+    ).slice(0, 20);
+
+    statusEl.textContent = matched.length
+        ? `${{matched.length}}개 검색됨 (클릭하여 추가)`
+        : '검색 결과 없음';
+
+    container.innerHTML = '';
+
+    matched.forEach(item => {{
         const div = document.createElement('div');
         div.className = 'pal-item';
-        div.title = `[${{item.code}}] ${{item.name}} (${{item.spec}})\n클릭하여 캔버스에 추가`;
-        div.innerHTML = `
-            <img src="${{item.b64}}" alt="${{item.name}}">
-            <div class="pal-label">${{item.name}}</div>
-            <div class="pal-code">[${{item.code}}] ${{item.spec}}</div>
-        `;
-        div.addEventListener('click', () => addFromPalette(item));
+        div.title = `[${{item.code}}] ${{item.name}} (${{item.spec || '-'}})\n클릭 → 캔버스에 추가`;
+
+        const cachedB64 = IMG_CACHE[item.code] || '';
+
+        if (cachedB64) {{
+            div.innerHTML = `
+                <img src="${{cachedB64}}" alt="${{item.name}}">
+                <div class="pal-label">${{item.name}}</div>
+                <div class="pal-code">[${{item.code}}] ${{item.spec || '-'}}</div>`;
+            div.addEventListener('click', () => addFromPalette({{
+                code: item.code, name: item.name, spec: item.spec || '-', b64: cachedB64
+            }}));
+        }} else if (item.img_id) {{
+            // 이미지 ID는 있지만 b64 미캐시 → 클릭 시 Streamlit sendPrompt로 로드 요청 (폴백: No Image)
+            div.innerHTML = `
+                <div class="pal-noimg">🖼 클릭하여 로드</div>
+                <div class="pal-label">${{item.name}}</div>
+                <div class="pal-code">[${{item.code}}] ${{item.spec || '-'}}</div>`;
+            div.addEventListener('click', () => {{
+                // sendPrompt로 Python에 이미지 로드 요청 (캐시 채움)
+                // 현재 환경에서는 직접 드라이브 fetch 불가 → 안내 후 재검색 유도
+                setStatus(`"${{item.name}}" — 이미지 로드 중입니다. 잠시 후 검색 결과를 새로고침하세요.`);
+                if (window.parent && window.parent.postMessage) {{
+                    window.parent.postMessage({{type:'load_img', code: item.code, img_id: item.img_id}}, '*');
+                }}
+            }});
+        }} else {{
+            div.innerHTML = `
+                <div class="pal-noimg">이미지 없음</div>
+                <div class="pal-label">${{item.name}}</div>
+                <div class="pal-code">[${{item.code}}] ${{item.spec || '-'}}</div>`;
+            // 이미지 없어도 클릭 → 캔버스에 텍스트 박스로 추가
+            div.addEventListener('click', () => addTextOnly(item));
+        }}
+
         container.appendChild(div);
     }});
+}}
+
+// 이미지 없는 품목 → 텍스트 라벨만 캔버스에 추가
+function addTextOnly(item) {{
+    const txt = new fabric.Text(`[${{item.code}}]\n${{item.name}}`, {{
+        left: 100, top: 100,
+        fontSize: 14, fill: '#333',
+        fontFamily: 'sans-serif',
+        selectable: true,
+    }});
+    txt._looperCode = item.code;
+    txt._looperName = item.name;
+    txt._looperSpec = item.spec || '-';
+    txt._objId = ++lastObjId;
+    objRecipe[txt._objId] = {{code: item.code, name: item.name, qty: 1}};
+    canvas.add(txt);
+    canvas.setActiveObject(txt);
+    canvas.renderAll();
+    updateRecipe();
+    setStatus(`"${{item.name}}" 텍스트로 추가됨 (이미지 없음)`);
 }}
 
 // ── 팔레트 → 캔버스 추가 ────────────────────────────────────────────

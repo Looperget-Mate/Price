@@ -80,50 +80,45 @@ DRIVE_SET_FOLDER_NAME = "Looperget_Images"
 ADMIN_FOLDER_NAME = "Looperget_Admin"
 ADMIN_PPT_NAME = "Set_Composition_Master.pptx"
 
-# ==========================================
-# [A-1] 드라이브 이미지 폴더 분리
-#   products/ : 품목 이미지 (파일명 = 품목코드)
-#   sets/     : 세트 이미지 (파일명 = 세트명)
-#   폴더 ID는 변경 시 이 두 상수만 교체 (코드 재배포 불필요하도록 한 곳에 모음)
-#   기존 Looperget_Images 루트는 fallback 스캔으로 계속 인식 → 점진 이행/롤백 안전
-# ==========================================
-PRODUCT_IMG_FOLDER_ID = "19rurab1aTRfECIL2VT81qjSGHru4K4Nm"
-SET_IMG_FOLDER_ID     = "1T9KRG297qSSEDYdNxHr2eHinWplwJ42V"
-
 def _get_ds():
     """항상 최신 drive_service 반환 (ttl=1800 캐시 기반)"""
     return get_google_services()[1]
 
-def _find_legacy_root_folder():
-    """기존 Looperget_Images 루트 폴더 ID 조회 (fallback 스캔용).
-    분리 전 루트에 남아있을 수 있는 파일 인식을 위해 유지."""
+def get_or_create_drive_folder():
     ds = _get_ds()
     if not ds: return None
     try:
         query_shared = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and sharedWithMe=true and trashed=false"
-        rs = ds.files().list(q=query_shared, fields="files(id)").execute().get('files', [])
-        if rs: return rs[0]['id']
+        results_shared = ds.files().list(q=query_shared, fields="files(id)").execute()
+        files_shared = results_shared.get('files', [])
+        if files_shared: return files_shared[0]['id']
         query = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        r = ds.files().list(q=query, fields="files(id)").execute().get('files', [])
-        if r: return r[0]['id']
-    except Exception:
-        get_google_services.clear()
-    return None
-
-def get_or_create_drive_folder(kind="product"):
-    """용도별 폴더 ID 반환.
-    kind="product" → PRODUCT_IMG_FOLDER_ID
-    kind="set"     → SET_IMG_FOLDER_ID
-    (하위 호환: 인자 없이 호출하면 품목 폴더 반환)"""
-    if kind == "set":
-        return SET_IMG_FOLDER_ID
-    return PRODUCT_IMG_FOLDER_ID
+        results = ds.files().list(q=query, fields="files(id)").execute()
+        files = results.get('files', [])
+        if files: return files[0]['id']
+        file_metadata = {'name': DRIVE_FOLDER_NAME, 'mimeType': 'application/vnd.google-apps.folder'}
+        folder = ds.files().create(body=file_metadata, fields='id').execute()
+        return folder.get('id')
+    except Exception as e:
+        err = str(e)
+        if "Broken pipe" in err or "Errno 32" in err:
+            try:
+                get_google_services.clear()
+                ds2 = _get_ds()
+                if ds2:
+                    q2 = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+                    r2 = ds2.files().list(q=q2, fields="files(id)").execute()
+                    f2 = r2.get('files', [])
+                    if f2: return f2[0]['id']
+            except Exception:
+                pass
+        return None  # st.warning 제거 → 반복 오류 메시지 차단
 
 def get_or_create_set_drive_folder():
-    return get_or_create_drive_folder(kind="set")
+    return get_or_create_drive_folder()
 
-def upload_image_to_drive(file_obj, filename, kind="product"):
-    folder_id = get_or_create_drive_folder(kind=kind)
+def upload_image_to_drive(file_obj, filename):
+    folder_id = get_or_create_drive_folder()
     if not folder_id: return None
     try:
         file_content = file_obj.getvalue()
@@ -137,8 +132,8 @@ def upload_image_to_drive(file_obj, filename, kind="product"):
         st.error(f"업로드 실패: {e}")
         return None
 
-def upload_set_image_to_drive(file_obj, filename, kind="set"):
-    folder_id = get_or_create_drive_folder(kind=kind)
+def upload_set_image_to_drive(file_obj, filename):
+    folder_id = get_or_create_drive_folder()
     if not folder_id: return None
     try:
         file_content = file_obj.getvalue()
@@ -157,10 +152,9 @@ def upload_set_image_to_drive(file_obj, filename, kind="set"):
             st.error(f"세트 이미지 업로드 실패: {e}")
         return None
 
-def upload_bytes_to_drive(byte_data: bytes, filename: str, mimetype: str = "image/png", kind="set") -> str | None:
-    """bytes 데이터를 드라이브에 직접 업로드. 빌더 PNG/PPTX 저장에 사용.
-    빌더 산출물은 세트 이미지이므로 기본 kind='set'."""
-    folder_id = get_or_create_drive_folder(kind=kind)
+def upload_bytes_to_drive(byte_data: bytes, filename: str, mimetype: str = "image/png") -> str | None:
+    """bytes 데이터를 드라이브에 직접 업로드. 빌더 PNG/PPTX 저장에 사용."""
+    folder_id = get_or_create_drive_folder()
     if not folder_id: return None
     try:
         buffer = io.BytesIO(byte_data)
@@ -173,45 +167,31 @@ def upload_bytes_to_drive(byte_data: bytes, filename: str, mimetype: str = "imag
         st.error(f"업로드 실패: {e}")
         return None
 
-def _scan_folder_files(ds, folder_id):
-    """단일 폴더의 파일을 {name_stem: id} 맵으로 반환."""
-    result = {}
-    if not folder_id: return result
+@st.cache_data(ttl=600)
+def get_drive_file_map():
+    folder_id = get_or_create_drive_folder()
+    if not folder_id: return {}
+    file_map = {}
+    ds = get_google_services()[1]
+    if not ds: return {}
     try:
         query = f"'{folder_id}' in parents and trashed=false"
         page_token = None
         while True:
             response = ds.files().list(q=query, spaces='drive', fields='nextPageToken, files(id, name)', pageToken=page_token).execute()
-            for f in response.get('files', []):
+            files = response.get('files', [])
+            for f in files:
                 name_stem = os.path.splitext(f['name'])[0]
                 if name_stem.isdigit():
-                    result[str(name_stem).zfill(5)] = f['id']
-                result[name_stem] = f['id']
+                    norm_name = str(name_stem).zfill(5)
+                    file_map[norm_name] = f['id']
+                file_map[name_stem] = f['id']
             page_token = response.get('nextPageToken', None)
             if page_token is None: break
     except Exception as e:
         err = str(e)
         if "Broken pipe" in err or "Errno 32" in err:
-            get_google_services.clear()
-    return result
-
-@st.cache_data(ttl=600)
-def get_drive_file_map():
-    """품목/세트 이미지 통합 맵.
-    스캔 순서: 레거시 루트 → sets/ → products/
-    뒤에 스캔한 것이 우선(덮어쓰기)되므로, 분리된 폴더가 레거시보다 우선.
-    호출처(품목/세트 양쪽)는 변경 없이 동작."""
-    ds = get_google_services()[1]
-    if not ds: return {}
-    file_map = {}
-    # 1) 레거시 루트(분리 전 잔존 파일) — 있으면 먼저 채움
-    legacy_id = _find_legacy_root_folder()
-    if legacy_id and legacy_id not in (PRODUCT_IMG_FOLDER_ID, SET_IMG_FOLDER_ID):
-        file_map.update(_scan_folder_files(ds, legacy_id))
-    # 2) 세트 폴더
-    file_map.update(_scan_folder_files(ds, SET_IMG_FOLDER_ID))
-    # 3) 품목 폴더 (최우선)
-    file_map.update(_scan_folder_files(ds, PRODUCT_IMG_FOLDER_ID))
+            get_google_services.clear()  # 다음 호출 시 재인증
     return file_map
 
 @st.cache_data(ttl=600)
@@ -647,39 +627,69 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
     """
     import streamlit.components.v1 as components
 
-    # ── 부속 팔레트 데이터 준비 ────────────────────────────────────────
-    # 전략: 이미지 있는 품목만, 최대 80개, 캐시 활용
-    PALETTE_MAX = 80
-    palette_items = []
-    # 부속 카테고리 우선 정렬 (캔버스에서 주로 사용하는 것이 먼저 오도록)
-    priority_cats = ["부속", "주배관", "가지관"]
-    def cat_priority(p):
-        cat = p.get("category", "")
-        for i, c in enumerate(priority_cats):
-            if c in cat:
-                return i
-        return 99
-    sorted_products = sorted(db_products, key=cat_priority)
-
-    palette_ph = st.empty()
-    palette_ph.info("⏳ 부속 팔레트 이미지 로딩 중...")
-    loaded = 0
-    for p in sorted_products:
-        if loaded >= PALETTE_MAX:
-            break
+    # ── 부속 메타데이터 준비 (이미지 사전 로딩 없음) ──────────────────
+    # 전략: 코드/이름/규격/이미지ID만 전달 → 검색 결과 클릭 시 그때 이미지 로드
+    palette_meta = []
+    for p in db_products:
         code = str(p.get("code", "")).strip().zfill(5)
         name = p.get("name", "")
         spec = p.get("spec", "-")
+        cat  = p.get("category", "")
         img_id = drive_file_map.get(code) or (
-            p.get("image") if len(str(p.get("image","") or "")) > 10 else None
+            p.get("image") if len(str(p.get("image", "") or "")) > 10 else None
         )
-        if not img_id:
-            continue
-        b64 = get_image_from_drive(img_id)
-        if b64:
-            palette_items.append({"code": code, "name": name, "spec": spec, "b64": b64})
-            loaded += 1
-    palette_ph.empty()
+        # 이미지 없는 품목도 메타에는 포함 (검색은 가능, 이미지 없으면 표시만 안 됨)
+        palette_meta.append({
+            "code": code, "name": name, "spec": spec, "cat": cat,
+            "img_id": img_id or ""
+        })
+
+    # 검색 결과용: 이미지가 있는 품목의 b64를 세션캐시에서 즉시 제공
+    # (이미 캐시된 것만 — 새 검색어 클릭 시 Python 사이드에서 추가 로드)
+    search_query = st.text_input(
+        "🔍 부속 검색 (이름/규격/코드)",
+        placeholder="예: 카플러, 25mm, 01733",
+        key="builder_search_query"
+    )
+
+    search_results = []  # [{code, name, spec, b64}]
+    if search_query and search_query.strip():
+        q = search_query.strip().lower()
+        matched = [
+            p for p in palette_meta
+            if q in p["name"].lower() or q in p["spec"].lower() or q in p["code"]
+        ][:12]  # 최대 12개만 표시
+
+        if matched:
+            cols = st.columns(4)
+            for i, m in enumerate(matched):
+                b64 = None
+                if m["img_id"]:
+                    # 세션 캐시 → 드라이브 순서로 로드
+                    cache_key = m["code"]
+                    if "_img_cache" not in st.session_state:
+                        st.session_state._img_cache = {}
+                    if cache_key not in st.session_state._img_cache:
+                        st.session_state._img_cache[cache_key] = get_image_from_drive(m["img_id"])
+                    b64 = st.session_state._img_cache.get(cache_key)
+
+                with cols[i % 4]:
+                    if b64:
+                        st.image(b64, caption=f"[{m['code']}] {m['name']}", use_container_width=True)
+                    else:
+                        st.markdown(
+                            f'<div style="height:80px;background:#2a2a2a;border-radius:4px;'
+                            f'display:flex;align-items:center;justify-content:center;'
+                            f'color:#666;font-size:10px;margin-bottom:4px;">No Image</div>',
+                            unsafe_allow_html=True
+                        )
+                        st.caption(f"[{m['code']}] {m['name']}")
+                    if b64:
+                        search_results.append({"code": m["code"], "name": m["name"], "spec": m["spec"], "b64": b64})
+        else:
+            st.caption("검색 결과가 없습니다.")
+    else:
+        st.caption("품목명, 규격, 코드로 검색하면 이미지를 확인하고 캔버스에 추가할 수 있습니다.")
 
     # ── 모드 선택 ─────────────────────────────────────────────────────
     builder_mode = st.radio("빌더 작업 모드", ["🖼️ 기존 세트 이미지 편집", "✨ 새 세트 만들기"], horizontal=True, key="builder_mode")
@@ -695,7 +705,8 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
         target_set_name = st.selectbox("편집할 세트 선택", all_set_names, key="builder_target_set")
 
     # ── Fabric.js 캔버스 HTML 생성 ────────────────────────────────────
-    palette_json = json.dumps(palette_items, ensure_ascii=False)
+    # 검색 결과 이미지(b64)만 캔버스 JS로 전달 (최대 12개)
+    palette_json = json.dumps(search_results, ensure_ascii=False)
     mode_new = "true" if builder_mode == "✨ 새 세트 만들기" else "false"
     target_set_json = json.dumps(target_set_name)
 
@@ -727,12 +738,14 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
 #toolbar button.active {{ background:#e94560; border-color:#e94560; color:#fff; }}
 .sep {{ width:1px; height:20px; background:#444; margin:0 4px; }}
 #main {{ display:flex; flex:1; overflow:hidden; }}
-#palette-panel {{ width:160px; background:#16213e; border-right:1px solid #0f3460; overflow-y:auto; padding:8px; flex-shrink:0; }}
+#palette-panel {{ width:200px; background:#16213e; border-right:1px solid #0f3460; overflow-y:auto; padding:8px; flex-shrink:0; }}
 #palette-panel h4 {{ font-size:11px; color:#aaa; margin-bottom:6px; }}
+#search-hint {{ font-size:10px; color:#666; margin-bottom:8px; line-height:1.5; }}
 .pal-item {{ border:1px solid #333; border-radius:4px; margin-bottom:6px; cursor:pointer; padding:4px; background:#0d1b2a; transition:.2s; }}
 .pal-item:hover {{ border-color:#e94560; background:#1a1a3e; }}
 .pal-item img {{ width:100%; border-radius:3px; display:block; }}
 .pal-item .pal-label {{ font-size:10px; color:#aaa; text-align:center; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+.pal-item .pal-code {{ font-size:9px; color:#666; text-align:center; }}
 #canvas-area {{ flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding:10px; overflow:auto; background:#0d1b2a; position:relative; }}
 #canvas-wrap {{ position:relative; display:inline-block; }}
 #fabric-canvas {{ border:2px solid #0f3460; border-radius:4px; background:#fff; display:block; }}
@@ -793,9 +806,10 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
     </div>
   </div>
   <div id="main">
-    <!-- 왼쪽 부속 팔레트 -->
+    <!-- 왼쪽: 검색 결과 패널 (Python에서 전달된 검색 결과 렌더) -->
     <div id="palette-panel">
-      <h4>부속 팔레트</h4>
+      <h4>🔍 검색 결과</h4>
+      <div id="search-hint">위 검색창에서 부속을 검색하면 여기에 이미지가 표시됩니다.<br>클릭하여 캔버스에 추가하세요.</div>
       <div id="palette-items"></div>
     </div>
     <!-- 캔버스 -->
@@ -811,7 +825,7 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
           <div onclick="ctxDelete()" style="color:#f88;">🗑 삭제</div>
         </div>
       </div>
-      <div id="status" style="margin-top:6px;">선택 모드 — 부속 클릭하여 캔버스에 추가</div>
+      <div id="status" style="margin-top:6px;">선택 모드 — 위 검색창에서 부속 검색 후 클릭하여 캔버스에 추가</div>
     </div>
     <!-- 오른쪽 속성 패널 -->
     <div id="props-panel">
@@ -942,14 +956,28 @@ window.onload = function() {{
     }}
 }};
 
-// ── 팔레트 빌드 ─────────────────────────────────────────────────────
+// ── 검색 결과 렌더 (Python이 전달한 PALETTE = 검색 결과 b64 목록) ────
 function buildPalette() {{
     const container = document.getElementById('palette-items');
+    const hint = document.getElementById('search-hint');
+    container.innerHTML = '';
+
+    if (!PALETTE || PALETTE.length === 0) {{
+        // 검색 결과 없거나 아직 검색 전
+        hint.style.display = 'block';
+        return;
+    }}
+    hint.style.display = 'none';
+
     PALETTE.forEach(item => {{
         const div = document.createElement('div');
         div.className = 'pal-item';
-        div.title = `[${{item.code}}] ${{item.name}} (${{item.spec}})`;
-        div.innerHTML = `<img src="${{item.b64}}" alt="${{item.name}}"><div class="pal-label">${{item.name}}</div>`;
+        div.title = `[${{item.code}}] ${{item.name}} (${{item.spec}})\n클릭하여 캔버스에 추가`;
+        div.innerHTML = `
+            <img src="${{item.b64}}" alt="${{item.name}}">
+            <div class="pal-label">${{item.name}}</div>
+            <div class="pal-code">[${{item.code}}] ${{item.spec}}</div>
+        `;
         div.addEventListener('click', () => addFromPalette(item));
         container.appendChild(div);
     }});

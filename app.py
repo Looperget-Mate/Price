@@ -3201,6 +3201,20 @@ if mode == "관리자 모드" or mode == "管理者モード":
                 final_cols = [c for c in desired_order if c in df.columns]
                 df = df[final_cols]
 
+                # [V20] data_editor 타입 충돌 방지:
+                #  NumberColumn 대상 컬럼은 숫자로 강제(빈값→0), 나머지는 문자열로 강제.
+                num_cols = ["매입단가","총판가1","총판가2","대리점가1","대리점가2",
+                            "계통농협","지역농협","소비자가","단가(현장)","신정공급가"]
+                for _nc in num_cols:
+                    if _nc in df.columns:
+                        df[_nc] = pd.to_numeric(df[_nc], errors="coerce").fillna(0).astype(int)
+                if "1롤길이(m)" in df.columns:
+                    df["1롤길이(m)"] = pd.to_numeric(df["1롤길이(m)"], errors="coerce").fillna(0)
+                text_cols = ["순번","품목코드","카테고리","제품명","규격","단위","이미지데이터","최근수정일"]
+                for _tc in text_cols:
+                    if _tc in df.columns:
+                        df[_tc] = df[_tc].fillna("").astype(str)
+
                 edited_df = st.data_editor(
                     df, 
                     num_rows="dynamic", 

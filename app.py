@@ -777,7 +777,7 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
 .sep {{ width:1px; height:20px; background:#444; margin:0 4px; }}
 #main {{ display:flex; flex:1; overflow:hidden; }}
 #canvas-area {{ flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding:10px; overflow:auto; background:#0d1b2a; position:relative; }}
-#canvas-wrap {{ position:relative; display:inline-block; }}
+#canvas-wrap {{ position:relative; display:inline-block; transform-origin:top center; transition:transform .1s; }}
 #fabric-canvas {{ border:2px solid #0f3460; border-radius:4px; background:#fff; display:block; }}
 #ctx-menu {{ position:absolute; background:#2d2d4e; border:1px solid #444; border-radius:4px; padding:4px 0; display:none; z-index:999; min-width:130px; box-shadow:0 4px 12px rgba(0,0,0,.5); }}
 #ctx-menu div {{ padding:5px 14px; cursor:pointer; font-size:12px; color:#eee; }}
@@ -818,6 +818,7 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
     <button onclick="doRedo()">↪ 다시실행</button>
     <div class="sep"></div>
     <button onclick="clearCanvas()" style="color:#f88;">🗑 캔버스비우기</button>
+    <button onclick="removeBgOnly()" style="color:#fb8;">🖼 배경만제거</button>
     <div class="sep"></div>
     <label style="font-size:11px;color:#aaa;">캔버스</label>
     <select id="canvas-size" onchange="resizeCanvas(this.value)"
@@ -926,6 +927,8 @@ let pipeStart = null, isPiping = false;
 let undoStack = [], redoStack = [];
 let objRecipe = {{}};   // objId -> {{code, name, qty}}
 let lastObjId = 0;
+let bgCleared = false;  // [V14] 캔버스 비우기로 배경을 영구 제거했는지
+let bgImageRef = null;  // [V14] 현재 배경 이미지 객체 참조
 
 // ── Fabric 초기화 ───────────────────────────────────────────────────
 window.onload = function() {{
@@ -962,9 +965,10 @@ window.onload = function() {{
 
     pushUndo();
     setMode('select');
+    setTimeout(fitCanvasToArea, 50);  // [V14] 레이아웃 확정 후 캔버스 맞춤
 
     // ── 기존 세트 이미지 캔버스 로드 (편집 모드) ─────────────────────
-    if (!MODE_NEW && TARGET_SET_IMG_B64) {{
+    if (!MODE_NEW && TARGET_SET_IMG_B64 && !bgCleared) {{
         fabric.Image.fromURL(TARGET_SET_IMG_B64, function(img) {{
             const scale = Math.min(CW / img.width, CH / img.height);
             img.set({{
@@ -975,6 +979,7 @@ window.onload = function() {{
                 opacity: 0.82,
                 _isBgImage: true,
             }});
+            bgImageRef = img;
             canvas.add(img);
             canvas.sendToBack(img);
             canvas.renderAll();
@@ -982,6 +987,43 @@ window.onload = function() {{
         }});
     }}
 }};
+
+// ── [V14] 흰배경 자동 누끼 ───────────────────────────────────────────
+// 흰색~연회색 배경 픽셀을 투명화한 dataURL을 콜백으로 반환.
+// 원본(드라이브 JPG)은 건드리지 않고, 캔버스 표시용으로만 변환.
+// THRESH 이상 밝고 채도 낮은 픽셀 → 투명. 가장자리 부드럽게 알파 처리.
+function makeTransparentBg(srcUrl, cb) {{
+    const im = new Image();
+    im.crossOrigin = 'anonymous';
+    im.onload = function() {{
+        const cv = document.createElement('canvas');
+        cv.width = im.naturalWidth; cv.height = im.naturalHeight;
+        const cx = cv.getContext('2d');
+        cx.drawImage(im, 0, 0);
+        let data;
+        try {{ data = cx.getImageData(0, 0, cv.width, cv.height); }}
+        catch(e) {{ cb(srcUrl); return; }}  // CORS 등 실패 시 원본 그대로
+        const d = data.data;
+        const WHITE = 238;   // 이 값 이상이면 배경 후보 (R,G,B 모두)
+        const SOFT  = 225;   // 경계 완화 시작점
+        for (let p = 0; p < d.length; p += 4) {{
+            const r = d[p], g = d[p+1], b = d[p+2];
+            const mn = Math.min(r, g, b), mx = Math.max(r, g, b);
+            const sat = mx - mn;            // 채도(낮을수록 무채색=흰/회)
+            if (r >= WHITE && g >= WHITE && b >= WHITE && sat <= 18) {{
+                d[p+3] = 0;                 // 완전 투명
+            }} else if (r >= SOFT && g >= SOFT && b >= SOFT && sat <= 24) {{
+                // 경계 픽셀: 밝기에 비례해 부분 투명 (계단현상 완화)
+                const t = (Math.min(r, g, b) - SOFT) / (WHITE - SOFT);
+                d[p+3] = Math.round(255 * (1 - Math.max(0, Math.min(1, t))));
+            }}
+        }}
+        cx.putImageData(data, 0, 0);
+        cb(cv.toDataURL('image/png'));
+    }};
+    im.onerror = function() {{ cb(srcUrl); }};
+    im.src = srcUrl;
+}}
 
 // ── 대기열 품목 캔버스 자동 추가 ────────────────────────────────────
 // PENDING_ITEMS: [code, name, spec, qty, b64 ...]
@@ -1000,20 +1042,22 @@ function applyPendingItems() {{
             if (col % COLS === 0) row++;
 
             if (item.b64) {{
-                fabric.Image.fromURL(item.b64, function(img) {{
-                    img.set({{
-                        left: lx, top: ly,
-                        scaleX: 0.45, scaleY: 0.45,
-                        cornerSize: 8, hasRotatingPoint: true,
+                makeTransparentBg(item.b64, function(cleanUrl) {{
+                    fabric.Image.fromURL(cleanUrl, function(img) {{
+                        img.set({{
+                            left: lx, top: ly,
+                            scaleX: 0.45, scaleY: 0.45,
+                            cornerSize: 8, hasRotatingPoint: true,
+                        }});
+                        img._looperCode = item.code;
+                        img._looperName = item.name;
+                        img._looperSpec = item.spec;
+                        img._objId = ++lastObjId;
+                        objRecipe[img._objId] = {{code: item.code, name: item.name, qty: 1}};
+                        canvas.add(img);
+                        canvas.renderAll();
+                        updateRecipe();
                     }});
-                    img._looperCode = item.code;
-                    img._looperName = item.name;
-                    img._looperSpec = item.spec;
-                    img._objId = ++lastObjId;
-                    objRecipe[img._objId] = {{code: item.code, name: item.name, qty: 1}};
-                    canvas.add(img);
-                    canvas.renderAll();
-                    updateRecipe();
                 }});
             }} else {{
                 // 이미지 없으면 텍스트 라벨
@@ -1046,20 +1090,22 @@ function addFromPalette(item) {{
     const qty = item.qty || 1;
     for (let i = 0; i < qty; i++) {{
         if (item.b64) {{
-            fabric.Image.fromURL(item.b64, function(img) {{
-                img.set({{
-                    left: 80 + i * 30, top: 80 + i * 20,
-                    scaleX: 0.5, scaleY: 0.5,
-                    cornerSize: 8, hasRotatingPoint: true,
+            makeTransparentBg(item.b64, function(cleanUrl) {{
+                fabric.Image.fromURL(cleanUrl, function(img) {{
+                    img.set({{
+                        left: 80 + i * 30, top: 80 + i * 20,
+                        scaleX: 0.5, scaleY: 0.5,
+                        cornerSize: 8, hasRotatingPoint: true,
+                    }});
+                    img._looperCode = item.code;
+                    img._looperName = item.name;
+                    img._looperSpec = item.spec;
+                    img._objId = ++lastObjId;
+                    objRecipe[img._objId] = {{code: item.code, name: item.name, qty: 1}};
+                    canvas.add(img);
+                    canvas.setActiveObject(img);
+                    canvas.renderAll();
                 }});
-                img._looperCode = item.code;
-                img._looperName = item.name;
-                img._looperSpec = item.spec;
-                img._objId = ++lastObjId;
-                objRecipe[img._objId] = {{code: item.code, name: item.name, qty: 1}};
-                canvas.add(img);
-                canvas.setActiveObject(img);
-                canvas.renderAll();
             }});
         }}
     }}
@@ -1178,7 +1224,8 @@ function sendBck()    {{ const o=canvas.getActiveObject(); if(o){{ canvas.sendBa
 function bringFront() {{ const o=canvas.getActiveObject(); if(o){{ canvas.bringToFront(o); pushUndo(); }} }}
 function sendBack()   {{ const o=canvas.getActiveObject(); if(o){{ canvas.sendToBack(o); pushUndo(); }} }}
 function deleteObj()  {{ const o=canvas.getActiveObject(); if(o){{ if(o._objId) delete objRecipe[o._objId]; canvas.remove(o); pushUndo(); updateRecipe(); }} }}
-function clearCanvas() {{ if(!confirm('캔버스를 비울까요?')) return; canvas.clear(); objRecipe={{}}; undoStack=[]; redoStack=[]; pushUndo(); updateRecipe(); }}
+function clearCanvas() {{ if(!confirm('캔버스를 비울까요? (배경 이미지 포함)')) return; bgCleared = true; bgImageRef = null; canvas.clear(); objRecipe={{}}; undoStack=[]; redoStack=[]; pushUndo(); updateRecipe(); setStatus('캔버스를 비웠습니다. 부속을 새로 배치하세요.'); }}
+function removeBgOnly() {{ if(bgImageRef){{ canvas.remove(bgImageRef); bgImageRef=null; }} bgCleared=true; canvas.getObjects().forEach(o=>{{ if(o._isBgImage) canvas.remove(o); }}); canvas.renderAll(); pushUndo(); setStatus('배경 이미지만 제거했습니다.'); }}
 
 // ── 우클릭 컨텍스트 메뉴 ────────────────────────────────────────────
 function onContextMenu(opt) {{
@@ -1241,22 +1288,39 @@ function updateRecipe() {{
 // ── PNG 로컬 저장 ───────────────────────────────────────────────────
 function downloadPng() {{
     const link = document.createElement('a');
-    link.href = canvas.toDataURL({{'format':'png','multiplier':2}});
+    link.href = exportWhiteBgDataUrl(2);
     link.download = (MODE_NEW ? (document.getElementById('new-set-name').value || 'new_set') : TARGET_SET) + '.png';
     link.click();
 }}
 
 // ── PPTX 다운로드 (python-pptx via postMessage) ─────────────────────
 function downloadPptx() {{
-    const dataUrl = canvas.toDataURL({{'format':'png','multiplier':2}});
+    const dataUrl = exportWhiteBgDataUrl(2);
     const setName = MODE_NEW ? (document.getElementById('new-set-name').value || 'new_set') : TARGET_SET;
     window.parent.postMessage({{type:'pptx_request', dataUrl:dataUrl, setName:setName}}, '*');
     setStatus2('PPTX 생성 요청 전송됨 — Streamlit이 처리합니다.');
 }}
 
+// ── [V14] 흰 배경 합성 PNG dataURL 생성 ──────────────────────────────
+// 누끼(투명) 부속들을 흰 배경 위에 얹어 저장 → 견적서 PDF에서 깨짐 방지.
+// fabric 캔버스 내용을 흰 바탕 캔버스에 다시 그려 반환.
+function exportWhiteBgDataUrl(mult) {{
+    mult = mult || 2;
+    const transparentUrl = canvas.toDataURL({{'format':'png','multiplier':mult}});
+    // 동기 합성을 위해 임시 캔버스에 흰 배경 + 내용 그리기 (콜백 불가하므로 즉시 처리 어려움)
+    // → 대신 fabric backgroundColor를 흰색으로 강제 후 추출하고 복원
+    const prevBg = canvas.backgroundColor;
+    canvas.backgroundColor = '#ffffff';
+    canvas.renderAll();
+    const whiteUrl = canvas.toDataURL({{'format':'png','multiplier':mult}});
+    canvas.backgroundColor = prevBg;
+    canvas.renderAll();
+    return whiteUrl;
+}}
+
 // ── 드라이브 저장 (postMessage → Streamlit) ─────────────────────────
 function saveAll() {{
-    const dataUrl = canvas.toDataURL({{'format':'png','multiplier':2}});
+    const dataUrl = exportWhiteBgDataUrl(2);
     let setName, catName='', isNew=false;
     if (MODE_NEW) {{
         setName = document.getElementById('new-set-name').value.trim();
@@ -1293,8 +1357,24 @@ function resizeCanvas(val) {{
     CW = parseInt(parts[0]); CH = parseInt(parts[1]);
     canvas.setWidth(CW); canvas.setHeight(CH);
     canvas.renderAll();
+    fitCanvasToArea();
     setStatus(`캔버스 크기: ${{CW}}×${{CH}}`);
 }}
+
+// ── [V14] 캔버스를 표시 영역에 맞춰 축소 (내부 좌표/저장품질 유지) ──
+// fabric 내부 해상도는 그대로(고품질 저장), 화면에는 CSS scale로 맞춤.
+function fitCanvasToArea() {{
+    const area = document.getElementById('canvas-area');
+    const wrap = document.getElementById('canvas-wrap');
+    if (!area || !wrap) return;
+    const availW = area.clientWidth  - 20;   // padding 여유
+    const availH = area.clientHeight - 20;
+    if (availW <= 0 || availH <= 0) return;
+    // 가로/세로 중 더 빡빡한 쪽 기준으로 축소 (1배 초과 확대는 안 함)
+    const scale = Math.min(availW / CW, availH / CH, 1);
+    wrap.style.transform = 'scale(' + scale + ')';
+}}
+window.addEventListener('resize', fitCanvasToArea);
 
 // ── set-name-row 표시/숨김 ───────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', function() {{

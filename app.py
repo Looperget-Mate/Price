@@ -195,6 +195,51 @@ def get_drive_file_map():
     return file_map
 
 @st.cache_data(ttl=600)
+def get_drive_file_map_deep():
+    """
+    [V18] Looperget_Images 루트 + 모든 하위 폴더(products, sets 등)를 재귀 스캔.
+    파일명(확장자 제외)을 키로, 파일 ID를 값으로. 숫자 파일명은 zfill(5) 키도 함께 생성.
+    같은 이름이 여러 폴더에 있으면 '나중 폴더'가 덮어씀 → 하위 폴더 우선되도록 루트를 먼저 스캔.
+    """
+    root_id = get_or_create_drive_folder()
+    if not root_id: return {}
+    ds = get_google_services()[1]
+    if not ds: return {}
+    file_map = {}
+
+    def _scan(folder_id):
+        subfolders = []
+        page_token = None
+        try:
+            while True:
+                resp = ds.files().list(
+                    q=f"'{folder_id}' in parents and trashed=false",
+                    spaces='drive',
+                    fields='nextPageToken, files(id, name, mimeType)',
+                    pageToken=page_token
+                ).execute()
+                for f in resp.get('files', []):
+                    if f.get('mimeType') == 'application/vnd.google-apps.folder':
+                        subfolders.append(f['id'])
+                    else:
+                        stem = os.path.splitext(f['name'])[0]
+                        if stem.isdigit():
+                            file_map[str(stem).zfill(5)] = f['id']
+                        file_map[stem] = f['id']
+                page_token = resp.get('nextPageToken')
+                if not page_token: break
+        except Exception as e:
+            err = str(e)
+            if "Broken pipe" in err or "Errno 32" in err:
+                get_google_services.clear()
+            return
+        for sid in subfolders:
+            _scan(sid)
+
+    _scan(root_id)
+    return file_map
+
+@st.cache_data(ttl=600)
 def get_set_drive_file_map():
     return get_drive_file_map()
 
@@ -244,9 +289,12 @@ def download_image_by_id(file_id):
 @st.cache_data(ttl=3600)
 def get_image_from_drive(filename_or_id):
     if not filename_or_id: return None
-    fmap = get_drive_file_map()
     stem = os.path.splitext(filename_or_id)[0]
+    # 루트 맵 우선, 없으면 하위 폴더까지 포함한 깊은 맵 조회
+    fmap = get_drive_file_map()
     if stem in fmap: return download_image_by_id(fmap[stem])
+    dmap = get_drive_file_map_deep()
+    if stem in dmap: return download_image_by_id(dmap[stem])
     if len(filename_or_id) > 10:
          return download_image_by_id(filename_or_id)
     return None
@@ -3181,27 +3229,45 @@ if mode == "관리자 모드" or mode == "管理者モード":
             st.divider()
             st.markdown("##### 🔄 드라이브 이미지 일괄 동기화")
             with st.expander("구글 드라이브 폴더의 이미지와 자동 연결하기", expanded=False):
-                st.info("💡 사용법: 이미지 파일명을 '품목코드.jpg' (예: 00200.jpg)로 저장해서 구글 드라이브 'Looperget_Images' 폴더에 먼저 업로드하세요.")
+                st.info("💡 파일명을 '품목코드.jpg'(예: 01513.jpg)로 저장해 'Looperget_Images' 폴더(또는 그 하위 products 폴더)에 올리세요. 하위 폴더까지 자동 검색합니다.")
                 if st.button("🔄 드라이브 이미지 자동 연결 실행", key="btn_sync_images"):
-                    with st.spinner("드라이브 폴더를 검색하는 중..."):
-                        get_drive_file_map.clear() 
-                        file_map = get_drive_file_map() 
+                    with st.spinner("드라이브 폴더(하위 포함)를 검색하는 중..."):
+                        get_drive_file_map.clear()
+                        get_drive_file_map_deep.clear()
+                        file_map = get_drive_file_map_deep()
                         if not file_map:
                             st.warning("폴더가 비어있거나 찾을 수 없습니다.")
                         else:
                             updated_count = 0
                             products = st.session_state.db["products"]
+                            unmatched = []
                             for p in products:
-                                code = str(p.get("code", "")).strip()
-                                if code and code in file_map:
-                                    p["image"] = file_map[code]
+                                raw = str(p.get("code", "")).strip()
+                                code5 = raw.zfill(5)
+                                # 코드(zfill) 또는 원본 코드로 매칭
+                                fid = file_map.get(code5) or file_map.get(raw)
+                                if fid:
+                                    p["image"] = fid
                                     updated_count += 1
+                                else:
+                                    unmatched.append(code5)
                             if updated_count > 0:
                                 save_products_to_sheet(products)
                                 st.success(f"✅ 총 {updated_count}개의 제품 이미지를 연결했습니다!")
-                                st.session_state.db = load_data_from_sheet() 
+                                st.session_state.db = load_data_from_sheet()
+                                st.rerun()
                             else:
-                                st.warning("매칭되는 이미지가 없습니다. (파일명이 품목코드와 같은지 확인하세요)")
+                                st.warning("매칭되는 이미지가 없습니다.")
+                                # [V18] 진단정보: 드라이브에 실제 어떤 파일명이 있는지 보여줌
+                                drive_keys = sorted([k for k in file_map.keys() if k.isdigit()])
+                                st.caption(f"🔍 진단: 드라이브에서 찾은 숫자 파일명 {len(drive_keys)}개")
+                                if drive_keys:
+                                    st.code(", ".join(drive_keys[:50]) + (" ..." if len(drive_keys) > 50 else ""))
+                                else:
+                                    st.caption("드라이브에 '숫자.확장자' 형식 파일이 없습니다. 파일명을 품목코드(예: 01513.jpg)로 바꿔주세요.")
+                                prod_codes = sorted({str(p.get("code","")).strip().zfill(5) for p in st.session_state.db["products"] if p.get("code")})
+                                st.caption(f"📋 시트의 품목코드 예시 {min(len(prod_codes),10)}개")
+                                st.code(", ".join(prod_codes[:10]))
             st.divider()
             c1, c2, c3 = st.columns([2, 2, 1])
             pn = [p["name"] for p in st.session_state.db["products"]]
@@ -3445,7 +3511,7 @@ if mode == "관리자 모드" or mode == "管理者モード":
             # ── V12: 세트 이미지 빌더 (Fabric.js) ─────────────────────────
             st.markdown("##### 🎨 세트 이미지 빌더 (Fabric.js)")
             with st.expander("캔버스에서 부속 배치 → 세트 이미지 생성 / 신규 세트 통합 등록", expanded=False):
-                build_set_image_editor(st.session_state.db.get("sets", {}), st.session_state.db.get("products", []), get_drive_file_map())
+                build_set_image_editor(st.session_state.db.get("sets", {}), st.session_state.db.get("products", []), get_drive_file_map_deep())
             if "set_manage_mode" not in st.session_state: st.session_state.set_manage_mode = "신규"
             mt = st.radio("작업", ["신규", "수정"], horizontal=True, key="set_manage_mode")
             sub_cat = None

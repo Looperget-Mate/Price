@@ -80,50 +80,45 @@ DRIVE_SET_FOLDER_NAME = "Looperget_Images"
 ADMIN_FOLDER_NAME = "Looperget_Admin"
 ADMIN_PPT_NAME = "Set_Composition_Master.pptx"
 
-# ==========================================
-# [A-1] 드라이브 이미지 폴더 분리
-#   products/ : 품목 이미지 (파일명 = 품목코드)
-#   sets/     : 세트 이미지 (파일명 = 세트명)
-#   폴더 ID는 변경 시 이 두 상수만 교체 (코드 재배포 불필요하도록 한 곳에 모음)
-#   기존 Looperget_Images 루트는 fallback 스캔으로 계속 인식 → 점진 이행/롤백 안전
-# ==========================================
-PRODUCT_IMG_FOLDER_ID = "19rurab1aTRfECIL2VT81qjSGHru4K4Nm"
-SET_IMG_FOLDER_ID     = "1T9KRG297qSSEDYdNxHr2eHinWplwJ42V"
-
 def _get_ds():
     """항상 최신 drive_service 반환 (ttl=1800 캐시 기반)"""
     return get_google_services()[1]
 
-def _find_legacy_root_folder():
-    """기존 Looperget_Images 루트 폴더 ID 조회 (fallback 스캔용).
-    분리 전 루트에 남아있을 수 있는 파일 인식을 위해 유지."""
+def get_or_create_drive_folder():
     ds = _get_ds()
     if not ds: return None
     try:
         query_shared = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and sharedWithMe=true and trashed=false"
-        rs = ds.files().list(q=query_shared, fields="files(id)").execute().get('files', [])
-        if rs: return rs[0]['id']
+        results_shared = ds.files().list(q=query_shared, fields="files(id)").execute()
+        files_shared = results_shared.get('files', [])
+        if files_shared: return files_shared[0]['id']
         query = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        r = ds.files().list(q=query, fields="files(id)").execute().get('files', [])
-        if r: return r[0]['id']
-    except Exception:
-        get_google_services.clear()
-    return None
-
-def get_or_create_drive_folder(kind="product"):
-    """용도별 폴더 ID 반환.
-    kind="product" → PRODUCT_IMG_FOLDER_ID
-    kind="set"     → SET_IMG_FOLDER_ID
-    (하위 호환: 인자 없이 호출하면 품목 폴더 반환)"""
-    if kind == "set":
-        return SET_IMG_FOLDER_ID
-    return PRODUCT_IMG_FOLDER_ID
+        results = ds.files().list(q=query, fields="files(id)").execute()
+        files = results.get('files', [])
+        if files: return files[0]['id']
+        file_metadata = {'name': DRIVE_FOLDER_NAME, 'mimeType': 'application/vnd.google-apps.folder'}
+        folder = ds.files().create(body=file_metadata, fields='id').execute()
+        return folder.get('id')
+    except Exception as e:
+        err = str(e)
+        if "Broken pipe" in err or "Errno 32" in err:
+            try:
+                get_google_services.clear()
+                ds2 = _get_ds()
+                if ds2:
+                    q2 = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+                    r2 = ds2.files().list(q=q2, fields="files(id)").execute()
+                    f2 = r2.get('files', [])
+                    if f2: return f2[0]['id']
+            except Exception:
+                pass
+        return None  # st.warning 제거 → 반복 오류 메시지 차단
 
 def get_or_create_set_drive_folder():
-    return get_or_create_drive_folder(kind="set")
+    return get_or_create_drive_folder()
 
-def upload_image_to_drive(file_obj, filename, kind="product"):
-    folder_id = get_or_create_drive_folder(kind=kind)
+def upload_image_to_drive(file_obj, filename):
+    folder_id = get_or_create_drive_folder()
     if not folder_id: return None
     try:
         file_content = file_obj.getvalue()
@@ -137,8 +132,8 @@ def upload_image_to_drive(file_obj, filename, kind="product"):
         st.error(f"업로드 실패: {e}")
         return None
 
-def upload_set_image_to_drive(file_obj, filename, kind="set"):
-    folder_id = get_or_create_drive_folder(kind=kind)
+def upload_set_image_to_drive(file_obj, filename):
+    folder_id = get_or_create_drive_folder()
     if not folder_id: return None
     try:
         file_content = file_obj.getvalue()
@@ -157,10 +152,9 @@ def upload_set_image_to_drive(file_obj, filename, kind="set"):
             st.error(f"세트 이미지 업로드 실패: {e}")
         return None
 
-def upload_bytes_to_drive(byte_data: bytes, filename: str, mimetype: str = "image/png", kind="set") -> str | None:
-    """bytes 데이터를 드라이브에 직접 업로드. 빌더 PNG/PPTX 저장에 사용.
-    빌더 산출물은 세트 이미지이므로 기본 kind='set'."""
-    folder_id = get_or_create_drive_folder(kind=kind)
+def upload_bytes_to_drive(byte_data: bytes, filename: str, mimetype: str = "image/png") -> str | None:
+    """bytes 데이터를 드라이브에 직접 업로드. 빌더 PNG/PPTX 저장에 사용."""
+    folder_id = get_or_create_drive_folder()
     if not folder_id: return None
     try:
         buffer = io.BytesIO(byte_data)
@@ -173,45 +167,31 @@ def upload_bytes_to_drive(byte_data: bytes, filename: str, mimetype: str = "imag
         st.error(f"업로드 실패: {e}")
         return None
 
-def _scan_folder_files(ds, folder_id):
-    """단일 폴더의 파일을 {name_stem: id} 맵으로 반환."""
-    result = {}
-    if not folder_id: return result
+@st.cache_data(ttl=600)
+def get_drive_file_map():
+    folder_id = get_or_create_drive_folder()
+    if not folder_id: return {}
+    file_map = {}
+    ds = get_google_services()[1]
+    if not ds: return {}
     try:
         query = f"'{folder_id}' in parents and trashed=false"
         page_token = None
         while True:
             response = ds.files().list(q=query, spaces='drive', fields='nextPageToken, files(id, name)', pageToken=page_token).execute()
-            for f in response.get('files', []):
+            files = response.get('files', [])
+            for f in files:
                 name_stem = os.path.splitext(f['name'])[0]
                 if name_stem.isdigit():
-                    result[str(name_stem).zfill(5)] = f['id']
-                result[name_stem] = f['id']
+                    norm_name = str(name_stem).zfill(5)
+                    file_map[norm_name] = f['id']
+                file_map[name_stem] = f['id']
             page_token = response.get('nextPageToken', None)
             if page_token is None: break
     except Exception as e:
         err = str(e)
         if "Broken pipe" in err or "Errno 32" in err:
-            get_google_services.clear()
-    return result
-
-@st.cache_data(ttl=600)
-def get_drive_file_map():
-    """품목/세트 이미지 통합 맵.
-    스캔 순서: 레거시 루트 → sets/ → products/
-    뒤에 스캔한 것이 우선(덮어쓰기)되므로, 분리된 폴더가 레거시보다 우선.
-    호출처(품목/세트 양쪽)는 변경 없이 동작."""
-    ds = get_google_services()[1]
-    if not ds: return {}
-    file_map = {}
-    # 1) 레거시 루트(분리 전 잔존 파일) — 있으면 먼저 채움
-    legacy_id = _find_legacy_root_folder()
-    if legacy_id and legacy_id not in (PRODUCT_IMG_FOLDER_ID, SET_IMG_FOLDER_ID):
-        file_map.update(_scan_folder_files(ds, legacy_id))
-    # 2) 세트 폴더
-    file_map.update(_scan_folder_files(ds, SET_IMG_FOLDER_ID))
-    # 3) 품목 폴더 (최우선)
-    file_map.update(_scan_folder_files(ds, PRODUCT_IMG_FOLDER_ID))
+            get_google_services.clear()  # 다음 호출 시 재인증
     return file_map
 
 @st.cache_data(ttl=600)
@@ -642,76 +622,145 @@ def save_quote_to_sheet(timestamp, q_name, manager, total, json_data):
 def build_set_image_editor(db_sets, db_products, drive_file_map):
     """
     Fabric.js 기반 세트 이미지 빌더.
-    - 모드 A: 기존 세트 이미지 편집 (선택 → 빌더에서 수정 → PNG/PPTX 저장)
-    - 모드 B: 새 세트 만들기 (부속 팔레트 → 캔버스 조립 → 세트명 입력 → 통합 저장)
+    - 검색/이미지로드/수량입력: Streamlit 네이티브 (iframe 왼쪽 칼럼)
+    - 캔버스 조립/저장: Fabric.js HTML (iframe)
     """
     import streamlit.components.v1 as components
 
-    # ── 부속 팔레트 데이터 준비 ────────────────────────────────────────
-    # 전략: 이미지 있는 품목만, 최대 80개, 캐시 활용
-    PALETTE_MAX = 80
-    palette_items = []
-    # 부속 카테고리 우선 정렬 (캔버스에서 주로 사용하는 것이 먼저 오도록)
-    priority_cats = ["부속", "주배관", "가지관"]
-    def cat_priority(p):
-        cat = p.get("category", "")
-        for i, c in enumerate(priority_cats):
-            if c in cat:
-                return i
-        return 99
-    sorted_products = sorted(db_products, key=cat_priority)
+    if "_img_cache" not in st.session_state:
+        st.session_state._img_cache = {}
+    if "builder_pending_items" not in st.session_state:
+        st.session_state.builder_pending_items = []   # [{code,name,spec,qty,b64}] — JS 캔버스 추가 대기
+    if "builder_recipe" not in st.session_state:
+        st.session_state.builder_recipe = {}          # {code: {name,spec,qty}} — 레시피 집계
 
-    palette_ph = st.empty()
-    palette_ph.info("⏳ 부속 팔레트 이미지 로딩 중...")
-    loaded = 0
-    for p in sorted_products:
-        if loaded >= PALETTE_MAX:
-            break
+    # ── 전체 품목 메타 (코드/이름/규격) ─────────────────────────────────
+    all_meta = []
+    for p in db_products:
         code = str(p.get("code", "")).strip().zfill(5)
-        name = p.get("name", "")
-        spec = p.get("spec", "-")
+        name = p.get("name", "") or ""
+        spec = p.get("spec", "") or ""
+        cat  = p.get("category", "") or ""
         img_id = drive_file_map.get(code) or (
-            p.get("image") if len(str(p.get("image","") or "")) > 10 else None
+            p.get("image") if len(str(p.get("image", "") or "")) > 10 else None
         )
-        if not img_id:
-            continue
-        b64 = get_image_from_drive(img_id)
-        if b64:
-            palette_items.append({"code": code, "name": name, "spec": spec, "b64": b64})
-            loaded += 1
-    palette_ph.empty()
+        all_meta.append({"code": code, "name": name, "spec": spec,
+                         "cat": cat, "img_id": img_id or ""})
 
-    # ── 모드 선택 ─────────────────────────────────────────────────────
-    builder_mode = st.radio("빌더 작업 모드", ["🖼️ 기존 세트 이미지 편집", "✨ 새 세트 만들기"], horizontal=True, key="builder_mode")
+    # ── 레이아웃: 왼쪽(검색) | 오른쪽(캔버스) ───────────────────────────
+    col_search, col_canvas = st.columns([1, 3])
 
-    target_set_name = ""
-    if builder_mode == "🖼️ 기존 세트 이미지 편집":
-        all_set_names = []
-        for cat_items in db_sets.values():
-            all_set_names.extend(cat_items.keys())
-        if not all_set_names:
-            st.info("등록된 세트가 없습니다.")
-            return
-        target_set_name = st.selectbox("편집할 세트 선택", all_set_names, key="builder_target_set")
+    with col_search:
+        st.markdown("#### 🔍 부속 검색")
+        q = st.text_input("이름 / 규격 / 코드", placeholder="예: 카플러, 25mm, 01733",
+                          key="builder_q")
 
-    # ── Fabric.js 캔버스 HTML 생성 ────────────────────────────────────
-    palette_json = json.dumps(palette_items, ensure_ascii=False)
-    mode_new = "true" if builder_mode == "✨ 새 세트 만들기" else "false"
-    target_set_json = json.dumps(target_set_name)
+        matched = []
+        if q and q.strip():
+            ql = q.strip().lower()
+            matched = [m for m in all_meta
+                       if ql in m["name"].lower()
+                       or ql in m["spec"].lower()
+                       or ql in m["code"]
+                       or ql in m["cat"].lower()][:16]
 
-    # 기존 세트 이미지 b64 준비 (편집 모드)
-    target_set_img_b64 = "null"
-    if builder_mode == "🖼️ 기존 세트 이미지 편집" and target_set_name:
-        for cat_items in db_sets.values():
-            if target_set_name in cat_items:
-                img_ref = cat_items[target_set_name].get("image")
-                if img_ref and len(str(img_ref)) > 10:
-                    b64 = get_image_from_drive(img_ref)
+        if matched:
+            st.caption(f"{len(matched)}개 검색됨")
+            for m in matched:
+                code = m["code"]
+                # 캐시 우선, 없으면 드라이브 로드
+                if code not in st.session_state._img_cache and m["img_id"]:
+                    st.session_state._img_cache[code] = get_image_from_drive(m["img_id"])
+                b64 = st.session_state._img_cache.get(code)
+
+                with st.container(border=True):
                     if b64:
-                        target_set_img_b64 = json.dumps(b64)
-                break
+                        st.image(b64, use_container_width=True)
+                    else:
+                        st.markdown(
+                            '<div style="height:60px;background:#1a1a2e;border-radius:4px;'
+                            'display:flex;align-items:center;justify-content:center;'
+                            'color:#555;font-size:10px;">이미지 없음</div>',
+                            unsafe_allow_html=True)
+                    st.caption(f"[{code}] {m['name']} / {m['spec'] or '-'}")
 
-    html_code = f"""
+                    c1, c2 = st.columns([2, 1])
+                    with c1:
+                        qty = st.number_input("수량", min_value=1, value=1, step=1,
+                                              key=f"bq_{code}")
+                    with c2:
+                        st.write("")
+                        if st.button("➕ 추가", key=f"badd_{code}", use_container_width=True):
+                            # 레시피 집계
+                            if code in st.session_state.builder_recipe:
+                                st.session_state.builder_recipe[code]["qty"] += qty
+                            else:
+                                st.session_state.builder_recipe[code] = {
+                                    "name": m["name"], "spec": m["spec"], "qty": qty
+                                }
+                            # 캔버스 추가 대기열에 등록
+                            st.session_state.builder_pending_items.append({
+                                "code": code, "name": m["name"],
+                                "spec": m["spec"] or "-",
+                                "qty": qty,
+                                "b64": b64 or ""
+                            })
+                            st.success(f"'{m['name']}' {qty}개 추가됨")
+        elif q and q.strip():
+            st.caption("검색 결과 없음")
+        else:
+            st.caption("품목명, 규격, 코드로 검색하세요.")
+
+        # ── 현재 레시피 집계 표시 ─────────────────────────────────────
+        if st.session_state.builder_recipe:
+            st.markdown("---")
+            st.markdown("**📋 구성 집계**")
+            for c, info in st.session_state.builder_recipe.items():
+                st.markdown(f"- [{c}] {info['name']} × **{info['qty']}**")
+            if st.button("🗑 집계 초기화", key="builder_clear_recipe"):
+                st.session_state.builder_recipe = {}
+                st.session_state.builder_pending_items = []
+                st.rerun()
+
+    # ── 대기열 → JS에 전달할 JSON 준비 ──────────────────────────────────
+    pending_json = json.dumps(st.session_state.builder_pending_items, ensure_ascii=False)
+    # 전달 후 대기열 비움 (다음 렌더에서 중복 추가 방지)
+    if st.session_state.builder_pending_items:
+        st.session_state.builder_pending_items = []
+
+    with col_canvas:
+        # ── 모드 선택 ──────────────────────────────────────────────────
+        builder_mode = st.radio("빌더 작업 모드",
+                                ["🖼️ 기존 세트 이미지 편집", "✨ 새 세트 만들기"],
+                                horizontal=True, key="builder_mode")
+
+        target_set_name = ""
+        if builder_mode == "🖼️ 기존 세트 이미지 편집":
+            all_set_names = []
+            for cat_items in db_sets.values():
+                all_set_names.extend(cat_items.keys())
+            if not all_set_names:
+                st.info("등록된 세트가 없습니다.")
+                return
+            target_set_name = st.selectbox("편집할 세트 선택", all_set_names,
+                                           key="builder_target_set")
+
+        # 기존 세트 이미지 b64
+        target_set_img_b64 = "null"
+        if builder_mode == "🖼️ 기존 세트 이미지 편집" and target_set_name:
+            for cat_items in db_sets.values():
+                if target_set_name in cat_items:
+                    img_ref = cat_items[target_set_name].get("image")
+                    if img_ref and len(str(img_ref)) > 10:
+                        b64 = get_image_from_drive(img_ref)
+                        if b64:
+                            target_set_img_b64 = json.dumps(b64)
+                    break
+
+        mode_new        = "true" if builder_mode == "✨ 새 세트 만들기" else "false"
+        target_set_json = json.dumps(target_set_name)
+
+        html_code = f"""
 <!DOCTYPE html>
 <html>
 <head>
@@ -727,12 +776,6 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
 #toolbar button.active {{ background:#e94560; border-color:#e94560; color:#fff; }}
 .sep {{ width:1px; height:20px; background:#444; margin:0 4px; }}
 #main {{ display:flex; flex:1; overflow:hidden; }}
-#palette-panel {{ width:160px; background:#16213e; border-right:1px solid #0f3460; overflow-y:auto; padding:8px; flex-shrink:0; }}
-#palette-panel h4 {{ font-size:11px; color:#aaa; margin-bottom:6px; }}
-.pal-item {{ border:1px solid #333; border-radius:4px; margin-bottom:6px; cursor:pointer; padding:4px; background:#0d1b2a; transition:.2s; }}
-.pal-item:hover {{ border-color:#e94560; background:#1a1a3e; }}
-.pal-item img {{ width:100%; border-radius:3px; display:block; }}
-.pal-item .pal-label {{ font-size:10px; color:#aaa; text-align:center; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
 #canvas-area {{ flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding:10px; overflow:auto; background:#0d1b2a; position:relative; }}
 #canvas-wrap {{ position:relative; display:inline-block; }}
 #fabric-canvas {{ border:2px solid #0f3460; border-radius:4px; background:#fff; display:block; }}
@@ -793,11 +836,7 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
     </div>
   </div>
   <div id="main">
-    <!-- 왼쪽 부속 팔레트 -->
-    <div id="palette-panel">
-      <h4>부속 팔레트</h4>
-      <div id="palette-items"></div>
-    </div>
+    <!-- 캔버스 (Streamlit 왼쪽 칼럼에서 검색/추가, 여기서는 캔버스만) -->
     <!-- 캔버스 -->
     <div id="canvas-area">
       <div id="canvas-wrap">
@@ -811,7 +850,7 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
           <div onclick="ctxDelete()" style="color:#f88;">🗑 삭제</div>
         </div>
       </div>
-      <div id="status" style="margin-top:6px;">선택 모드 — 부속 클릭하여 캔버스에 추가</div>
+      <div id="status" style="margin-top:6px;">선택 모드 — 위 검색창에서 부속 검색 후 클릭하여 캔버스에 추가</div>
     </div>
     <!-- 오른쪽 속성 패널 -->
     <div id="props-panel">
@@ -879,13 +918,13 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
 const MODE_NEW = {mode_new};
 const TARGET_SET = {target_set_json};
 const TARGET_SET_IMG_B64 = {target_set_img_b64};
-const PALETTE = {palette_json};
+const PENDING_ITEMS = {pending_json};  // Python에서 "추가" 버튼 누른 품목 [{code,name,spec,qty,b64}]
 let CW = 720, CH = 540;
 
 let canvas, curMode = 'select';
 let pipeStart = null, isPiping = false;
 let undoStack = [], redoStack = [];
-let objRecipe = {{}};   // fabric obj -> {{code, name, qty}}
+let objRecipe = {{}};   // objId -> {{code, name, qty}}
 let lastObjId = 0;
 
 // ── Fabric 초기화 ───────────────────────────────────────────────────
@@ -896,8 +935,10 @@ window.onload = function() {{
     }});
     canvas.setWidth(CW); canvas.setHeight(CH);
 
-    // 팔레트 렌더
-    buildPalette();
+    // 대기열에 품목이 있으면 캔버스에 자동 추가
+    if (PENDING_ITEMS && PENDING_ITEMS.length > 0) {{
+        applyPendingItems();
+    }}
 
     // 이벤트
     canvas.on('mouse:down', onMouseDown);
@@ -942,40 +983,85 @@ window.onload = function() {{
     }}
 }};
 
-// ── 팔레트 빌드 ─────────────────────────────────────────────────────
-function buildPalette() {{
-    const container = document.getElementById('palette-items');
-    PALETTE.forEach(item => {{
-        const div = document.createElement('div');
-        div.className = 'pal-item';
-        div.title = `[${{item.code}}] ${{item.name}} (${{item.spec}})`;
-        div.innerHTML = `<img src="${{item.b64}}" alt="${{item.name}}"><div class="pal-label">${{item.name}}</div>`;
-        div.addEventListener('click', () => addFromPalette(item));
-        container.appendChild(div);
+// ── 대기열 품목 캔버스 자동 추가 ────────────────────────────────────
+// PENDING_ITEMS: [{code, name, spec, qty, b64}, ...]
+// qty만큼 이미지를 격자 배치, b64 없으면 텍스트 라벨로 대체
+function applyPendingItems() {{
+    let col = 0, row = 0;
+    const COLS = 4;
+    const STEP_X = 130, STEP_Y = 130;
+    const OFFSET_X = 30, OFFSET_Y = 30;
+
+    PENDING_ITEMS.forEach(item => {{
+        for (let i = 0; i < item.qty; i++) {{
+            const lx = OFFSET_X + (col % COLS) * STEP_X;
+            const ly = OFFSET_Y + row * STEP_Y;
+            col++;
+            if (col % COLS === 0) row++;
+
+            if (item.b64) {{
+                fabric.Image.fromURL(item.b64, function(img) {{
+                    img.set({{
+                        left: lx, top: ly,
+                        scaleX: 0.45, scaleY: 0.45,
+                        cornerSize: 8, hasRotatingPoint: true,
+                    }});
+                    img._looperCode = item.code;
+                    img._looperName = item.name;
+                    img._looperSpec = item.spec;
+                    img._objId = ++lastObjId;
+                    objRecipe[img._objId] = {{code: item.code, name: item.name, qty: 1}};
+                    canvas.add(img);
+                    canvas.renderAll();
+                    updateRecipe();
+                }});
+            }} else {{
+                // 이미지 없으면 텍스트 라벨
+                const txt = new fabric.IText(`[${{item.code}}]\n${{item.name}}`, {{
+                    left: lx, top: ly,
+                    fontSize: 11, fill: '#333',
+                    fontFamily: 'sans-serif',
+                    selectable: true, editable: false,
+                }});
+                txt._looperCode = item.code;
+                txt._looperName = item.name;
+                txt._looperSpec = item.spec;
+                txt._objId = ++lastObjId;
+                objRecipe[txt._objId] = {{code: item.code, name: item.name, qty: 1}};
+                canvas.add(txt);
+                canvas.renderAll();
+                updateRecipe();
+            }}
+        }}
     }});
+
+    if (PENDING_ITEMS.length > 0) {{
+        const total = PENDING_ITEMS.reduce((s, x) => s + x.qty, 0);
+        setStatus(`${{total}}개 품목이 캔버스에 추가되었습니다.`);
+    }}
 }}
 
-// ── 팔레트 → 캔버스 추가 ────────────────────────────────────────────
+// ── 팔레트 → 캔버스 추가 (b64 직접 전달용, 하위 호환) ───────────────
 function addFromPalette(item) {{
-    const qtyStr = prompt(`"${{item.name}}" 수량을 입력하세요:`, "1");
-    if (qtyStr === null) return;
-    const qty = parseInt(qtyStr) || 1;
+    const qty = item.qty || 1;
     for (let i = 0; i < qty; i++) {{
-        fabric.Image.fromURL(item.b64, function(img) {{
-            img.set({{
-                left: 80 + i*30, top: 80 + i*20,
-                scaleX: 0.5, scaleY: 0.5,
-                cornerSize: 8, hasRotatingPoint: true,
+        if (item.b64) {{
+            fabric.Image.fromURL(item.b64, function(img) {{
+                img.set({{
+                    left: 80 + i * 30, top: 80 + i * 20,
+                    scaleX: 0.5, scaleY: 0.5,
+                    cornerSize: 8, hasRotatingPoint: true,
+                }});
+                img._looperCode = item.code;
+                img._looperName = item.name;
+                img._looperSpec = item.spec;
+                img._objId = ++lastObjId;
+                objRecipe[img._objId] = {{code: item.code, name: item.name, qty: 1}};
+                canvas.add(img);
+                canvas.setActiveObject(img);
+                canvas.renderAll();
             }});
-            img._looperCode = item.code;
-            img._looperName = item.name;
-            img._looperSpec = item.spec;
-            img._objId = ++lastObjId;
-            objRecipe[img._objId] = {{code: item.code, name: item.name, qty: 1}};
-            canvas.add(img);
-            canvas.setActiveObject(img);
-            canvas.renderAll();
-        }});
+        }}
     }}
     updateRecipe();
     setStatus(`"${{item.name}}" ${{qty}}개 추가됨`);
@@ -1218,99 +1304,91 @@ document.addEventListener('DOMContentLoaded', function() {{
 </body>
 </html>
 """
-    components.html(html_code, height=720, scrolling=True)
+        components.html(html_code, height=680, scrolling=False)
 
-    # ── Streamlit: postMessage 수신 처리 (저장 버튼 대체) ──────────────
-    st.caption("💡 빌더에서 저장 버튼을 누른 후, 아래에서 최종 저장을 확인하세요.")
-
-    with st.form("builder_save_form"):
-        st.markdown("**직접 저장**: 빌더에서 PNG를 로컬 다운로드 후, 아래에서 드라이브에 업로드하세요.")
-        c1, c2 = st.columns([2,1])
-        with c1:
-            uploaded_png = st.file_uploader("PNG 파일 선택", type=["png"], key="builder_upload_png")
-        with c2:
-            if builder_mode == "✨ 새 세트 만들기":
-                new_sname = st.text_input("세트명", key="builder_new_name2")
-                new_scat  = st.selectbox("분류", ["주배관세트","가지관세트","기타자재"], key="builder_new_cat2")
-                new_ssc   = st.selectbox("하위분류(주배관세트만)", ["50mm","40mm","기타","-"], key="builder_new_sc2")
-            else:
-                new_sname = target_set_name
-                new_scat  = ""
-                new_ssc   = ""
-
-        submitted = st.form_submit_button("💾 드라이브 업로드 & 저장", type="primary", use_container_width=True)
-        if submitted and uploaded_png:
-            with st.spinner("저장 중..."):
-                ext = "png"
-                fname = f"{new_sname}.{ext}"
-                # 기존 동명 파일 삭제 후 업로드
-                try:
-                    fmap = get_drive_file_map()
-                    old_id = fmap.get(new_sname)
-                    if old_id and drive_service:
-                        _get_ds().files().delete(fileId=old_id).execute()
-                except: pass
-                new_id = upload_bytes_to_drive(uploaded_png.getvalue(), fname, "image/png")
-                if new_id:
-                    get_drive_file_map.clear()
-                    if builder_mode == "✨ 새 세트 만들기" and new_sname:
-                        # 세트 신규 등록 (레시피 없음 — 빌더에서 직접 구성)
-                        if new_scat not in st.session_state.db["sets"]:
-                            st.session_state.db["sets"][new_scat] = {}
-                        sc_val = new_ssc if new_ssc != "-" else None
-                        st.session_state.db["sets"][new_scat][new_sname] = {
-                            "recipe": {}, "image": new_id, "sub_cat": sc_val
-                        }
-                        save_sets_to_sheet(st.session_state.db["sets"])
-                        if "_img_cache" in st.session_state:
-                            st.session_state._img_cache.pop(new_sname, None)
-                        st.success(f"✅ '{new_sname}' 세트가 생성되고 이미지가 저장되었습니다!")
-                    else:
-                        # 기존 세트 이미지 교체
-                        for cat_key, cat_items in st.session_state.db["sets"].items():
-                            if new_sname in cat_items:
-                                cat_items[new_sname]["image"] = new_id
-                                break
-                        save_sets_to_sheet(st.session_state.db["sets"])
-                        if "_img_cache" in st.session_state:
-                            st.session_state._img_cache.pop(new_sname, None)
-                        st.success(f"✅ '{new_sname}' 이미지가 업데이트되었습니다!")
-                    time.sleep(1)
-                    st.rerun()
+        # ── PNG 업로드 → 드라이브 저장 ──────────────────────────────────
+        st.caption("💡 빌더에서 PNG 로컬 저장 후, 아래에서 드라이브에 업로드하세요.")
+        with st.form("builder_save_form"):
+            st.markdown("**PNG 드라이브 저장**")
+            c1, c2 = st.columns([2,1])
+            with c1:
+                uploaded_png = st.file_uploader("PNG 파일 선택", type=["png"], key="builder_upload_png")
+            with c2:
+                if builder_mode == "✨ 새 세트 만들기":
+                    new_sname = st.text_input("세트명", key="builder_new_name2")
+                    new_scat  = st.selectbox("분류", ["주배관세트","가지관세트","기타자재"], key="builder_new_cat2")
+                    new_ssc   = st.selectbox("하위분류(주배관세트만)", ["50mm","40mm","기타","-"], key="builder_new_sc2")
                 else:
-                    st.error("업로드 실패")
+                    new_sname = target_set_name
+                    new_scat  = ""
+                    new_ssc   = ""
 
-    # ── PPTX 로컬 다운로드 ────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown("**PPTX 생성**: PNG를 업로드하면 PowerPoint 파일로 변환하여 다운로드합니다.")
-    pptx_png = st.file_uploader("PPTX 변환용 PNG", type=["png"], key="builder_pptx_png")
-    pptx_name_input = st.text_input("PPTX 세트명 (파일명용)", value=target_set_name or "new_set", key="builder_pptx_name")
-    if pptx_png and st.button("📊 PPTX 파일 생성", key="builder_gen_pptx"):
-        try:
-            from pptx import Presentation
-            from pptx.util import Inches, Pt
-            img_bytes = pptx_png.getvalue()
-            img_stream = io.BytesIO(img_bytes)
-            with Image.open(io.BytesIO(img_bytes)) as im:
-                iw, ih = im.size
-            prs = Presentation()
-            prs.slide_width  = Inches(iw / 96)
-            prs.slide_height = Inches(ih / 96)
-            slide = prs.slides.add_slide(prs.slide_layouts[6])  # 빈 슬라이드
-            slide.shapes.add_picture(img_stream, 0, 0, prs.slide_width, prs.slide_height)
-            pptx_buf = io.BytesIO()
-            prs.save(pptx_buf)
-            st.download_button(
-                "📥 PPTX 다운로드",
-                pptx_buf.getvalue(),
-                f"{pptx_name_input}.pptx",
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                use_container_width=True
-            )
-        except ImportError:
-            st.error("python-pptx 패키지가 필요합니다. requirements.txt에 'python-pptx'를 추가하세요.")
-        except Exception as e:
-            st.error(f"PPTX 생성 오류: {e}")
+            submitted = st.form_submit_button("💾 드라이브 업로드 & 저장", type="primary", use_container_width=True)
+            if submitted and uploaded_png:
+                with st.spinner("저장 중..."):
+                    fname = f"{new_sname}.png"
+                    try:
+                        fmap = get_drive_file_map()
+                        old_id = fmap.get(new_sname)
+                        if old_id:
+                            _get_ds().files().delete(fileId=old_id).execute()
+                    except: pass
+                    new_id = upload_bytes_to_drive(uploaded_png.getvalue(), fname, "image/png")
+                    if new_id:
+                        get_drive_file_map.clear()
+                        if builder_mode == "✨ 새 세트 만들기" and new_sname:
+                            if new_scat not in st.session_state.db["sets"]:
+                                st.session_state.db["sets"][new_scat] = {}
+                            sc_val = new_ssc if new_ssc != "-" else None
+                            recipe_to_save = {c: info["qty"] for c, info in st.session_state.builder_recipe.items()}
+                            st.session_state.db["sets"][new_scat][new_sname] = {
+                                "recipe": recipe_to_save, "image": new_id, "sub_cat": sc_val
+                            }
+                            save_sets_to_sheet(st.session_state.db["sets"])
+                            st.session_state.builder_recipe = {}
+                            st.success(f"✅ '{new_sname}' 세트 생성 및 이미지 저장 완료!")
+                        else:
+                            for cat_key, cat_items in st.session_state.db["sets"].items():
+                                if new_sname in cat_items:
+                                    cat_items[new_sname]["image"] = new_id
+                                    break
+                            save_sets_to_sheet(st.session_state.db["sets"])
+                            st.success(f"✅ '{new_sname}' 이미지 업데이트 완료!")
+                        if "_img_cache" in st.session_state:
+                            st.session_state._img_cache.pop(new_sname, None)
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("업로드 실패")
+
+        # ── PPTX 변환 ────────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("**PPTX 생성**: PNG를 업로드하면 PowerPoint로 변환합니다.")
+        pptx_png = st.file_uploader("PPTX 변환용 PNG", type=["png"], key="builder_pptx_png")
+        pptx_name_input = st.text_input("PPTX 세트명", value=target_set_name or "new_set", key="builder_pptx_name")
+        if pptx_png and st.button("📊 PPTX 파일 생성", key="builder_gen_pptx"):
+            try:
+                from pptx import Presentation
+                from pptx.util import Inches
+                img_bytes   = pptx_png.getvalue()
+                img_stream  = io.BytesIO(img_bytes)
+                with Image.open(io.BytesIO(img_bytes)) as im:
+                    iw, ih = im.size
+                prs = Presentation()
+                prs.slide_width  = Inches(iw / 96)
+                prs.slide_height = Inches(ih / 96)
+                slide = prs.slides.add_slide(prs.slide_layouts[6])
+                slide.shapes.add_picture(img_stream, 0, 0, prs.slide_width, prs.slide_height)
+                pptx_buf = io.BytesIO()
+                prs.save(pptx_buf)
+                st.download_button("📥 PPTX 다운로드", pptx_buf.getvalue(),
+                                   f"{pptx_name_input}.pptx",
+                                   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                   use_container_width=True)
+            except ImportError:
+                st.error("python-pptx 패키지가 필요합니다.")
+            except Exception as e:
+                st.error(f"PPTX 생성 오류: {e}")
 
 
 # ==========================================

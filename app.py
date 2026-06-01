@@ -745,9 +745,18 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
             target_set_name = st.selectbox("편집할 세트 선택", all_set_names,
                                            key="builder_target_set")
 
-        # 기존 세트 이미지 b64
+        # [V15] 배경(기존 세트 이미지) 표시 여부를 Python 세션상태로 제어
+        #  → rerun(부속 검색/추가) 후에도 상태 유지. JS 변수만으로는 매번 초기화되던 문제 해결.
+        show_bg = st.checkbox(
+            "기존 세트 이미지를 배경으로 표시",
+            value=st.session_state.get("builder_show_bg", True),
+            key="builder_show_bg",
+            help="체크 해제 후 부속을 배치하면 배경 없이 새 세트 이미지를 만들 수 있습니다."
+        )
+
+        # 기존 세트 이미지 b64 (배경 표시가 켜져 있을 때만 전달)
         target_set_img_b64 = "null"
-        if builder_mode == "🖼️ 기존 세트 이미지 편집" and target_set_name:
+        if show_bg and builder_mode == "🖼️ 기존 세트 이미지 편집" and target_set_name:
             for cat_items in db_sets.values():
                 if target_set_name in cat_items:
                     img_ref = cat_items[target_set_name].get("image")
@@ -776,8 +785,8 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
 #toolbar button.active {{ background:#e94560; border-color:#e94560; color:#fff; }}
 .sep {{ width:1px; height:20px; background:#444; margin:0 4px; }}
 #main {{ display:flex; flex:1; overflow:hidden; }}
-#canvas-area {{ flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding:10px; overflow:auto; background:#0d1b2a; position:relative; }}
-#canvas-wrap {{ position:relative; display:inline-block; transform-origin:top center; transition:transform .1s; }}
+#canvas-area {{ flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding:10px; overflow:hidden; background:#0d1b2a; position:relative; }}
+#canvas-wrap {{ position:relative; display:inline-block; overflow:hidden; }}
 #fabric-canvas {{ border:2px solid #0f3460; border-radius:4px; background:#fff; display:block; }}
 #ctx-menu {{ position:absolute; background:#2d2d4e; border:1px solid #444; border-radius:4px; padding:4px 0; display:none; z-index:999; min-width:130px; box-shadow:0 4px 12px rgba(0,0,0,.5); }}
 #ctx-menu div {{ padding:5px 14px; cursor:pointer; font-size:12px; color:#eee; }}
@@ -828,6 +837,12 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
       <option value="960,540">16:9 와이드</option>
       <option value="540,720">3:4 세로형</option>
     </select>
+    <div class="sep"></div>
+    <label style="font-size:11px;color:#aaa;">화면</label>
+    <button onclick="zoomOut()" title="축소">➖</button>
+    <span id="zoom-val" style="font-size:11px;color:#aaa;min-width:36px;text-align:center;">100%</span>
+    <button onclick="zoomIn()" title="확대">➕</button>
+    <button onclick="zoomFit()" title="영역에 맞춤">⤢ 맞춤</button>
     <div id="pipe-props" style="display:flex;align-items:center;gap:6px;">
       <label style="font-size:11px;color:#aaa;">색상</label>
       <input type="color" id="pipe-color" value="#333333" style="width:30px;height:22px;padding:0;border:none;background:none;cursor:pointer;">
@@ -927,8 +942,9 @@ let pipeStart = null, isPiping = false;
 let undoStack = [], redoStack = [];
 let objRecipe = {{}};   // objId -> {{code, name, qty}}
 let lastObjId = 0;
-let bgCleared = false;  // [V14] 캔버스 비우기로 배경을 영구 제거했는지
+let bgCleared = false;  // (구버전 호환, 미사용)
 let bgImageRef = null;  // [V14] 현재 배경 이미지 객체 참조
+let zoomLevel = 1;      // [V15] 화면 표시 배율 (저장 품질과 무관)
 
 // ── Fabric 초기화 ───────────────────────────────────────────────────
 window.onload = function() {{
@@ -965,10 +981,12 @@ window.onload = function() {{
 
     pushUndo();
     setMode('select');
-    setTimeout(fitCanvasToArea, 50);  // [V14] 레이아웃 확정 후 캔버스 맞춤
+    setTimeout(zoomFit, 80);   // [V15] 레이아웃 확정 후 영역 맞춤
 
     // ── 기존 세트 이미지 캔버스 로드 (편집 모드) ─────────────────────
-    if (!MODE_NEW && TARGET_SET_IMG_B64 && !bgCleared) {{
+    // [V15] 배경 표시 여부는 Python(show_bg 체크박스)이 결정.
+    //  TARGET_SET_IMG_B64가 null이면 애초에 전달 안 됨 → 배경 없음.
+    if (!MODE_NEW && TARGET_SET_IMG_B64) {{
         fabric.Image.fromURL(TARGET_SET_IMG_B64, function(img) {{
             const scale = Math.min(CW / img.width, CH / img.height);
             img.set({{
@@ -983,6 +1001,7 @@ window.onload = function() {{
             canvas.add(img);
             canvas.sendToBack(img);
             canvas.renderAll();
+            setTimeout(zoomFit, 30);
             setStatus('기존 이미지 로드됨 — 위에 부속을 배치하거나 PNG로 교체하세요.');
         }});
     }}
@@ -1224,8 +1243,8 @@ function sendBck()    {{ const o=canvas.getActiveObject(); if(o){{ canvas.sendBa
 function bringFront() {{ const o=canvas.getActiveObject(); if(o){{ canvas.bringToFront(o); pushUndo(); }} }}
 function sendBack()   {{ const o=canvas.getActiveObject(); if(o){{ canvas.sendToBack(o); pushUndo(); }} }}
 function deleteObj()  {{ const o=canvas.getActiveObject(); if(o){{ if(o._objId) delete objRecipe[o._objId]; canvas.remove(o); pushUndo(); updateRecipe(); }} }}
-function clearCanvas() {{ if(!confirm('캔버스를 비울까요? (배경 이미지 포함)')) return; bgCleared = true; bgImageRef = null; canvas.clear(); objRecipe={{}}; undoStack=[]; redoStack=[]; pushUndo(); updateRecipe(); setStatus('캔버스를 비웠습니다. 부속을 새로 배치하세요.'); }}
-function removeBgOnly() {{ if(bgImageRef){{ canvas.remove(bgImageRef); bgImageRef=null; }} bgCleared=true; canvas.getObjects().forEach(o=>{{ if(o._isBgImage) canvas.remove(o); }}); canvas.renderAll(); pushUndo(); setStatus('배경 이미지만 제거했습니다.'); }}
+function clearCanvas() {{ if(!confirm('캔버스의 부속을 모두 비울까요?')) return; bgImageRef = null; canvas.clear(); objRecipe={{}}; undoStack=[]; redoStack=[]; pushUndo(); updateRecipe(); setStatus('캔버스를 비웠습니다. (배경은 좌측 \\'기존 세트 이미지를 배경으로 표시\\' 체크 해제로 제거)'); }}
+function removeBgOnly() {{ let removed=false; canvas.getObjects().forEach(o=>{{ if(o._isBgImage){{ canvas.remove(o); removed=true; }} }}); bgImageRef=null; canvas.renderAll(); pushUndo(); setStatus(removed ? '배경 제거됨 — 영구 적용하려면 좌측 \\'배경으로 표시\\' 체크를 해제하세요.' : '제거할 배경이 없습니다.'); }}
 
 // ── 우클릭 컨텍스트 메뉴 ────────────────────────────────────────────
 function onContextMenu(opt) {{
@@ -1357,24 +1376,45 @@ function resizeCanvas(val) {{
     CW = parseInt(parts[0]); CH = parseInt(parts[1]);
     canvas.setWidth(CW); canvas.setHeight(CH);
     canvas.renderAll();
-    fitCanvasToArea();
+    zoomFit();
     setStatus(`캔버스 크기: ${{CW}}×${{CH}}`);
 }}
 
-// ── [V14] 캔버스를 표시 영역에 맞춰 축소 (내부 좌표/저장품질 유지) ──
-// fabric 내부 해상도는 그대로(고품질 저장), 화면에는 CSS scale로 맞춤.
-function fitCanvasToArea() {{
-    const area = document.getElementById('canvas-area');
+// ── [V15] 화면 줌 (저장 품질과 무관, 표시 배율만 조정) ───────────────
+// transform:scale은 레이아웃 공간을 안 줄여 스크롤바가 남으므로,
+// wrapper의 실제 width/height를 배율만큼 줄이고 fabric 래퍼를 scale.
+function applyZoom() {{
     const wrap = document.getElementById('canvas-wrap');
-    if (!area || !wrap) return;
-    const availW = area.clientWidth  - 20;   // padding 여유
-    const availH = area.clientHeight - 20;
-    if (availW <= 0 || availH <= 0) return;
-    // 가로/세로 중 더 빡빡한 쪽 기준으로 축소 (1배 초과 확대는 안 함)
-    const scale = Math.min(availW / CW, availH / CH, 1);
-    wrap.style.transform = 'scale(' + scale + ')';
+    if (!wrap) return;
+    const fc = canvas ? canvas.wrapperEl : null;
+    wrap.style.width  = (CW * zoomLevel) + 'px';
+    wrap.style.height = (CH * zoomLevel) + 'px';
+    if (fc) {{
+        fc.style.transform = 'scale(' + zoomLevel + ')';
+        fc.style.transformOrigin = 'top left';
+    }}
+    const zv = document.getElementById('zoom-val');
+    if (zv) zv.textContent = Math.round(zoomLevel * 100) + '%';
 }}
-window.addEventListener('resize', fitCanvasToArea);
+function zoomFit() {{
+    const area = document.getElementById('canvas-area');
+    if (!area) return;
+    const availW = area.clientWidth  - 24;
+    const availH = area.clientHeight - 24;
+    if (availW <= 0) {{ zoomLevel = 1; }}
+    else {{
+        // 폭 기준 우선 맞춤 (세로가 길면 스크롤 허용). 1배 초과 확대 안 함.
+        zoomLevel = Math.min(availW / CW, (availH > 0 ? availH / CH : 1), 1);
+        if (!isFinite(zoomLevel) || zoomLevel <= 0) zoomLevel = 1;
+    }}
+    applyZoom();
+}}
+function zoomIn()  {{ zoomLevel = Math.min(zoomLevel + 0.1, 2.0); applyZoom(); }}
+function zoomOut() {{ zoomLevel = Math.max(zoomLevel - 0.1, 0.2); applyZoom(); }}
+window.addEventListener('resize', zoomFit);
+
+// 하위호환: 기존 호출부가 fitCanvasToArea를 부를 수 있으므로 별칭 유지
+function fitCanvasToArea() {{ zoomFit(); }}
 
 // ── set-name-row 표시/숨김 ───────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', function() {{

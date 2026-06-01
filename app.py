@@ -889,6 +889,8 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
     <button onclick="bringFront()">⬆ 맨앞</button>
     <button onclick="sendBack()">⬇ 맨뒤</button>
     <div class="sep"></div>
+    <button onclick="duplicateObj()" title="선택 복사">📋 복사</button>
+    <div class="sep"></div>
     <button onclick="doUndo()">↩ 실행취소</button>
     <button onclick="doRedo()">↪ 다시실행</button>
     <div class="sep"></div>
@@ -909,12 +911,13 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
     <span id="zoom-val" style="font-size:11px;color:#aaa;min-width:36px;text-align:center;">100%</span>
     <button onclick="zoomIn()" title="확대">➕</button>
     <button onclick="zoomFit()" title="영역에 맞춤">⤢ 맞춤</button>
-    <div id="pipe-props" style="display:flex;align-items:center;gap:6px;">
+    <div id="pipe-props" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
       <label style="font-size:11px;color:#aaa;">색상</label>
-      <input type="color" id="pipe-color" value="#333333" style="width:30px;height:22px;padding:0;border:none;background:none;cursor:pointer;">
-      <label style="font-size:11px;color:#aaa;">굵기</label>
-      <input type="range" id="pipe-width" min="1" max="30" value="8" style="width:60px;">
-      <span id="pipe-width-val" style="font-size:11px;color:#aaa;">8px</span>
+      <input type="color" id="pipe-color" value="#2b2b2b" style="width:30px;height:22px;padding:0;border:none;background:none;cursor:pointer;">
+      <span id="pipe-chips" style="display:inline-flex;gap:3px;align-items:center;"></span>
+      <label style="font-size:11px;color:#aaa;margin-left:6px;">굵기</label>
+      <input type="range" id="pipe-width" min="1" max="40" value="14" style="width:60px;">
+      <span id="pipe-width-val" style="font-size:11px;color:#aaa;">14px</span>
     </div>
   </div>
   <div id="main">
@@ -981,17 +984,7 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
   </div>
   <!-- 하단 저장 영역 -->
   <div id="save-area">
-    <div id="set-name-row" style="display:{'block' if mode_new == 'true' else 'none'};">
-      <input type="text" id="new-set-name" placeholder="새 세트명 입력 (예: [LHC]E-1-50)">
-      <select id="new-set-cat" style="width:100%;background:#0d1b2a;border:1px solid #333;color:#eee;border-radius:4px;padding:5px;font-size:12px;margin-bottom:6px;">
-        <option value="주배관세트">주배관세트</option>
-        <option value="가지관세트">가지관세트</option>
-        <option value="기타자재">기타자재</option>
-      </select>
-    </div>
-    <button class="btn-primary" onclick="saveAll()">💾 PNG 저장 (드라이브)</button>
-    <button class="btn-secondary" onclick="downloadPptx()">📊 PPTX 다운로드</button>
-    <button class="btn-secondary" onclick="downloadPng()">📥 PNG 로컬 저장</button>
+    <button class="btn-primary" onclick="downloadPng()">📥 완성 PNG 내려받기 (이후 아래에서 드라이브 저장)</button>
     <div id="status2"></div>
   </div>
 </div>
@@ -1040,6 +1033,37 @@ window.onload = function() {{
     // 배관 굵기 슬라이더
     document.getElementById('pipe-width').addEventListener('input', function() {{
         document.getElementById('pipe-width-val').textContent = this.value + 'px';
+    }});
+
+    // [V19] 배관 색상 칩 — 호스/농수관/기본색
+    const PIPE_CHIPS = [
+        {{c:'#f4d624', t:'호스(노랑)'}},
+        {{c:'#2b2b2b', t:'농수관(짙은회색)'}},
+        {{c:'#ffffff', t:'흰색'}},
+        {{c:'#e23b3b', t:'빨강'}},
+        {{c:'#2b6fe2', t:'파랑'}},
+        {{c:'#2eaa4a', t:'녹색'}},
+        {{c:'#7b3fe4', t:'보라'}},
+        {{c:'#ff7ab8', t:'핑크'}},
+        {{c:'#f4d624', t:'노랑'}},
+        {{c:'#ff8c1a', t:'주황'}},
+        {{c:'#000000', t:'검정'}},
+    ];
+    const chipBox = document.getElementById('pipe-chips');
+    PIPE_CHIPS.forEach(ch => {{
+        const b = document.createElement('span');
+        b.title = ch.t;
+        b.style.cssText = 'width:18px;height:18px;border-radius:3px;cursor:pointer;border:1px solid #555;background:'+ch.c+';display:inline-block;';
+        b.onclick = function() {{
+            document.getElementById('pipe-color').value = ch.c;
+            // 선택된 배관이 있으면 즉시 적용
+            const o = canvas.getActiveObject();
+            if (o && (o._isPipe || o.type === 'line' || o.type === 'rect')) {{
+                if (o.type === 'rect') o.set('fill', ch.c); else o.set('stroke', ch.c);
+                canvas.renderAll(); pushUndo();
+            }}
+        }};
+        chipBox.appendChild(b);
     }});
 
     // 캔버스 우클릭 메뉴 닫기
@@ -1211,44 +1235,71 @@ function setMode(m) {{
     setStatus(m==='select' ? '선택 모드 — 오브젝트를 클릭하여 선택/이동' : '배관 모드 — 클릭해서 시작점, 다시 클릭해서 끝점 확정');
 }}
 
-// ── 배관 그리기 ──────────────────────────────────────────────────────
+// ── 배관 그리기 (사각형 Rect 기반) ──────────────────────────────────
+// 드래그 시작→끝: 길이=거리, 두께=굵기, 각도=방향. 평면 배치에 적합한 사각 끝.
 let tempLine = null;
 function onMouseDown(opt) {{
     if (curMode !== 'pipe') return;
     const p = canvas.getPointer(opt.e);
     if (!isPiping) {{
         isPiping = true; pipeStart = {{x:p.x, y:p.y}};
-        tempLine = new fabric.Line([p.x,p.y,p.x,p.y], {{
-            stroke: document.getElementById('pipe-color').value,
-            strokeWidth: parseInt(document.getElementById('pipe-width').value),
+        const w = parseInt(document.getElementById('pipe-width').value);
+        tempLine = new fabric.Rect({{
+            left: p.x, top: p.y - w/2, width: 1, height: w,
+            fill: document.getElementById('pipe-color').value,
             selectable: false, evented: false,
-            strokeLineCap:'round',
+            originX: 'left', originY: 'top',
         }});
         canvas.add(tempLine);
     }} else {{
-        canvas.remove(tempLine); tempLine = null;
-        const line = new fabric.Line([pipeStart.x, pipeStart.y, p.x, p.y], {{
-            stroke: document.getElementById('pipe-color').value,
-            strokeWidth: parseInt(document.getElementById('pipe-width').value),
-            selectable: true, evented: true,
-            strokeLineCap:'round',
-            cornerSize: 8, hasRotatingPoint: true,
-        }});
-        line._isPipe = true;
-        canvas.add(line);
-        canvas.setActiveObject(line);
-        canvas.renderAll();
-        isPiping = false; pipeStart = null;
-        pushUndo();
+        finalizePipe(p);
     }}
+}}
+function finalizePipe(p) {{
+    if (tempLine) {{ canvas.remove(tempLine); tempLine = null; }}
+    const w = parseInt(document.getElementById('pipe-width').value);
+    const dx = p.x - pipeStart.x, dy = p.y - pipeStart.y;
+    const len = Math.max(2, Math.sqrt(dx*dx + dy*dy));
+    const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+    const rect = new fabric.Rect({{
+        left: pipeStart.x, top: pipeStart.y,
+        width: len, height: w,
+        fill: document.getElementById('pipe-color').value,
+        originX: 'left', originY: 'center',
+        angle: angle,
+        selectable: true, evented: true,
+        cornerSize: 8, hasRotatingPoint: true,
+        rx: 0, ry: 0,   // 사각 끝 (둥글게 하려면 rx,ry 값 부여)
+    }});
+    rect._isPipe = true;
+    canvas.add(rect);
+    canvas.setActiveObject(rect);
+    canvas.renderAll();
+    isPiping = false; pipeStart = null;
+    pushUndo();
 }}
 function onMouseMove(opt) {{
     if (!isPiping || !tempLine) return;
     const p = canvas.getPointer(opt.e);
-    tempLine.set({{x2: p.x, y2: p.y}});
+    const dx = p.x - pipeStart.x, dy = p.y - pipeStart.y;
+    const len = Math.max(1, Math.sqrt(dx*dx + dy*dy));
+    const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+    const w = parseInt(document.getElementById('pipe-width').value);
+    tempLine.set({{
+        left: pipeStart.x, top: pipeStart.y,
+        width: len, height: w,
+        originX: 'left', originY: 'center', angle: angle,
+    }});
     canvas.renderAll();
 }}
-function onMouseUp(opt) {{}}
+function onMouseUp(opt) {{
+    // 드래그식(누른 채 이동 후 떼기)도 지원: 충분히 움직였으면 확정
+    if (curMode === 'pipe' && isPiping && tempLine) {{
+        const p = canvas.getPointer(opt.e);
+        const dx = p.x - pipeStart.x, dy = p.y - pipeStart.y;
+        if (Math.sqrt(dx*dx + dy*dy) > 8) {{ finalizePipe(p); }}
+    }}
+}}
 
 // ── 선택 이벤트 ─────────────────────────────────────────────────────
 function onSelect(opt) {{
@@ -1259,11 +1310,14 @@ function onSelect(opt) {{
     document.getElementById('prop-w').value = Math.round(obj.getScaledWidth());
     document.getElementById('prop-h').value = Math.round(obj.getScaledHeight());
     document.getElementById('prop-angle').value = Math.round(obj.angle);
-    const isLine = obj._isPipe || obj.type === 'line';
-    document.getElementById('pipe-extra-props').style.display = isLine ? 'block' : 'none';
-    if (isLine) {{
-        document.getElementById('prop-pipe-color').value = obj.stroke || '#333';
-        document.getElementById('prop-pipe-width').value = obj.strokeWidth || 8;
+    const isPipe = obj._isPipe || obj.type === 'line' || obj.type === 'rect';
+    document.getElementById('pipe-extra-props').style.display = isPipe ? 'block' : 'none';
+    if (isPipe) {{
+        // Rect 배관은 fill, Line 배관은 stroke
+        const col = (obj.type === 'rect') ? (obj.fill || '#2b2b2b') : (obj.stroke || '#2b2b2b');
+        document.getElementById('prop-pipe-color').value = col;
+        const wdt = (obj.type === 'rect') ? Math.round(obj.getScaledHeight()) : (obj.strokeWidth || 8);
+        document.getElementById('prop-pipe-width').value = wdt;
         document.getElementById('prop-opacity').value = obj.opacity !== undefined ? obj.opacity : 1;
     }}
 }}
@@ -1284,6 +1338,9 @@ function applyProp() {{
     if (obj.type === 'image') {{
         obj.scaleX = w / obj.width;
         obj.scaleY = h / obj.height;
+    }} else if (obj.type === 'rect') {{
+        // 배관: 스케일 초기화 후 실제 width/height로 길이·두께 설정
+        obj.set({{scaleX:1, scaleY:1, width: Math.max(2,w), height: Math.max(1,h)}});
     }}
     obj.setCoords();
     canvas.renderAll();
@@ -1292,11 +1349,15 @@ function applyProp() {{
 function applyLineProp() {{
     const obj = canvas.getActiveObject();
     if (!obj) return;
-    obj.set({{
-        stroke: document.getElementById('prop-pipe-color').value,
-        strokeWidth: parseInt(document.getElementById('prop-pipe-width').value),
-        opacity: parseFloat(document.getElementById('prop-opacity').value),
-    }});
+    const col = document.getElementById('prop-pipe-color').value;
+    const wd  = parseInt(document.getElementById('prop-pipe-width').value);
+    const op  = parseFloat(document.getElementById('prop-opacity').value);
+    if (obj.type === 'rect') {{
+        obj.set({{fill: col, scaleY: 1, height: Math.max(1, wd), opacity: op}});
+    }} else {{
+        obj.set({{stroke: col, strokeWidth: wd, opacity: op}});
+    }}
+    obj.setCoords();
     canvas.renderAll();
     pushUndo();
 }}
@@ -1309,6 +1370,26 @@ function sendBck()    {{ const o=canvas.getActiveObject(); if(o){{ canvas.sendBa
 function bringFront() {{ const o=canvas.getActiveObject(); if(o){{ canvas.bringToFront(o); pushUndo(); }} }}
 function sendBack()   {{ const o=canvas.getActiveObject(); if(o){{ canvas.sendToBack(o); pushUndo(); }} }}
 function deleteObj()  {{ const o=canvas.getActiveObject(); if(o){{ if(o._objId) delete objRecipe[o._objId]; canvas.remove(o); pushUndo(); updateRecipe(); }} }}
+function duplicateObj() {{
+    const o = canvas.getActiveObject();
+    if (!o) {{ setStatus('복사할 오브젝트를 먼저 선택하세요.'); return; }}
+    o.clone(function(cl) {{
+        cl.set({{ left: o.left + 24, top: o.top + 24 }});
+        // 부속(이미지)이면 메타·집계 복제
+        if (o._looperCode) {{
+            cl._looperCode = o._looperCode;
+            cl._looperName = o._looperName;
+            cl._looperSpec = o._looperSpec;
+            cl._objId = ++lastObjId;
+            objRecipe[cl._objId] = {{code:o._looperCode, name:o._looperName, qty:1}};
+        }}
+        if (o._isPipe) cl._isPipe = true;
+        canvas.add(cl);
+        canvas.setActiveObject(cl);
+        canvas.renderAll();
+        pushUndo(); updateRecipe();
+    }});
+}}
 function clearCanvas() {{ if(!confirm('캔버스의 부속을 모두 비울까요?')) return; bgImageRef = null; canvas.clear(); objRecipe={{}}; undoStack=[]; redoStack=[]; pushUndo(); updateRecipe(); setStatus('캔버스를 비웠습니다. (배경은 좌측 \\'기존 세트 이미지를 배경으로 표시\\' 체크 해제로 제거)'); }}
 function removeBgOnly() {{ let removed=false; canvas.getObjects().forEach(o=>{{ if(o._isBgImage){{ canvas.remove(o); removed=true; }} }}); bgImageRef=null; canvas.renderAll(); pushUndo(); setStatus(removed ? '배경 제거됨 — 영구 적용하려면 좌측 \\'배경으로 표시\\' 체크를 해제하세요.' : '제거할 배경이 없습니다.'); }}
 
@@ -1374,26 +1455,16 @@ function updateRecipe() {{
 function downloadPng() {{
     const link = document.createElement('a');
     link.href = exportWhiteBgDataUrl(2);
-    link.download = (MODE_NEW ? (document.getElementById('new-set-name').value || 'new_set') : TARGET_SET) + '.png';
+    const base = (TARGET_SET && TARGET_SET.length) ? TARGET_SET : 'new_set';
+    link.download = base + '.png';
     link.click();
-}}
-
-// ── PPTX 다운로드 (python-pptx via postMessage) ─────────────────────
-function downloadPptx() {{
-    const dataUrl = exportWhiteBgDataUrl(2);
-    const setName = MODE_NEW ? (document.getElementById('new-set-name').value || 'new_set') : TARGET_SET;
-    window.parent.postMessage({{type:'pptx_request', dataUrl:dataUrl, setName:setName}}, '*');
-    setStatus2('PPTX 생성 요청 전송됨 — Streamlit이 처리합니다.');
+    setStatus2('PNG를 내려받았습니다. 아래 "PNG 드라이브 저장"에 업로드하세요.');
 }}
 
 // ── [V14] 흰 배경 합성 PNG dataURL 생성 ──────────────────────────────
 // 누끼(투명) 부속들을 흰 배경 위에 얹어 저장 → 견적서 PDF에서 깨짐 방지.
-// fabric 캔버스 내용을 흰 바탕 캔버스에 다시 그려 반환.
 function exportWhiteBgDataUrl(mult) {{
     mult = mult || 2;
-    const transparentUrl = canvas.toDataURL({{'format':'png','multiplier':mult}});
-    // 동기 합성을 위해 임시 캔버스에 흰 배경 + 내용 그리기 (콜백 불가하므로 즉시 처리 어려움)
-    // → 대신 fabric backgroundColor를 흰색으로 강제 후 추출하고 복원
     const prevBg = canvas.backgroundColor;
     canvas.backgroundColor = '#ffffff';
     canvas.renderAll();
@@ -1401,36 +1472,6 @@ function exportWhiteBgDataUrl(mult) {{
     canvas.backgroundColor = prevBg;
     canvas.renderAll();
     return whiteUrl;
-}}
-
-// ── 드라이브 저장 (postMessage → Streamlit) ─────────────────────────
-function saveAll() {{
-    const dataUrl = exportWhiteBgDataUrl(2);
-    let setName, catName='', isNew=false;
-    if (MODE_NEW) {{
-        setName = document.getElementById('new-set-name').value.trim();
-        catName = document.getElementById('new-set-cat').value;
-        if (!setName) {{ alert('세트명을 입력하세요.'); return; }}
-        isNew = true;
-    }} else {{
-        setName = TARGET_SET;
-    }}
-    // 레시피 집계
-    const tally = {{}};
-    canvas.getObjects().forEach(obj => {{
-        if (obj._looperCode) {{
-            tally[obj._looperCode] = (tally[obj._looperCode] || 0) + 1;
-        }}
-    }});
-    window.parent.postMessage({{
-        type:'save_set_image',
-        dataUrl: dataUrl,
-        setName: setName,
-        catName: catName,
-        isNew: isNew,
-        recipe: tally
-    }}, '*');
-    setStatus2('저장 요청 전송됨...');
 }}
 
 function setStatus(msg) {{ document.getElementById('status').textContent = msg; }}
@@ -1492,11 +1533,6 @@ window.addEventListener('resize', zoomFit);
 
 // 하위호환: 기존 호출부가 fitCanvasToArea를 부를 수 있으므로 별칭 유지
 function fitCanvasToArea() {{ zoomFit(); }}
-
-// ── set-name-row 표시/숨김 ───────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', function() {{
-    document.getElementById('set-name-row').style.display = MODE_NEW ? 'block' : 'none';
-}});
 </script>
 </body>
 </html>
@@ -1504,88 +1540,92 @@ document.addEventListener('DOMContentLoaded', function() {{
         components.html(html_code, height=680, scrolling=False)
 
         # ── PNG 업로드 → 드라이브 저장 ──────────────────────────────────
-        st.caption("💡 빌더에서 PNG 로컬 저장 후, 아래에서 드라이브에 업로드하세요.")
-        with st.form("builder_save_form"):
-            st.markdown("**PNG 드라이브 저장**")
-            c1, c2 = st.columns([2,1])
-            with c1:
-                uploaded_png = st.file_uploader("PNG 파일 선택", type=["png"], key="builder_upload_png")
-            with c2:
-                if builder_mode == "✨ 새 세트 만들기":
-                    new_sname = st.text_input("세트명", key="builder_new_name2")
-                    new_scat  = st.selectbox("분류", ["주배관세트","가지관세트","기타자재"], key="builder_new_cat2")
-                    new_ssc   = st.selectbox("하위분류(주배관세트만)", ["50mm","40mm","기타","-"], key="builder_new_sc2")
-                else:
-                    new_sname = target_set_name
-                    new_scat  = ""
-                    new_ssc   = ""
-
-            submitted = st.form_submit_button("💾 드라이브 업로드 & 저장", type="primary", use_container_width=True)
-            if submitted and uploaded_png:
-                with st.spinner("저장 중..."):
-                    fname = f"{new_sname}.png"
-                    try:
-                        fmap = get_drive_file_map()
-                        old_id = fmap.get(new_sname)
-                        if old_id:
-                            _get_ds().files().delete(fileId=old_id).execute()
-                    except: pass
-                    new_id = upload_bytes_to_drive(uploaded_png.getvalue(), fname, "image/png")
-                    if new_id:
-                        get_drive_file_map.clear()
-                        if builder_mode == "✨ 새 세트 만들기" and new_sname:
-                            if new_scat not in st.session_state.db["sets"]:
-                                st.session_state.db["sets"][new_scat] = {}
-                            sc_val = new_ssc if new_ssc != "-" else None
-                            recipe_to_save = {c: info["qty"] for c, info in st.session_state.builder_recipe.items()}
-                            st.session_state.db["sets"][new_scat][new_sname] = {
-                                "recipe": recipe_to_save, "image": new_id, "sub_cat": sc_val
-                            }
-                            save_sets_to_sheet(st.session_state.db["sets"])
-                            st.session_state.builder_recipe = {}
-                            st.success(f"✅ '{new_sname}' 세트 생성 및 이미지 저장 완료!")
-                        else:
-                            for cat_key, cat_items in st.session_state.db["sets"].items():
-                                if new_sname in cat_items:
-                                    cat_items[new_sname]["image"] = new_id
-                                    break
-                            save_sets_to_sheet(st.session_state.db["sets"])
-                            st.success(f"✅ '{new_sname}' 이미지 업데이트 완료!")
-                        if "_img_cache" in st.session_state:
-                            st.session_state._img_cache.pop(new_sname, None)
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error("업로드 실패")
-
-        # ── PPTX 변환 ────────────────────────────────────────────────────
         st.markdown("---")
-        st.markdown("**PPTX 생성**: PNG를 업로드하면 PowerPoint로 변환합니다.")
-        pptx_png = st.file_uploader("PPTX 변환용 PNG", type=["png"], key="builder_pptx_png")
-        pptx_name_input = st.text_input("PPTX 세트명", value=target_set_name or "new_set", key="builder_pptx_name")
-        if pptx_png and st.button("📊 PPTX 파일 생성", key="builder_gen_pptx"):
-            try:
-                from pptx import Presentation
-                from pptx.util import Inches
-                img_bytes   = pptx_png.getvalue()
-                img_stream  = io.BytesIO(img_bytes)
-                with Image.open(io.BytesIO(img_bytes)) as im:
-                    iw, ih = im.size
-                prs = Presentation()
-                prs.slide_width  = Inches(iw / 96)
-                prs.slide_height = Inches(ih / 96)
-                slide = prs.slides.add_slide(prs.slide_layouts[6])
-                slide.shapes.add_picture(img_stream, 0, 0, prs.slide_width, prs.slide_height)
-                pptx_buf = io.BytesIO()
-                prs.save(pptx_buf)
-                st.download_button("📥 PPTX 다운로드", pptx_buf.getvalue(),
-                                   f"{pptx_name_input}.pptx",
-                                   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                                   use_container_width=True)
-            except ImportError:
-                st.error("python-pptx 패키지가 필요합니다.")
-            except Exception as e:
-                st.error(f"PPTX 생성 오류: {e}")
+        st.markdown("#### 💾 세트 이미지 + 구성 저장")
+        st.caption("위 빌더에서 **📥 완성 PNG 내려받기**로 PNG를 받은 뒤, 아래에 업로드하세요. 좌측 '구성 집계'가 그대로 세트 레시피로 저장됩니다.")
+
+        # 현재 구성 집계(레시피) 미리보기
+        cur_recipe = {c: info["qty"] for c, info in st.session_state.builder_recipe.items()}
+        if cur_recipe:
+            _rl = ", ".join([f"[{c}]×{q}" for c, q in cur_recipe.items()])
+            st.caption(f"📋 저장될 구성: {_rl}")
+        else:
+            st.caption("📋 저장될 구성: (비어 있음 — 부속을 추가하면 자동 집계됩니다)")
+
+        with st.form("builder_save_form"):
+            uploaded_png = st.file_uploader("완성 PNG 파일 업로드", type=["png"], key="builder_upload_png")
+
+            if builder_mode == "✨ 새 세트 만들기":
+                new_sname = st.text_input("세트명 (예: [LHC]E-1-50)", key="builder_new_name2")
+                cc1, cc2 = st.columns(2)
+                with cc1:
+                    new_scat = st.selectbox("분류", ["주배관세트","가지관세트","기타자재"], key="builder_new_cat2")
+                with cc2:
+                    new_ssc  = st.selectbox("하위분류", ["50mm","40mm","기타","-"], key="builder_new_sc2")
+            else:
+                new_sname = target_set_name
+                new_scat  = ""
+                new_ssc   = ""
+                st.info(f"편집 대상 세트: **{target_set_name}** — 이미지가 교체되고, 위 구성 집계로 레시피가 갱신됩니다.")
+
+            apply_recipe = st.checkbox("구성(레시피)도 함께 갱신", value=True, key="builder_apply_recipe",
+                                       help="체크 시 좌측 구성 집계가 세트 레시피로 저장됩니다. 이미지만 바꾸려면 해제하세요.")
+            submitted = st.form_submit_button("💾 드라이브 업로드 & 저장", type="primary", use_container_width=True)
+
+            if submitted:
+                if not uploaded_png:
+                    st.error("PNG 파일을 먼저 업로드하세요.")
+                elif not new_sname:
+                    st.error("세트명을 입력/선택하세요.")
+                else:
+                    with st.spinner("저장 중..."):
+                        fname = f"{new_sname}.png"
+                        # 기존 동일 파일명 삭제(중복 방지)
+                        try:
+                            fmap = get_drive_file_map_deep()
+                            old_id = fmap.get(new_sname)
+                            if old_id:
+                                _get_ds().files().delete(fileId=old_id).execute()
+                        except Exception:
+                            pass
+                        new_id = upload_bytes_to_drive(uploaded_png.getvalue(), fname, "image/png")
+                        if not new_id:
+                            st.error("업로드 실패")
+                        else:
+                            get_drive_file_map.clear()
+                            get_drive_file_map_deep.clear()
+                            if builder_mode == "✨ 새 세트 만들기":
+                                if new_scat not in st.session_state.db["sets"]:
+                                    st.session_state.db["sets"][new_scat] = {}
+                                sc_val = new_ssc if new_ssc != "-" else None
+                                st.session_state.db["sets"][new_scat][new_sname] = {
+                                    "recipe": cur_recipe if apply_recipe else {},
+                                    "image": new_id, "sub_cat": sc_val
+                                }
+                                save_sets_to_sheet(st.session_state.db["sets"])
+                                st.success(f"✅ 신규 세트 '{new_sname}' 생성 완료! (이미지+구성 {len(cur_recipe)}종)")
+                            else:
+                                # 편집: 기존 세트의 이미지 교체 + (선택 시) 레시피 갱신
+                                found = False
+                                for cat_key, cat_items in st.session_state.db["sets"].items():
+                                    if new_sname in cat_items:
+                                        cat_items[new_sname]["image"] = new_id
+                                        if apply_recipe and cur_recipe:
+                                            cat_items[new_sname]["recipe"] = cur_recipe
+                                        found = True
+                                        break
+                                save_sets_to_sheet(st.session_state.db["sets"])
+                                if apply_recipe and cur_recipe:
+                                    st.success(f"✅ '{new_sname}' 이미지 교체 + 구성 갱신 완료! ({len(cur_recipe)}종)")
+                                else:
+                                    st.success(f"✅ '{new_sname}' 이미지 교체 완료!")
+                            # 캐시·집계 정리 후 새로고침
+                            st.session_state._img_cache = {}
+                            st.session_state.builder_recipe = {}
+                            st.session_state.builder_canvas_items = []
+                            st.session_state.db = load_data_from_sheet()
+                            time.sleep(1)
+                            st.rerun()
 
 
 # ==========================================

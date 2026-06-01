@@ -633,6 +633,10 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
         st.session_state.builder_pending_items = []   # [{code,name,spec,qty,b64}] — JS 캔버스 추가 대기
     if "builder_recipe" not in st.session_state:
         st.session_state.builder_recipe = {}          # {code: {name,spec,qty}} — 레시피 집계
+    if "builder_canvas_items" not in st.session_state:
+        # [V16] 캔버스에 올라간 부속 전체 누적 (rerun에도 유지).
+        #  b64는 저장 안 함(용량) → 매 렌더에 캐시/드라이브에서 채움.
+        st.session_state.builder_canvas_items = []    # [{code,name,spec,qty,img_id}]
 
     # ── 전체 품목 메타 (코드/이름/규격) ─────────────────────────────────
     all_meta = []
@@ -698,14 +702,15 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
                                 st.session_state.builder_recipe[code] = {
                                     "name": m["name"], "spec": m["spec"], "qty": qty
                                 }
-                            # 캔버스 추가 대기열에 등록
-                            st.session_state.builder_pending_items.append({
+                            # [V16] 캔버스 누적 아이템에 등록 (rerun에도 유지)
+                            st.session_state.builder_canvas_items.append({
                                 "code": code, "name": m["name"],
                                 "spec": m["spec"] or "-",
                                 "qty": qty,
-                                "b64": b64 or ""
+                                "img_id": m["img_id"] or ""
                             })
                             st.success(f"'{m['name']}' {qty}개 추가됨")
+                            st.rerun()
         elif q and q.strip():
             st.caption("검색 결과 없음")
         else:
@@ -720,13 +725,25 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
             if st.button("🗑 집계 초기화", key="builder_clear_recipe"):
                 st.session_state.builder_recipe = {}
                 st.session_state.builder_pending_items = []
+                st.session_state.builder_canvas_items = []
                 st.rerun()
 
-    # ── 대기열 → JS에 전달할 JSON 준비 ──────────────────────────────────
-    pending_json = json.dumps(st.session_state.builder_pending_items, ensure_ascii=False)
-    # 전달 후 대기열 비움 (다음 렌더에서 중복 추가 방지)
-    if st.session_state.builder_pending_items:
-        st.session_state.builder_pending_items = []
+    # ── [V16] 캔버스 누적 아이템 전체를 JS에 전달 (rerun에도 유지) ──────
+    # b64는 세션에 저장하지 않으므로, 매 렌더에 캐시 우선·없으면 드라이브에서 채움.
+    _canvas_payload = []
+    for it in st.session_state.builder_canvas_items:
+        code = it.get("code", "")
+        b64 = st.session_state._img_cache.get(code)
+        if b64 is None and it.get("img_id"):
+            b64 = get_image_from_drive(it["img_id"])
+            if b64:
+                st.session_state._img_cache[code] = b64
+        _canvas_payload.append({
+            "code": code, "name": it.get("name", ""),
+            "spec": it.get("spec", "-"), "qty": it.get("qty", 1),
+            "b64": b64 or ""
+        })
+    pending_json = json.dumps(_canvas_payload, ensure_ascii=False)
 
     with col_canvas:
         # ── 모드 선택 ──────────────────────────────────────────────────
@@ -1383,8 +1400,20 @@ function resizeCanvas(val) {{
 // ── [V15] 화면 줌 (저장 품질과 무관, 표시 배율만 조정) ───────────────
 // transform:scale은 레이아웃 공간을 안 줄여 스크롤바가 남으므로,
 // wrapper의 실제 width/height를 배율만큼 줄이고 fabric 래퍼를 scale.
+// [V16] 영역에 딱 맞는 배율 계산 (스크롤 판단 기준)
+function getFitZoom() {{
+    const area = document.getElementById('canvas-area');
+    if (!area) return 1;
+    const availW = area.clientWidth  - 24;
+    const availH = area.clientHeight - 24;
+    if (availW <= 0) return 1;
+    let z = Math.min(availW / CW, (availH > 0 ? availH / CH : 1), 1);
+    if (!isFinite(z) || z <= 0) z = 1;
+    return z;
+}}
 function applyZoom() {{
     const wrap = document.getElementById('canvas-wrap');
+    const area = document.getElementById('canvas-area');
     if (!wrap) return;
     const fc = canvas ? canvas.wrapperEl : null;
     wrap.style.width  = (CW * zoomLevel) + 'px';
@@ -1393,23 +1422,19 @@ function applyZoom() {{
         fc.style.transform = 'scale(' + zoomLevel + ')';
         fc.style.transformOrigin = 'top left';
     }}
+    // 맞춤 배율보다 크면 스크롤 허용, 이하면 숨김
+    if (area) {{
+        const fit = getFitZoom();
+        area.style.overflow = (zoomLevel > fit + 0.001) ? 'auto' : 'hidden';
+    }}
     const zv = document.getElementById('zoom-val');
     if (zv) zv.textContent = Math.round(zoomLevel * 100) + '%';
 }}
 function zoomFit() {{
-    const area = document.getElementById('canvas-area');
-    if (!area) return;
-    const availW = area.clientWidth  - 24;
-    const availH = area.clientHeight - 24;
-    if (availW <= 0) {{ zoomLevel = 1; }}
-    else {{
-        // 폭 기준 우선 맞춤 (세로가 길면 스크롤 허용). 1배 초과 확대 안 함.
-        zoomLevel = Math.min(availW / CW, (availH > 0 ? availH / CH : 1), 1);
-        if (!isFinite(zoomLevel) || zoomLevel <= 0) zoomLevel = 1;
-    }}
+    zoomLevel = getFitZoom();
     applyZoom();
 }}
-function zoomIn()  {{ zoomLevel = Math.min(zoomLevel + 0.1, 2.0); applyZoom(); }}
+function zoomIn()  {{ zoomLevel = Math.min(zoomLevel + 0.1, 3.0); applyZoom(); }}
 function zoomOut() {{ zoomLevel = Math.max(zoomLevel - 0.1, 0.2); applyZoom(); }}
 window.addEventListener('resize', zoomFit);
 

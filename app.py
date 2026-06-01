@@ -762,18 +762,18 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
             target_set_name = st.selectbox("편집할 세트 선택", all_set_names,
                                            key="builder_target_set")
 
-        # [V15] 배경(기존 세트 이미지) 표시 여부를 Python 세션상태로 제어
-        #  → rerun(부속 검색/추가) 후에도 상태 유지. JS 변수만으로는 매번 초기화되던 문제 해결.
+        # [V17] 배경 표시 여부 — key 기반 세션상태만 사용 (value+key 동시지정 충돌 제거)
+        if "builder_show_bg" not in st.session_state:
+            st.session_state.builder_show_bg = False  # 기본: 배경 끄기(요청 반영)
         show_bg = st.checkbox(
             "기존 세트 이미지를 배경으로 표시",
-            value=st.session_state.get("builder_show_bg", True),
             key="builder_show_bg",
-            help="체크 해제 후 부속을 배치하면 배경 없이 새 세트 이미지를 만들 수 있습니다."
+            help="체크 시 기존 세트 이미지가 반투명 배경으로 깔립니다. 새로 만들려면 체크 해제."
         )
 
         # 기존 세트 이미지 b64 (배경 표시가 켜져 있을 때만 전달)
         target_set_img_b64 = "null"
-        if show_bg and builder_mode == "🖼️ 기존 세트 이미지 편집" and target_set_name:
+        if st.session_state.get("builder_show_bg", False) and builder_mode == "🖼️ 기존 세트 이미지 편집" and target_set_name:
             for cat_items in db_sets.values():
                 if target_set_name in cat_items:
                     img_ref = cat_items[target_set_name].get("image")
@@ -802,7 +802,8 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
 #toolbar button.active {{ background:#e94560; border-color:#e94560; color:#fff; }}
 .sep {{ width:1px; height:20px; background:#444; margin:0 4px; }}
 #main {{ display:flex; flex:1; overflow:hidden; }}
-#canvas-area {{ flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding:10px; overflow:hidden; background:#0d1b2a; position:relative; }}
+#canvas-area {{ flex:1; padding:10px; overflow:hidden; background:#0d1b2a; position:relative; text-align:center; }}
+#canvas-inner {{ display:inline-block; }}
 #canvas-wrap {{ position:relative; display:inline-block; overflow:hidden; }}
 #fabric-canvas {{ border:2px solid #0f3460; border-radius:4px; background:#fff; display:block; }}
 #ctx-menu {{ position:absolute; background:#2d2d4e; border:1px solid #444; border-radius:4px; padding:4px 0; display:none; z-index:999; min-width:130px; box-shadow:0 4px 12px rgba(0,0,0,.5); }}
@@ -1416,16 +1417,19 @@ function applyZoom() {{
     const area = document.getElementById('canvas-area');
     if (!wrap) return;
     const fc = canvas ? canvas.wrapperEl : null;
-    wrap.style.width  = (CW * zoomLevel) + 'px';
-    wrap.style.height = (CH * zoomLevel) + 'px';
+    const W = CW * zoomLevel, H = CH * zoomLevel;
+    wrap.style.width  = W + 'px';
+    wrap.style.height = H + 'px';
     if (fc) {{
         fc.style.transform = 'scale(' + zoomLevel + ')';
         fc.style.transformOrigin = 'top left';
     }}
-    // 맞춤 배율보다 크면 스크롤 허용, 이하면 숨김
+    // 가로/세로 각각 넘치면 해당 방향 스크롤 표시
     if (area) {{
-        const fit = getFitZoom();
-        area.style.overflow = (zoomLevel > fit + 0.001) ? 'auto' : 'hidden';
+        const availW = area.clientWidth  - 20;
+        const availH = area.clientHeight - 20;
+        area.style.overflowX = (W > availW + 1) ? 'auto' : 'hidden';
+        area.style.overflowY = (H > availH + 1) ? 'auto' : 'hidden';
     }}
     const zv = document.getElementById('zoom-val');
     if (zv) zv.textContent = Math.round(zoomLevel * 100) + '%';

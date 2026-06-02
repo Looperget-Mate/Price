@@ -436,7 +436,7 @@ def load_data_from_sheet():
             if cat not in data["sets"]: data["sets"][cat] = {}
             try: rcp = json.loads(str(rec.get("레시피JSON", "{}")))
             except: rcp = {}
-            data["sets"][cat][name] = {"recipe": rcp, "image": rec.get("이미지파일명"), "sub_cat": rec.get("하위분류")}
+            data["sets"][cat][name] = {"recipe": rcp, "image": rec.get("이미지파일명"), "sub_cat": rec.get("하위분류"), "desc": rec.get("설명", "")}
     except: pass
     try:
         sh = gc.open(SHEET_NAME)
@@ -641,10 +641,10 @@ def save_sets_to_sheet(sets_dict):
     try:
         sh = gc.open(SHEET_NAME)
         ws_sets = sh.worksheet("Sets")
-        rows = [["세트명", "카테고리", "하위분류", "이미지파일명", "레시피JSON"]]
+        rows = [["세트명", "카테고리", "하위분류", "이미지파일명", "레시피JSON", "설명"]]
         for cat, items in sets_dict.items():
             for name, info in items.items():
-                rows.append([name, cat, info.get("sub_cat", ""), info.get("image", ""), json.dumps(info.get("recipe", {}), ensure_ascii=False)])
+                rows.append([name, cat, info.get("sub_cat", ""), info.get("image", ""), json.dumps(info.get("recipe", {}), ensure_ascii=False), info.get("desc", "")])
         ws_sets.clear()
         ws_sets.update(rows)
     except Exception as e:
@@ -891,6 +891,11 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
     <div class="sep"></div>
     <button onclick="duplicateObj()" title="선택 복사">📋 복사</button>
     <div class="sep"></div>
+    <button onclick="addText()" title="설명·중요사항 텍스트 추가">🅣 텍스트</button>
+    <div class="sep"></div>
+    <button onclick="autoTrimSelected()" title="선택 이미지의 투명 여백을 잘라 누끼 영역만 남김">✂ 여백자르기</button>
+    <button id="btn-crop" onclick="toggleCropMode()" title="원하는 영역을 드래그해 잘라내기">⛶ 영역자르기</button>
+    <div class="sep"></div>
     <button onclick="doUndo()">↩ 실행취소</button>
     <button onclick="doRedo()">↪ 다시실행</button>
     <div class="sep"></div>
@@ -973,6 +978,16 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
           <div class="prop-row">
             <label>투명도</label>
             <input type="range" id="prop-opacity" min="0" max="1" step="0.05" onchange="applyLineProp()">
+          </div>
+        </div>
+        <div id="text-extra-props" style="display:none;">
+          <div class="prop-row">
+            <label>글자 크기</label>
+            <input type="number" id="prop-font-size" min="6" max="200" step="1" onchange="applyTextProp()">
+          </div>
+          <div class="prop-row">
+            <label>글자 색상</label>
+            <input type="color" id="prop-font-color" onchange="applyTextProp()">
           </div>
         </div>
       </div>
@@ -1068,6 +1083,25 @@ window.onload = function() {{
 
     // 캔버스 우클릭 메뉴 닫기
     document.addEventListener('click', () => {{ document.getElementById('ctx-menu').style.display='none'; }});
+
+    // ── [추가] 단축키: Ctrl+Z(취소) / Ctrl+Shift+Z·Ctrl+Y(다시) / Del(삭제) ──
+    function isTextEditing() {{
+        const ao = canvas.getActiveObject();
+        if (ao && ao.isEditing) return true;                 // 텍스트 편집 중엔 무시
+        const t = document.activeElement;
+        return t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT');
+    }}
+    document.addEventListener('keydown', function(e) {{
+        const key = (e.key || '').toLowerCase();
+        const ctrl = e.ctrlKey || e.metaKey;                 // Windows Ctrl / Mac Cmd
+        if (ctrl && key === 'z' && !e.shiftKey) {{ if(isTextEditing()) return; e.preventDefault(); doUndo(); }}
+        else if (ctrl && (key === 'y' || (key === 'z' && e.shiftKey))) {{ if(isTextEditing()) return; e.preventDefault(); doRedo(); }}
+        else if (key === 'delete' || key === 'backspace') {{ if(isTextEditing()) return; if(canvas.getActiveObject()){{ e.preventDefault(); deleteObj(); }} }}
+    }});
+    // iframe이 포커스를 받아야 단축키가 동작 → 진입/클릭 시 자동 포커스
+    try {{ window.focus(); }} catch(_){{}}
+    document.body.setAttribute('tabindex','0');
+    document.body.addEventListener('mousedown', () => {{ try {{ window.focus(); }} catch(_){{}} }});
 
     pushUndo();
     setMode('select');
@@ -1239,6 +1273,19 @@ function setMode(m) {{
 // 드래그 시작→끝: 길이=거리, 두께=굵기, 각도=방향. 평면 배치에 적합한 사각 끝.
 let tempLine = null;
 function onMouseDown(opt) {{
+    if (curMode === 'crop') {{
+        const p = canvas.getPointer(opt.e);
+        cropStart = {{x:p.x, y:p.y}};
+        if (cropRect) canvas.remove(cropRect);
+        cropRect = new fabric.Rect({{
+            left:p.x, top:p.y, width:1, height:1,
+            fill:'rgba(233,69,96,0.15)', stroke:'#e94560',
+            strokeDashArray:[5,3], strokeWidth:1.5,
+            selectable:false, evented:false,
+        }});
+        canvas.add(cropRect); canvas.renderAll();
+        return;
+    }}
     if (curMode !== 'pipe') return;
     const p = canvas.getPointer(opt.e);
     if (!isPiping) {{
@@ -1279,6 +1326,15 @@ function finalizePipe(p) {{
     pushUndo();
 }}
 function onMouseMove(opt) {{
+    if (curMode === 'crop' && cropStart && cropRect) {{
+        const p = canvas.getPointer(opt.e);
+        cropRect.set({{
+            left: Math.min(cropStart.x, p.x), top: Math.min(cropStart.y, p.y),
+            width: Math.abs(p.x - cropStart.x), height: Math.abs(p.y - cropStart.y),
+        }});
+        canvas.renderAll();
+        return;
+    }}
     if (!isPiping || !tempLine) return;
     const p = canvas.getPointer(opt.e);
     const dx = p.x - pipeStart.x, dy = p.y - pipeStart.y;
@@ -1320,9 +1376,18 @@ function onSelect(opt) {{
         document.getElementById('prop-pipe-width').value = wdt;
         document.getElementById('prop-opacity').value = obj.opacity !== undefined ? obj.opacity : 1;
     }}
+    // [추가] 텍스트 오브젝트 선택 시 글자 크기/색상 패널 표시
+    const isText = (obj.type === 'i-text' || obj.type === 'text' || obj.type === 'textbox');
+    document.getElementById('text-extra-props').style.display = isText ? 'block' : 'none';
+    if (isText) {{
+        document.getElementById('prop-font-size').value = Math.round(obj.fontSize || 28);
+        const fc = (typeof obj.fill === 'string' && obj.fill[0] === '#') ? obj.fill : '#222222';
+        document.getElementById('prop-font-color').value = fc;
+    }}
 }}
 function onDeselect() {{
     document.getElementById('pipe-extra-props').style.display='none';
+    document.getElementById('text-extra-props').style.display='none';
 }}
 
 // ── 속성 패널 적용 ───────────────────────────────────────────────────
@@ -1390,6 +1455,119 @@ function duplicateObj() {{
         pushUndo(); updateRecipe();
     }});
 }}
+
+// ── [추가] 텍스트 ───────────────────────────────────────────────────
+function addText() {{
+    const t = new fabric.IText('내용을 입력하세요', {{
+        left: CW/2 - 90, top: CH/2 - 16,
+        fontSize: 28, fill: '#222222', fontFamily: 'sans-serif',
+        editable: true, selectable: true,
+        cornerSize: 8, hasRotatingPoint: true,
+    }});
+    t._isUserText = true;
+    canvas.add(t);
+    canvas.setActiveObject(t);
+    t.enterEditing(); t.selectAll();
+    canvas.renderAll();
+    pushUndo();
+    setStatus('텍스트 추가됨 — 더블클릭으로 재편집, 우측 패널에서 크기·색상 변경.');
+}}
+function applyTextProp() {{
+    const o = canvas.getActiveObject();
+    if (!o || (o.type !== 'i-text' && o.type !== 'text' && o.type !== 'textbox')) return;
+    const fs = parseInt(document.getElementById('prop-font-size').value);
+    const fc = document.getElementById('prop-font-color').value;
+    o.set({{ fontSize: isNaN(fs) ? o.fontSize : fs, fill: fc }});
+    o.setCoords(); canvas.renderAll(); pushUndo();
+}}
+
+// ── [추가] 누끼 여백 자동 자르기 (선택 이미지의 투명 테두리 제거) ──────
+// 누끼는 잘 됐지만 투명 여백이 커서 확대 시 캔버스 밖으로 나가는 문제 해결.
+function autoTrimSelected() {{
+    const o = canvas.getActiveObject();
+    if (!o || o.type !== 'image') {{ setStatus('자를 이미지를 먼저 선택하세요.'); return; }}
+    const el = o._element;
+    if (!el) {{ setStatus('이미지 데이터를 읽을 수 없습니다.'); return; }}
+    const nw = el.naturalWidth || el.width, nh = el.naturalHeight || el.height;
+    const cv = document.createElement('canvas');
+    cv.width = nw; cv.height = nh;
+    const cx = cv.getContext('2d');
+    cx.drawImage(el, 0, 0, nw, nh);
+    let data;
+    try {{ data = cx.getImageData(0, 0, nw, nh).data; }}
+    catch(err) {{ setStatus('이미지 분석 실패(보안 제한). 영역자르기를 사용하세요.'); return; }}
+    let minX = nw, minY = nh, maxX = 0, maxY = 0, found = false;
+    const A = 12;  // 알파 임계값(이 이상이면 내용으로 판정)
+    for (let y = 0; y < nh; y++) {{
+        for (let x = 0; x < nw; x++) {{
+            if (data[(y*nw + x)*4 + 3] > A) {{
+                if (x < minX) minX = x; if (x > maxX) maxX = x;
+                if (y < minY) minY = y; if (y > maxY) maxY = y;
+                found = true;
+            }}
+        }}
+    }}
+    if (!found) {{ setStatus('투명 여백이 없습니다(배경 미제거 이미지일 수 있음) → ⛶ 영역자르기 사용.'); return; }}
+    const bw = (maxX - minX + 1), bh = (maxY - minY + 1);
+    // 화면상 위치 유지: 잘린 만큼 left/top 보정
+    const newLeft = o.left + (minX - (o.cropX || 0)) * o.scaleX;
+    const newTop  = o.top  + (minY - (o.cropY || 0)) * o.scaleY;
+    o.set({{ cropX: minX, cropY: minY, width: bw, height: bh, left: newLeft, top: newTop }});
+    o.setCoords(); canvas.renderAll(); pushUndo();
+    setStatus('여백 제거 완료 — 이제 확대해도 캔버스를 벗어나지 않습니다.');
+}}
+
+// ── [추가] 영역 드래그 자르기 ───────────────────────────────────────
+let cropTarget = null, cropRect = null, cropStart = null;
+function toggleCropMode() {{
+    if (curMode === 'crop') {{ applyCrop(); return; }}  // 두 번째 클릭 → 적용
+    const o = canvas.getActiveObject();
+    if (!o || o.type !== 'image') {{ setStatus('자를 이미지를 먼저 선택하세요.'); return; }}
+    curMode = 'crop';
+    cropTarget = o;
+    canvas.discardActiveObject();
+    canvas.selection = false;
+    canvas.forEachObject(ob => {{ ob.selectable = false; }});
+    canvas.defaultCursor = 'crosshair';
+    document.getElementById('btn-crop').classList.add('active');
+    canvas.renderAll();
+    setStatus('자를 영역을 드래그한 뒤, 다시 [⛶ 영역자르기]를 누르면 적용됩니다.');
+}}
+function applyCrop() {{
+    document.getElementById('btn-crop').classList.remove('active');
+    if (cropRect && cropTarget && cropRect.width > 3 && cropRect.height > 3) {{
+        const o = cropTarget;
+        // 캔버스 좌표 → 이미지 원본 픽셀 좌표로 변환 (기존 crop 누적 반영)
+        const relLeft = (cropRect.left - o.left) / o.scaleX + (o.cropX || 0);
+        const relTop  = (cropRect.top  - o.top ) / o.scaleY + (o.cropY || 0);
+        const relW = cropRect.getScaledWidth()  / o.scaleX;
+        const relH = cropRect.getScaledHeight() / o.scaleY;
+        const nw = (o._element.naturalWidth || o.width), nh = (o._element.naturalHeight || o.height);
+        const cX = Math.max(0, Math.round(relLeft));
+        const cY = Math.max(0, Math.round(relTop));
+        const cW = Math.max(4, Math.min(Math.round(relW), nw - cX));
+        const cH = Math.max(4, Math.min(Math.round(relH), nh - cY));
+        const newLeft = o.left + (cX - (o.cropX || 0)) * o.scaleX;
+        const newTop  = o.top  + (cY - (o.cropY || 0)) * o.scaleY;
+        o.set({{ cropX: cX, cropY: cY, width: cW, height: cH, left: newLeft, top: newTop }});
+        o.setCoords();
+        canvas.remove(cropRect);
+        setStatus('선택 영역으로 잘랐습니다.');
+    }} else {{
+        if (cropRect) canvas.remove(cropRect);
+        setStatus('자르기 취소(영역이 너무 작음).');
+    }}
+    cropRect = null; cropStart = null;
+    const t = cropTarget; cropTarget = null;
+    canvas.forEachObject(ob => {{ ob.selectable = true; }});
+    canvas.selection = true;
+    canvas.defaultCursor = 'default';
+    curMode = 'select';
+    if (t) canvas.setActiveObject(t);
+    canvas.renderAll();
+    pushUndo();
+}}
+
 function clearCanvas() {{ if(!confirm('캔버스의 부속을 모두 비울까요?')) return; bgImageRef = null; canvas.clear(); objRecipe={{}}; undoStack=[]; redoStack=[]; pushUndo(); updateRecipe(); setStatus('캔버스를 비웠습니다. (배경은 좌측 \\'기존 세트 이미지를 배경으로 표시\\' 체크 해제로 제거)'); }}
 function removeBgOnly() {{ let removed=false; canvas.getObjects().forEach(o=>{{ if(o._isBgImage){{ canvas.remove(o); removed=true; }} }}); bgImageRef=null; canvas.renderAll(); pushUndo(); setStatus(removed ? '배경 제거됨 — 영구 적용하려면 좌측 \\'배경으로 표시\\' 체크를 해제하세요.' : '제거할 배경이 없습니다.'); }}
 
@@ -1414,7 +1592,7 @@ function ctxDelete()     {{ deleteObj();  document.getElementById('ctx-menu').st
 
 // ── Undo / Redo ──────────────────────────────────────────────────────
 function pushUndo() {{
-    const state = JSON.stringify(canvas.toJSON());
+    const state = JSON.stringify(canvas.toJSON(['_looperCode','_looperName','_looperSpec','_objId','_isPipe','_isBgImage','_isUserText']));
     if (undoStack[undoStack.length-1] === state) return;
     undoStack.push(state);
     if (undoStack.length > 50) undoStack.shift();
@@ -1570,6 +1748,20 @@ function fitCanvasToArea() {{ zoomFit(); }}
 
             apply_recipe = st.checkbox("구성(레시피)도 함께 갱신", value=True, key="builder_apply_recipe",
                                        help="체크 시 좌측 구성 집계가 세트 레시피로 저장됩니다. 이미지만 바꾸려면 해제하세요.")
+
+            # [추가] 세트 설명 — 견적서에서 세트 위에 마우스를 올리면 구성품 아래에 표시됨
+            _existing_desc = ""
+            if builder_mode != "✨ 새 세트 만들기" and target_set_name:
+                for _c, _items in st.session_state.db.get("sets", {}).items():
+                    if target_set_name in _items:
+                        _existing_desc = _items[target_set_name].get("desc", "")
+                        break
+            new_sdesc = st.text_area(
+                "세트 설명 (선택)",
+                value=_existing_desc, height=70, key="builder_set_desc",
+                help="견적서에서 세트 이미지 위에 마우스를 올리면 구성품 목록 아래에 이 설명이 함께 표시됩니다.",
+                placeholder="예: 50mm 주배관 표준 세트. 무절삭 시공으로 누수 위험 최소화."
+            )
             submitted = st.form_submit_button("💾 드라이브 업로드 & 저장", type="primary", use_container_width=True)
 
             if submitted:
@@ -1600,7 +1792,8 @@ function fitCanvasToArea() {{ zoomFit(); }}
                                 sc_val = new_ssc if new_ssc != "-" else None
                                 st.session_state.db["sets"][new_scat][new_sname] = {
                                     "recipe": cur_recipe if apply_recipe else {},
-                                    "image": new_id, "sub_cat": sc_val
+                                    "image": new_id, "sub_cat": sc_val,
+                                    "desc": new_sdesc.strip()
                                 }
                                 save_sets_to_sheet(st.session_state.db["sets"])
                                 st.success(f"✅ 신규 세트 '{new_sname}' 생성 완료! (이미지+구성 {len(cur_recipe)}종)")
@@ -1610,6 +1803,7 @@ function fitCanvasToArea() {{ zoomFit(); }}
                                 for cat_key, cat_items in st.session_state.db["sets"].items():
                                     if new_sname in cat_items:
                                         cat_items[new_sname]["image"] = new_id
+                                        cat_items[new_sname]["desc"] = new_sdesc.strip()
                                         if apply_recipe and cur_recipe:
                                             cat_items[new_sname]["recipe"] = cur_recipe
                                         found = True
@@ -2941,10 +3135,22 @@ st.markdown("""
     padding: 6px 10px;
     border-radius: 6px;
     border: 1px solid #444;
-    white-space: nowrap;
+    white-space: normal;
+    max-width: 240px;
+    width: max-content;
+    text-align: left;
     z-index: 9999;
     box-shadow: 0 4px 14px rgba(0,0,0,.6);
     pointer-events: none;
+}
+.set-card-desc {
+    margin-top: 5px;
+    padding-top: 5px;
+    border-top: 1px solid #555;
+    color: #ffd479;
+    font-size: 10.5px;
+    line-height: 1.5;
+    white-space: normal;
 }
 .set-card-tooltip::after {
     content: '';
@@ -3874,7 +4080,9 @@ else:
                                 else:
                                     b64 = None
                                 img_html = f'<img src="{b64}" style="width:100%;border-radius:6px 6px 0 0;">' if b64 else '<div style="width:100%;height:110px;background:#2a2a2a;border-radius:6px 6px 0 0;display:flex;align-items:center;justify-content:center;color:#666;font-size:12px;">No Image</div>'
-                                tooltip_block = f'<div class="set-card-tooltip">{tooltip_html}</div>' if tooltip_html else ""
+                                set_desc = v.get("desc", "") if isinstance(v, dict) else ""
+                                desc_html = f'<div class="set-card-desc">{set_desc}</div>' if set_desc else ""
+                                tooltip_block = f'<div class="set-card-tooltip">{tooltip_html}{desc_html}</div>' if (tooltip_html or desc_html) else ""
                                 st.markdown(f'<div class="set-card-wrap">{img_html}{tooltip_block}</div>', unsafe_allow_html=True)
                                 res[n] = st.number_input(n, 0, key=f"{pf}_{n}_input")
                         return res
@@ -4030,7 +4238,9 @@ else:
                         else:
                             b64 = None
                         img_html = f'<img src="{b64}" style="width:100%;border-radius:6px 6px 0 0;">' if b64 else '<div style="width:100%;height:110px;background:#2a2a2a;border-radius:6px 6px 0 0;display:flex;align-items:center;justify-content:center;color:#666;font-size:12px;">No Image</div>'
-                        tooltip_block = f'<div class="set-card-tooltip">{tooltip_html}</div>' if tooltip_html else ""
+                        set_desc = v.get("desc", "") if isinstance(v, dict) else ""
+                        desc_html = f'<div class="set-card-desc">{set_desc}</div>' if set_desc else ""
+                        tooltip_block = f'<div class="set-card-tooltip">{tooltip_html}{desc_html}</div>' if (tooltip_html or desc_html) else ""
                         st.markdown(f'<div class="set-card-wrap">{img_html}{tooltip_block}</div>', unsafe_allow_html=True)
                         res[n] = st.number_input(n, 0, key=f"{pf}_{n}_input")
                 return res

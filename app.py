@@ -1,5 +1,10 @@
 import os
 import streamlit as st
+try:
+    from streamlit_js_eval import streamlit_js_eval
+    _HAS_JS_EVAL = True
+except Exception:
+    _HAS_JS_EVAL = False
 import pandas as pd
 import math
 import io
@@ -1041,8 +1046,9 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
   </div>
   <!-- 하단 저장 영역 -->
   <div id="save-area">
-    <button class="btn-primary" onclick="downloadPng()">📥 완성 PNG 내려받기 (이후 아래에서 드라이브 저장)</button>
-    <button class="btn-secondary" onclick="downloadCanvasJson()">🧩 캔버스 데이터(.json) 내려받기 — 나중에 재편집용</button>
+    <button class="btn-primary" onclick="sendToApp()">💾 저장 (이미지+구성 자동 등록)</button>
+    <button class="btn-secondary" onclick="downloadPng()">📥 PNG만 내려받기 (백업용)</button>
+    <button class="btn-secondary" onclick="downloadCanvasJson()">🧩 캔버스 데이터(.json) 내려받기 (백업용)</button>
     <div id="status2"></div>
   </div>
 </div>
@@ -1728,6 +1734,24 @@ function downloadCanvasJson() {{
     setStatus2('캔버스 데이터(.json)를 내려받았습니다. 저장 시 함께 업로드하면 재편집이 가능합니다.');
 }}
 
+// ── [원클릭 저장] 부모(Streamlit) localStorage로 PNG+캔버스데이터 전송 ──
+// components.html iframe은 단방향이므로, 부모창 localStorage를 다리로 사용.
+// 파이썬이 js-eval로 플래그를 읽고 → localStorage에서 데이터를 꺼내 자동 저장한다.
+function sendToApp() {{
+    try {{
+        const png = exportWhiteBgDataUrl(2);   // 흰배경 합성 PNG dataURL
+        const cjson = JSON.stringify(canvas.toJSON(['_looperCode','_looperName','_looperSpec','_objId','_isPipe','_isUserText']));
+        const store = window.parent && window.parent.localStorage ? window.parent.localStorage : window.localStorage;
+        store.setItem('LOOPER_SET_PNG', png);
+        store.setItem('LOOPER_SET_JSON', cjson);
+        store.setItem('LOOPER_SET_TS', String(Date.now()));   // 변경 감지용 타임스탬프
+        store.setItem('LOOPER_SET_READY', '1');                // 처리 대기 플래그
+        setStatus2('✅ 앱으로 전송했습니다. 아래에서 세트명·분류를 확인하고 저장을 마무리하세요.');
+    }} catch (err) {{
+        setStatus2('⚠ 자동 전송 실패(브라우저 보안). 아래 백업 버튼으로 다운로드 후 업로드하세요. ' + err);
+    }}
+}}
+
 // ── [V14] 흰 배경 합성 PNG dataURL 생성 ──────────────────────────────
 // 누끼(투명) 부속들을 흰 배경 위에 얹어 저장 → 견적서 PDF에서 깨짐 방지.
 function exportWhiteBgDataUrl(mult) {{
@@ -1806,10 +1830,44 @@ function fitCanvasToArea() {{ zoomFit(); }}
 """
         components.html(html_code, height=680, scrolling=False)
 
-        # ── PNG 업로드 → 드라이브 저장 ──────────────────────────────────
+        # ── [원클릭 저장] 브리지: 빌더의 💾 저장 → localStorage → 여기서 수신 ──
         st.markdown("---")
         st.markdown("#### 💾 세트 이미지 + 구성 저장")
-        st.caption("위 빌더에서 **📥 완성 PNG 내려받기**로 PNG를 받은 뒤, 아래에 업로드하세요. 좌측 '구성 집계'가 그대로 세트 레시피로 저장됩니다.")
+
+        # 빌더에서 전송된 데이터를 localStorage에서 읽어옴 (js-eval 브리지)
+        bridge_png, bridge_json, bridge_ts = None, None, None
+        if _HAS_JS_EVAL:
+            try:
+                bridge_ts = streamlit_js_eval(
+                    js_expressions="window.parent.localStorage.getItem('LOOPER_SET_TS')",
+                    key="get_set_ts")
+            except Exception:
+                bridge_ts = None
+
+        # 새 전송이 감지되면(타임스탬프 변경) PNG/JSON 본문을 가져와 세션에 저장
+        if bridge_ts and bridge_ts != st.session_state.get("_last_set_ts"):
+            try:
+                bridge_png = streamlit_js_eval(
+                    js_expressions="window.parent.localStorage.getItem('LOOPER_SET_PNG')",
+                    key=f"get_set_png_{bridge_ts}")
+                bridge_json = streamlit_js_eval(
+                    js_expressions="window.parent.localStorage.getItem('LOOPER_SET_JSON')",
+                    key=f"get_set_json_{bridge_ts}")
+                if bridge_png:
+                    st.session_state["_bridge_png"] = bridge_png
+                    st.session_state["_bridge_json"] = bridge_json or ""
+                    st.session_state["_last_set_ts"] = bridge_ts
+            except Exception:
+                pass
+
+        has_bridge = bool(st.session_state.get("_bridge_png"))
+        if has_bridge:
+            st.success("✅ 빌더에서 전송된 이미지가 준비됐습니다. 아래에서 세트명·분류만 확인하고 저장하세요.")
+        else:
+            st.caption("위 빌더에서 **💾 저장** 버튼을 누르면 이미지·구성이 자동 전송됩니다. (전송이 안 되면 아래 백업 업로드 사용)")
+            if _HAS_JS_EVAL:
+                st.button("🔄 전송 확인 / 새로고침", key="bridge_refresh",
+                          help="빌더에서 '💾 저장'을 눌렀는데 위에 인식이 안 되면 클릭하세요.")
 
         # 현재 구성 집계(레시피) 미리보기
         cur_recipe = {c: info["qty"] for c, info in st.session_state.builder_recipe.items()}
@@ -1820,10 +1878,11 @@ function fitCanvasToArea() {{ zoomFit(); }}
             st.caption("📋 저장될 구성: (비어 있음 — 부속을 추가하면 자동 집계됩니다)")
 
         with st.form("builder_save_form"):
-            uploaded_png = st.file_uploader("완성 PNG 파일 업로드 (필수)", type=["png"], key="builder_upload_png")
-            uploaded_json = st.file_uploader(
-                "캔버스 데이터(.json) 업로드 (선택) — 함께 올리면 나중에 불러와 재편집 가능",
-                type=["json"], key="builder_upload_json")
+            # 백업 업로더 — 브리지 전송이 실패한 경우에만 사용 (평소엔 접어둠)
+            with st.expander("⬆️ 자동 전송이 안 될 때만: 파일 직접 업로드 (백업)", expanded=not has_bridge):
+                uploaded_png = st.file_uploader("완성 PNG 파일 업로드", type=["png"], key="builder_upload_png")
+                uploaded_json = st.file_uploader(
+                    "캔버스 데이터(.json) 업로드 — 재편집용", type=["json"], key="builder_upload_json")
 
             # 기존 세트의 레시피/설명 조회 (편집 모드 비교·프리필용)
             _existing_recipe, _existing_desc = {}, ""
@@ -1867,14 +1926,24 @@ function fitCanvasToArea() {{ zoomFit(); }}
                 else:
                     st.markdown("**저장 시:** 구성이 기존과 동일 → **이미지·설명만 교체**됩니다.")
 
-            confirm = st.checkbox("✔ 위 내용대로 저장하겠습니다.", key="builder_confirm_save")
-            submitted = st.form_submit_button("💾 드라이브 업로드 & 저장", type="primary", use_container_width=True)
+            submitted = st.form_submit_button("💾 세트로 저장/등록", type="primary", use_container_width=True)
 
             if submitted:
-                if not confirm:
-                    st.error("저장하려면 '위 내용대로 저장하겠습니다'에 체크하세요.")
-                elif not uploaded_png:
-                    st.error("완성 PNG 파일을 먼저 업로드하세요.")
+                # PNG 소스 결정: 브리지(자동) 우선, 없으면 업로더(백업)
+                png_bytes, json_text = None, None
+                if st.session_state.get("_bridge_png"):
+                    try:
+                        b64 = st.session_state["_bridge_png"].split(",", 1)[-1]
+                        png_bytes = base64.b64decode(b64)
+                        json_text = st.session_state.get("_bridge_json") or None
+                    except Exception:
+                        png_bytes = None
+                if png_bytes is None and uploaded_png is not None:
+                    png_bytes = uploaded_png.getvalue()
+                    json_text = uploaded_json.getvalue().decode("utf-8") if uploaded_json is not None else None
+
+                if png_bytes is None:
+                    st.error("저장할 이미지가 없습니다. 빌더에서 '💾 저장'을 누르거나 백업 업로드를 사용하세요.")
                 elif not new_sname:
                     st.error("세트명을 입력/선택하세요.")
                 else:
@@ -1888,12 +1957,12 @@ function fitCanvasToArea() {{ zoomFit(); }}
                                 _get_ds().files().delete(fileId=old_id).execute()
                         except Exception:
                             pass
-                        new_id = upload_bytes_to_drive(uploaded_png.getvalue(), fname, "image/png")
-                        # 캔버스 데이터(.json) 업로드 (선택) → 재편집용
+                        new_id = upload_bytes_to_drive(png_bytes, fname, "image/png")
+                        # 캔버스 데이터(.json) 업로드 → 재편집용 (브리지/업로더 공통)
                         canvas_id = None
-                        if uploaded_json is not None:
+                        if json_text:
                             try:
-                                canvas_id = upload_bytes_to_drive(uploaded_json.getvalue(), f"{new_sname}.canvas.json", "application/json")
+                                canvas_id = upload_bytes_to_drive(json_text.encode("utf-8"), f"{new_sname}.canvas.json", "application/json")
                             except Exception:
                                 canvas_id = None
                         if not new_id:
@@ -1934,7 +2003,16 @@ function fitCanvasToArea() {{ zoomFit(); }}
                                     st.success(f"✅ '{new_sname}' 이미지 교체 + 구성 갱신 완료! ({len(cur_recipe)}종)")
                                 else:
                                     st.success(f"✅ '{new_sname}' 이미지·설명 교체 완료! (구성 유지)")
-                            # 캐시·집계 정리 후 새로고침
+                            # 브리지 데이터·캐시·집계 정리 후 새로고침
+                            if _HAS_JS_EVAL:
+                                try:
+                                    streamlit_js_eval(
+                                        js_expressions="window.parent.localStorage.removeItem('LOOPER_SET_PNG');window.parent.localStorage.removeItem('LOOPER_SET_JSON');window.parent.localStorage.removeItem('LOOPER_SET_TS');window.parent.localStorage.removeItem('LOOPER_SET_READY');",
+                                        key=f"clear_bridge_{int(time.time())}")
+                                except Exception:
+                                    pass
+                            for _k in ("_bridge_png", "_bridge_json"):
+                                st.session_state.pop(_k, None)
                             st.session_state._img_cache = {}
                             st.session_state.builder_recipe = {}
                             st.session_state.builder_canvas_items = []

@@ -299,6 +299,26 @@ def get_image_from_drive(filename_or_id):
          return download_image_by_id(filename_or_id)
     return None
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def download_text_from_drive(file_id):
+    """드라이브 파일의 원본 텍스트(캔버스 JSON 등)를 그대로 반환."""
+    if not file_id: return None
+    ds = get_google_services()[1]
+    if not ds: return None
+    try:
+        raw = ds.files().get_media(fileId=file_id).execute()
+        return raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+    except Exception:
+        try:
+            get_google_services.clear()
+            ds2 = get_google_services()[1]
+            if ds2:
+                raw = ds2.files().get_media(fileId=file_id).execute()
+                return raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+        except Exception:
+            pass
+        return None
+
 @st.cache_data(ttl=600)
 def get_admin_ppt_content():
     if not drive_service: return None
@@ -436,7 +456,7 @@ def load_data_from_sheet():
             if cat not in data["sets"]: data["sets"][cat] = {}
             try: rcp = json.loads(str(rec.get("레시피JSON", "{}")))
             except: rcp = {}
-            data["sets"][cat][name] = {"recipe": rcp, "image": rec.get("이미지파일명"), "sub_cat": rec.get("하위분류"), "desc": rec.get("설명", "")}
+            data["sets"][cat][name] = {"recipe": rcp, "image": rec.get("이미지파일명"), "sub_cat": rec.get("하위분류"), "desc": rec.get("설명", ""), "canvas": rec.get("캔버스파일", "")}
     except: pass
     try:
         sh = gc.open(SHEET_NAME)
@@ -641,10 +661,10 @@ def save_sets_to_sheet(sets_dict):
     try:
         sh = gc.open(SHEET_NAME)
         ws_sets = sh.worksheet("Sets")
-        rows = [["세트명", "카테고리", "하위분류", "이미지파일명", "레시피JSON", "설명"]]
+        rows = [["세트명", "카테고리", "하위분류", "이미지파일명", "레시피JSON", "설명", "캔버스파일"]]
         for cat, items in sets_dict.items():
             for name, info in items.items():
-                rows.append([name, cat, info.get("sub_cat", ""), info.get("image", ""), json.dumps(info.get("recipe", {}), ensure_ascii=False), info.get("desc", "")])
+                rows.append([name, cat, info.get("sub_cat", ""), info.get("image", ""), json.dumps(info.get("recipe", {}), ensure_ascii=False), info.get("desc", ""), info.get("canvas", "")])
         ws_sets.clear()
         ws_sets.update(rows)
     except Exception as e:
@@ -831,6 +851,24 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
                             target_set_img_b64 = json.dumps(b64)
                     break
 
+        # [재편집] 편집 대상 세트에 캔버스 데이터(JSON)가 저장돼 있으면 객체 복원용으로 주입
+        target_set_canvas_json = "null"
+        if builder_mode == "🖼️ 기존 세트 이미지 편집" and target_set_name:
+            for cat_items in db_sets.values():
+                if target_set_name in cat_items:
+                    canvas_ref = cat_items[target_set_name].get("canvas")
+                    if canvas_ref and len(str(canvas_ref)) > 10:
+                        cjson = download_text_from_drive(canvas_ref)
+                        if cjson:
+                            # 이미 JSON 문자열 → JS 변수에 객체로 직접 삽입
+                            # </script> 등으로 인한 스크립트 조기 종료 방지
+                            target_set_canvas_json = cjson.replace("</", "<\\/")
+                    break
+        if builder_mode == "🖼️ 기존 세트 이미지 편집" and target_set_name and target_set_canvas_json != "null":
+            st.success("🧩 이 세트는 빌더 데이터가 있어 부속·배관·텍스트를 그대로 불러와 수정할 수 있습니다.")
+        elif builder_mode == "🖼️ 기존 세트 이미지 편집" and target_set_name:
+            st.caption("ℹ️ 이 세트는 외부 업로드 이미지라 개별 부속 편집은 불가합니다. '배경으로 표시' 후 새로 배치하거나, 새 캔버스 데이터를 저장하면 다음부터 재편집됩니다.")
+
         mode_new        = "true" if builder_mode == "✨ 새 세트 만들기" else "false"
         target_set_json = json.dumps(target_set_name)
 
@@ -972,6 +1010,10 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
             <input type="color" id="prop-pipe-color" onchange="applyLineProp()">
           </div>
           <div class="prop-row">
+            <label>색상 견본 (클릭하여 적용)</label>
+            <div id="prop-pipe-chips" style="display:flex;flex-wrap:wrap;gap:5px;margin-top:2px;"></div>
+          </div>
+          <div class="prop-row">
             <label>배관 굵기</label>
             <input type="number" id="prop-pipe-width" min="1" max="50" step="1" onchange="applyLineProp()">
           </div>
@@ -1000,6 +1042,7 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
   <!-- 하단 저장 영역 -->
   <div id="save-area">
     <button class="btn-primary" onclick="downloadPng()">📥 완성 PNG 내려받기 (이후 아래에서 드라이브 저장)</button>
+    <button class="btn-secondary" onclick="downloadCanvasJson()">🧩 캔버스 데이터(.json) 내려받기 — 나중에 재편집용</button>
     <div id="status2"></div>
   </div>
 </div>
@@ -1008,6 +1051,7 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
 const MODE_NEW = {mode_new};
 const TARGET_SET = {target_set_json};
 const TARGET_SET_IMG_B64 = {target_set_img_b64};
+const TARGET_SET_CANVAS_JSON = {target_set_canvas_json};  // 빌더로 만든 세트의 편집용 캔버스 데이터
 const PENDING_ITEMS = {pending_json};  // Python에서 "추가" 버튼 누른 품목 [code/name/spec/qty/b64]
 let CW = 720, CH = 540;
 
@@ -1052,34 +1096,42 @@ window.onload = function() {{
 
     // [V19] 배관 색상 칩 — 호스/농수관/기본색
     const PIPE_CHIPS = [
-        {{c:'#f4d624', t:'호스(노랑)'}},
-        {{c:'#2b2b2b', t:'농수관(짙은회색)'}},
+        {{c:'#f4d624', t:'호스 (244/214/36)'}},
+        {{c:'#2b2b2b', t:'농수관 (짙은 회색)'}},
         {{c:'#ffffff', t:'흰색'}},
         {{c:'#e23b3b', t:'빨강'}},
         {{c:'#2b6fe2', t:'파랑'}},
         {{c:'#2eaa4a', t:'녹색'}},
         {{c:'#7b3fe4', t:'보라'}},
         {{c:'#ff7ab8', t:'핑크'}},
-        {{c:'#f4d624', t:'노랑'}},
+        {{c:'#ffe600', t:'노랑'}},
         {{c:'#ff8c1a', t:'주황'}},
         {{c:'#000000', t:'검정'}},
     ];
-    const chipBox = document.getElementById('pipe-chips');
-    PIPE_CHIPS.forEach(ch => {{
-        const b = document.createElement('span');
-        b.title = ch.t;
-        b.style.cssText = 'width:18px;height:18px;border-radius:3px;cursor:pointer;border:1px solid #555;background:'+ch.c+';display:inline-block;';
-        b.onclick = function() {{
-            document.getElementById('pipe-color').value = ch.c;
-            // 선택된 배관이 있으면 즉시 적용
-            const o = canvas.getActiveObject();
-            if (o && (o._isPipe || o.type === 'line' || o.type === 'rect')) {{
-                if (o.type === 'rect') o.set('fill', ch.c); else o.set('stroke', ch.c);
-                canvas.renderAll(); pushUndo();
-            }}
-        }};
-        chipBox.appendChild(b);
-    }});
+    // 칩 클릭 → 현재 색상 입력 동기화 + 선택된 배관 즉시 적용
+    function applyPipeColor(c) {{
+        const tc = document.getElementById('pipe-color');     if (tc) tc.value = c;
+        const pc = document.getElementById('prop-pipe-color'); if (pc) pc.value = c;
+        const o = canvas.getActiveObject();
+        if (o && (o._isPipe || o.type === 'line' || o.type === 'rect')) {{
+            if (o.type === 'rect') o.set('fill', c); else o.set('stroke', c);
+            canvas.renderAll(); pushUndo();
+        }}
+    }}
+    // 동일 칩을 (1)상단 배관모드 팔레트, (2)우측 속성패널 두 곳에 생성
+    function buildChips(containerId, sz) {{
+        const box = document.getElementById(containerId);
+        if (!box) return;
+        PIPE_CHIPS.forEach(ch => {{
+            const b = document.createElement('span');
+            b.title = ch.t;
+            b.style.cssText = 'width:'+sz+'px;height:'+sz+'px;border-radius:3px;cursor:pointer;border:1px solid #777;background:'+ch.c+';display:inline-block;';
+            b.onclick = function() {{ applyPipeColor(ch.c); }};
+            box.appendChild(b);
+        }});
+    }}
+    buildChips('pipe-chips', 18);        // 상단 배관 그리기 모드 팔레트
+    buildChips('prop-pipe-chips', 20);   // 우측 속성 패널 (선택 모드에서 재색칠)
 
     // 캔버스 우클릭 메뉴 닫기
     document.addEventListener('click', () => {{ document.getElementById('ctx-menu').style.display='none'; }});
@@ -1108,9 +1160,32 @@ window.onload = function() {{
     setTimeout(zoomFit, 80);   // [V15] 레이아웃 확정 후 영역 맞춤
 
     // ── 기존 세트 이미지 캔버스 로드 (편집 모드) ─────────────────────
+    // [재편집] 빌더로 만든 세트는 캔버스 데이터(JSON)가 있으면 객체를 그대로 복원
+    //          → 부속·배관·텍스트를 개별 수정 가능. 외부 업로드 세트는 기존 PNG 배경 방식.
+    if (!MODE_NEW && TARGET_SET_CANVAS_JSON) {{
+        canvas.loadFromJSON(TARGET_SET_CANVAS_JSON, function() {{
+            // objId 충돌 방지 + 집계 복원
+            objRecipe = {{}};
+            let maxId = 0;
+            canvas.getObjects().forEach(o => {{
+                o.setCoords();
+                if (o._objId && o._objId > maxId) maxId = o._objId;
+                if (o._looperCode) {{
+                    if (!o._objId) o._objId = ++maxId;
+                    objRecipe[o._objId] = {{code:o._looperCode, name:o._looperName, qty:1}};
+                }}
+            }});
+            lastObjId = maxId;
+            canvas.renderAll();
+            updateRecipe();
+            undoStack = []; redoStack = []; pushUndo();
+            setTimeout(zoomFit, 30);
+            setStatus('빌더 데이터 복원됨 — 부속·배관·텍스트를 자유롭게 수정하세요.');
+        }});
+    }}
     // [V15] 배경 표시 여부는 Python(show_bg 체크박스)이 결정.
     //  TARGET_SET_IMG_B64가 null이면 애초에 전달 안 됨 → 배경 없음.
-    if (!MODE_NEW && TARGET_SET_IMG_B64) {{
+    else if (!MODE_NEW && TARGET_SET_IMG_B64) {{
         fabric.Image.fromURL(TARGET_SET_IMG_B64, function(img) {{
             const scale = Math.min(CW / img.width, CH / img.height);
             img.set({{
@@ -1639,6 +1714,20 @@ function downloadPng() {{
     setStatus2('PNG를 내려받았습니다. 아래 "PNG 드라이브 저장"에 업로드하세요.');
 }}
 
+// ── [재편집] 캔버스 데이터(.json) 내려받기 ───────────────────────────
+// 부속 위치/배관/텍스트를 그대로 담은 JSON. 나중에 편집 모드로 불러오면 복원됨.
+function downloadCanvasJson() {{
+    const data = JSON.stringify(canvas.toJSON(['_looperCode','_looperName','_looperSpec','_objId','_isPipe','_isUserText']));
+    const blob = new Blob([data], {{type:'application/json'}});
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    const base = (TARGET_SET && TARGET_SET.length) ? TARGET_SET : 'new_set';
+    link.download = base + '.canvas.json';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    setStatus2('캔버스 데이터(.json)를 내려받았습니다. 저장 시 함께 업로드하면 재편집이 가능합니다.');
+}}
+
 // ── [V14] 흰 배경 합성 PNG dataURL 생성 ──────────────────────────────
 // 누끼(투명) 부속들을 흰 배경 위에 얹어 저장 → 견적서 PDF에서 깨짐 방지.
 function exportWhiteBgDataUrl(mult) {{
@@ -1731,10 +1820,22 @@ function fitCanvasToArea() {{ zoomFit(); }}
             st.caption("📋 저장될 구성: (비어 있음 — 부속을 추가하면 자동 집계됩니다)")
 
         with st.form("builder_save_form"):
-            uploaded_png = st.file_uploader("완성 PNG 파일 업로드", type=["png"], key="builder_upload_png")
+            uploaded_png = st.file_uploader("완성 PNG 파일 업로드 (필수)", type=["png"], key="builder_upload_png")
+            uploaded_json = st.file_uploader(
+                "캔버스 데이터(.json) 업로드 (선택) — 함께 올리면 나중에 불러와 재편집 가능",
+                type=["json"], key="builder_upload_json")
+
+            # 기존 세트의 레시피/설명 조회 (편집 모드 비교·프리필용)
+            _existing_recipe, _existing_desc = {}, ""
+            if builder_mode != "✨ 새 세트 만들기" and target_set_name:
+                for _c, _items in st.session_state.db.get("sets", {}).items():
+                    if target_set_name in _items:
+                        _existing_recipe = {str(k): v for k, v in _items[target_set_name].get("recipe", {}).items()}
+                        _existing_desc = _items[target_set_name].get("desc", "")
+                        break
 
             if builder_mode == "✨ 새 세트 만들기":
-                new_sname = st.text_input("세트명 (예: [LHC]E-1-50)", key="builder_new_name2")
+                new_sname = st.text_input("세트명 (예: [LHC]1-1-5050)", key="builder_new_name2")
                 cc1, cc2 = st.columns(2)
                 with cc1:
                     new_scat = st.selectbox("분류", ["주배관세트","가지관세트","기타자재"], key="builder_new_cat2")
@@ -1742,31 +1843,38 @@ function fitCanvasToArea() {{ zoomFit(); }}
                     new_ssc  = st.selectbox("하위분류", ["50mm","40mm","기타","-"], key="builder_new_sc2")
             else:
                 new_sname = target_set_name
-                new_scat  = ""
-                new_ssc   = ""
-                st.info(f"편집 대상 세트: **{target_set_name}** — 이미지가 교체되고, 위 구성 집계로 레시피가 갱신됩니다.")
+                new_scat, new_ssc = "", ""
+                st.info(f"편집 대상 세트: **{target_set_name}**")
 
-            apply_recipe = st.checkbox("구성(레시피)도 함께 갱신", value=True, key="builder_apply_recipe",
-                                       help="체크 시 좌측 구성 집계가 세트 레시피로 저장됩니다. 이미지만 바꾸려면 해제하세요.")
-
-            # [추가] 세트 설명 — 견적서에서 세트 위에 마우스를 올리면 구성품 아래에 표시됨
-            _existing_desc = ""
-            if builder_mode != "✨ 새 세트 만들기" and target_set_name:
-                for _c, _items in st.session_state.db.get("sets", {}).items():
-                    if target_set_name in _items:
-                        _existing_desc = _items[target_set_name].get("desc", "")
-                        break
+            # 세트 설명 (견적서 툴팁용)
             new_sdesc = st.text_area(
-                "세트 설명 (선택)",
-                value=_existing_desc, height=70, key="builder_set_desc",
-                help="견적서에서 세트 이미지 위에 마우스를 올리면 구성품 목록 아래에 이 설명이 함께 표시됩니다.",
-                placeholder="예: 50mm 주배관 표준 세트. 무절삭 시공으로 누수 위험 최소화."
-            )
+                "세트 설명 (선택)", value=_existing_desc, height=70, key="builder_set_desc",
+                help="견적서에서 세트 이미지 위에 마우스를 올리면 구성품 목록 아래에 함께 표시됩니다.",
+                placeholder="예: 50mm 주배관 표준 세트. 무절삭 시공으로 누수 위험 최소화.")
+
+            # [요청2] 저장 동작 미리보기 — 캔버스 집계 vs 기존 구성 자동 비교
+            _cur_norm = {str(k): v for k, v in cur_recipe.items()}
+            recipe_changed = (_cur_norm != _existing_recipe)
+            if builder_mode == "✨ 새 세트 만들기":
+                st.markdown(f"**저장 시:** 신규 세트 `{new_sname or '(이름 미입력)'}` 가 구성 **{len(cur_recipe)}종**과 함께 새로 생성됩니다.")
+            else:
+                if not cur_recipe:
+                    st.markdown("**저장 시:** 구성 집계가 비어 있어 **이미지·설명만 교체**됩니다. (기존 구성 유지)")
+                elif recipe_changed:
+                    _old = ", ".join([f"[{c}]×{q}" for c, q in _existing_recipe.items()]) or "(없음)"
+                    _new = ", ".join([f"[{c}]×{q}" for c, q in _cur_norm.items()])
+                    st.warning(f"**구성이 기존과 다릅니다.** 저장 시 이미지 교체 + 구성이 캔버스대로 갱신됩니다.\n\n- 기존: {_old}\n- 변경: {_new}")
+                else:
+                    st.markdown("**저장 시:** 구성이 기존과 동일 → **이미지·설명만 교체**됩니다.")
+
+            confirm = st.checkbox("✔ 위 내용대로 저장하겠습니다.", key="builder_confirm_save")
             submitted = st.form_submit_button("💾 드라이브 업로드 & 저장", type="primary", use_container_width=True)
 
             if submitted:
-                if not uploaded_png:
-                    st.error("PNG 파일을 먼저 업로드하세요.")
+                if not confirm:
+                    st.error("저장하려면 '위 내용대로 저장하겠습니다'에 체크하세요.")
+                elif not uploaded_png:
+                    st.error("완성 PNG 파일을 먼저 업로드하세요.")
                 elif not new_sname:
                     st.error("세트명을 입력/선택하세요.")
                 else:
@@ -1781,38 +1889,51 @@ function fitCanvasToArea() {{ zoomFit(); }}
                         except Exception:
                             pass
                         new_id = upload_bytes_to_drive(uploaded_png.getvalue(), fname, "image/png")
+                        # 캔버스 데이터(.json) 업로드 (선택) → 재편집용
+                        canvas_id = None
+                        if uploaded_json is not None:
+                            try:
+                                canvas_id = upload_bytes_to_drive(uploaded_json.getvalue(), f"{new_sname}.canvas.json", "application/json")
+                            except Exception:
+                                canvas_id = None
                         if not new_id:
                             st.error("업로드 실패")
                         else:
                             get_drive_file_map.clear()
                             get_drive_file_map_deep.clear()
+                            try: download_text_from_drive.clear()
+                            except Exception: pass
                             if builder_mode == "✨ 새 세트 만들기":
+                                # ㄴ. 신규 세트 생성 완료
                                 if new_scat not in st.session_state.db["sets"]:
                                     st.session_state.db["sets"][new_scat] = {}
                                 sc_val = new_ssc if new_ssc != "-" else None
                                 st.session_state.db["sets"][new_scat][new_sname] = {
-                                    "recipe": cur_recipe if apply_recipe else {},
+                                    "recipe": _cur_norm,
                                     "image": new_id, "sub_cat": sc_val,
-                                    "desc": new_sdesc.strip()
+                                    "desc": new_sdesc.strip(),
+                                    "canvas": canvas_id or ""
                                 }
                                 save_sets_to_sheet(st.session_state.db["sets"])
-                                st.success(f"✅ 신규 세트 '{new_sname}' 생성 완료! (이미지+구성 {len(cur_recipe)}종)")
+                                msg = f"✅ 신규 세트 '{new_sname}' 생성 완료! (구성 {len(cur_recipe)}종"
+                                msg += ", 재편집 데이터 포함)" if canvas_id else ")"
+                                st.success(msg)
                             else:
-                                # 편집: 기존 세트의 이미지 교체 + (선택 시) 레시피 갱신
-                                found = False
+                                # ㄱ. 기존 세트 변경: 구성 같으면 이미지·설명만, 다르면 구성도 갱신
                                 for cat_key, cat_items in st.session_state.db["sets"].items():
                                     if new_sname in cat_items:
                                         cat_items[new_sname]["image"] = new_id
                                         cat_items[new_sname]["desc"] = new_sdesc.strip()
-                                        if apply_recipe and cur_recipe:
-                                            cat_items[new_sname]["recipe"] = cur_recipe
-                                        found = True
+                                        if canvas_id:
+                                            cat_items[new_sname]["canvas"] = canvas_id
+                                        if cur_recipe and recipe_changed:
+                                            cat_items[new_sname]["recipe"] = _cur_norm
                                         break
                                 save_sets_to_sheet(st.session_state.db["sets"])
-                                if apply_recipe and cur_recipe:
+                                if cur_recipe and recipe_changed:
                                     st.success(f"✅ '{new_sname}' 이미지 교체 + 구성 갱신 완료! ({len(cur_recipe)}종)")
                                 else:
-                                    st.success(f"✅ '{new_sname}' 이미지 교체 완료!")
+                                    st.success(f"✅ '{new_sname}' 이미지·설명 교체 완료! (구성 유지)")
                             # 캐시·집계 정리 후 새로고침
                             st.session_state._img_cache = {}
                             st.session_state.builder_recipe = {}

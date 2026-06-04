@@ -94,15 +94,15 @@ def get_or_create_drive_folder():
     if not ds: return None
     try:
         query_shared = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and sharedWithMe=true and trashed=false"
-        results_shared = ds.files().list(q=query_shared, fields="files(id)").execute()
+        results_shared = ds.files().list(q=query_shared, fields="files(id)", includeItemsFromAllDrives=True, supportsAllDrives=True, corpora="allDrives").execute()
         files_shared = results_shared.get('files', [])
         if files_shared: return files_shared[0]['id']
         query = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        results = ds.files().list(q=query, fields="files(id)").execute()
+        results = ds.files().list(q=query, fields="files(id)", includeItemsFromAllDrives=True, supportsAllDrives=True, corpora="allDrives").execute()
         files = results.get('files', [])
         if files: return files[0]['id']
         file_metadata = {'name': DRIVE_FOLDER_NAME, 'mimeType': 'application/vnd.google-apps.folder'}
-        folder = ds.files().create(body=file_metadata, fields='id').execute()
+        folder = ds.files().create(body=file_metadata, fields='id', supportsAllDrives=True).execute()
         return folder.get('id')
     except Exception as e:
         err = str(e)
@@ -131,7 +131,7 @@ def upload_image_to_drive(file_obj, filename):
         buffer.seek(0)
         file_metadata = {'name': filename, 'parents': [folder_id]}
         media = MediaIoBaseUpload(buffer, mimetype=file_obj.type, resumable=False)
-        _get_ds().files().create(body=file_metadata, media_body=media, fields='id').execute()
+        _get_ds().files().create(body=file_metadata, media_body=media, fields='id', supportsAllDrives=True).execute()
         return filename
     except Exception as e:
         st.error(f"업로드 실패: {e}")
@@ -146,7 +146,7 @@ def upload_set_image_to_drive(file_obj, filename):
         buffer.seek(0)
         file_metadata = {'name': filename, 'parents': [folder_id]}
         media = MediaIoBaseUpload(buffer, mimetype=file_obj.type, resumable=False)
-        file_info = _get_ds().files().create(body=file_metadata, media_body=media, fields='id').execute()
+        file_info = _get_ds().files().create(body=file_metadata, media_body=media, fields='id', supportsAllDrives=True).execute()
         return file_info.get('id')
     except Exception as e:
         error_msg = str(e)
@@ -166,7 +166,7 @@ def upload_bytes_to_drive(byte_data: bytes, filename: str, mimetype: str = "imag
         buffer.seek(0)
         file_metadata = {'name': filename, 'parents': [folder_id]}
         media = MediaIoBaseUpload(buffer, mimetype=mimetype, resumable=False)
-        file_info = _get_ds().files().create(body=file_metadata, media_body=media, fields='id').execute()
+        file_info = _get_ds().files().create(body=file_metadata, media_body=media, fields='id', supportsAllDrives=True).execute()
         return file_info.get('id')
     except Exception as e:
         st.error(f"업로드 실패: {e}")
@@ -183,7 +183,7 @@ def get_drive_file_map():
         query = f"'{folder_id}' in parents and trashed=false"
         page_token = None
         while True:
-            response = ds.files().list(q=query, spaces='drive', fields='nextPageToken, files(id, name)', pageToken=page_token).execute()
+            response = ds.files().list(q=query, spaces='drive', fields='nextPageToken, files(id, name)', pageToken=page_token, includeItemsFromAllDrives=True, supportsAllDrives=True).execute()
             files = response.get('files', [])
             for f in files:
                 name_stem = os.path.splitext(f['name'])[0]
@@ -221,7 +221,8 @@ def get_drive_file_map_deep():
                     q=f"'{folder_id}' in parents and trashed=false",
                     spaces='drive',
                     fields='nextPageToken, files(id, name, mimeType)',
-                    pageToken=page_token
+                    pageToken=page_token,
+                    includeItemsFromAllDrives=True, supportsAllDrives=True
                 ).execute()
                 for f in resp.get('files', []):
                     if f.get('mimeType') == 'application/vnd.google-apps.folder':
@@ -824,6 +825,25 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
                 st.session_state.builder_pending_items = []
                 st.session_state.builder_canvas_items = []
                 st.rerun()
+
+        # ── [V19] 이미지 없는 항목(관급/포장/검수 등)을 '구성에만' 직접 추가 ──
+        with st.expander("➕ 구성에만 추가 (관급/포장/검수 등 이미지 없는 항목)", expanded=False):
+            st.caption("캔버스에 올리지 않고 세트 구성(레시피)에만 넣습니다. 관급자재·포장비·검수비처럼 그림이 필요 없는 비용/자재 항목용.")
+            _extra_opts = [f"[{m['code']}] {m['name']} / {m['spec'] or '-'}" for m in all_meta]
+            if _extra_opts:
+                _esel = st.selectbox("항목 선택 (코드/이름으로 검색)", _extra_opts, key="builder_extra_sel")
+                _eqty = st.number_input("수량", min_value=1, value=1, step=1, key="builder_extra_qty")
+                if st.button("구성에만 추가", key="builder_extra_add", use_container_width=True):
+                    _m = all_meta[_extra_opts.index(_esel)]
+                    _ec = _m["code"]
+                    if _ec in st.session_state.builder_recipe:
+                        st.session_state.builder_recipe[_ec]["qty"] += int(_eqty)
+                    else:
+                        st.session_state.builder_recipe[_ec] = {"name": _m["name"], "spec": _m["spec"], "qty": int(_eqty)}
+                    st.success(f"구성에 '{_m['name']}' {int(_eqty)}개 추가 (캔버스 미표시)")
+                    st.rerun()
+            else:
+                st.caption("제품 DB가 비어 있습니다.")
 
     # ── [V16] 캔버스 누적 아이템 전체를 JS에 전달 (rerun에도 유지) ──────
     # b64는 세션에 저장하지 않으므로, 매 렌더에 캐시 우선·없으면 드라이브에서 채움.
@@ -1908,26 +1928,38 @@ function fitCanvasToArea() {{ zoomFit(); }}
                 uploaded_json = st.file_uploader(
                     "캔버스 데이터(.json) 업로드 — 재편집용", type=["json"], key="builder_upload_json")
 
-            # 기존 세트의 레시피/설명 조회 (편집 모드 비교·프리필용)
-            _existing_recipe, _existing_desc = {}, ""
+            # 기존 세트의 레시피/설명/분류 조회 (편집 모드 비교·프리필용)
+            _existing_recipe, _existing_desc, _existing_cat, _existing_sc = {}, "", "", ""
             if builder_mode != "✨ 새 세트 만들기" and target_set_name:
                 for _c, _items in st.session_state.db.get("sets", {}).items():
                     if target_set_name in _items:
                         _existing_recipe = {str(k): v for k, v in _items[target_set_name].get("recipe", {}).items()}
                         _existing_desc = _items[target_set_name].get("desc", "")
+                        _existing_cat = _c
+                        _existing_sc = _items[target_set_name].get("sub_cat") or "-"
                         break
+
+            # 분류·하위분류 옵션 (신규·편집 공통 — 편집 시 기존값이 기본 선택)
+            _CATS = ["주배관세트", "가지관세트", "기타자재"]
+            if _existing_cat and _existing_cat not in _CATS:
+                _CATS = [_existing_cat] + _CATS
+            _SCS = ["50mm", "40mm", "기타", "-"]
+            if _existing_sc and _existing_sc not in _SCS:
+                _SCS = [_existing_sc] + _SCS
 
             if builder_mode == "✨ 새 세트 만들기":
                 new_sname = st.text_input("세트명 (예: [LHC]1-1-5050)", key="builder_new_name2")
-                cc1, cc2 = st.columns(2)
-                with cc1:
-                    new_scat = st.selectbox("분류", ["주배관세트","가지관세트","기타자재"], key="builder_new_cat2")
-                with cc2:
-                    new_ssc  = st.selectbox("하위분류", ["50mm","40mm","기타","-"], key="builder_new_sc2")
             else:
                 new_sname = target_set_name
-                new_scat, new_ssc = "", ""
-                st.info(f"편집 대상 세트: **{target_set_name}**")
+                st.info(f"편집 대상 세트: **{target_set_name}**  ·  현재 분류: {_existing_cat or '미지정'}")
+
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                _cat_idx = _CATS.index(_existing_cat) if _existing_cat in _CATS else 0
+                new_scat = st.selectbox("분류 (주배관/가지관 등 — 변경 가능)", _CATS, index=_cat_idx, key="builder_cat_sel")
+            with cc2:
+                _sc_idx = _SCS.index(_existing_sc) if _existing_sc in _SCS else (len(_SCS) - 1)
+                new_ssc = st.selectbox("하위분류", _SCS, index=_sc_idx, key="builder_sc_sel")
 
             # 세트 설명 (견적서 툴팁용)
             new_sdesc = st.text_area(
@@ -1978,7 +2010,7 @@ function fitCanvasToArea() {{ zoomFit(); }}
                             fmap = get_drive_file_map_deep()
                             old_id = fmap.get(new_sname)
                             if old_id:
-                                _get_ds().files().delete(fileId=old_id).execute()
+                                _get_ds().files().delete(fileId=old_id, supportsAllDrives=True).execute()
                         except Exception:
                             pass
                         new_id = upload_bytes_to_drive(png_bytes, fname, "image/png")
@@ -1989,45 +2021,71 @@ function fitCanvasToArea() {{ zoomFit(); }}
                                 canvas_id = upload_bytes_to_drive(json_text.encode("utf-8"), f"{new_sname}.canvas.json", "application/json")
                             except Exception:
                                 canvas_id = None
-                        if not new_id:
-                            st.error("업로드 실패")
-                        else:
-                            get_drive_file_map.clear()
-                            get_drive_file_map_deep.clear()
-                            try: download_text_from_drive.clear()
-                            except Exception: pass
-                            if builder_mode == "✨ 새 세트 만들기":
-                                # ㄴ. 신규 세트 생성 완료
-                                if new_scat not in st.session_state.db["sets"]:
-                                    st.session_state.db["sets"][new_scat] = {}
-                                sc_val = new_ssc if new_ssc != "-" else None
-                                st.session_state.db["sets"][new_scat][new_sname] = {
-                                    "recipe": _cur_norm,
-                                    "image": new_id, "sub_cat": sc_val,
-                                    "desc": new_sdesc.strip(),
-                                    "canvas": canvas_id or ""
-                                }
-                                save_sets_to_sheet(st.session_state.db["sets"])
-                                msg = f"✅ 신규 세트 '{new_sname}' 생성 완료! (구성 {len(cur_recipe)}종"
+
+                        # [작업 손실 방지] 이미지 업로드가 실패(서비스계정 용량 0 등)해도
+                        #  구성·분류·설명은 시트에 저장한다. 이미지 참조는 파일명으로 기록 →
+                        #  나중에 같은 이름 PNG를 폴더에 올리면 코드/이름으로 자동 연결된다.
+                        upload_failed = not new_id
+                        image_ref = new_id or fname
+                        if upload_failed:
+                            st.warning(
+                                f"⚠️ 이미지 자동 업로드가 막혔습니다(서비스계정은 드라이브에 파일 생성 불가). "
+                                f"**구성·분류·설명은 저장**했습니다. 이미지는 아래처럼 처리하세요:\n\n"
+                                f"1. 빌더에서 **📥 PNG만 내려받기** → 파일명을 **`{fname}`** 로 변경\n"
+                                f"2. 구글 드라이브의 세트 이미지 폴더(`sets/`)에 그 PNG를 직접 업로드\n"
+                                f"→ 견적서에서 코드/이름으로 자동 연결됩니다. (근본 해결: 공유 드라이브 또는 OAuth — 안내 참고)")
+
+                        get_drive_file_map.clear()
+                        get_drive_file_map_deep.clear()
+                        try: download_text_from_drive.clear()
+                        except Exception: pass
+
+                        sc_val = new_ssc if new_ssc != "-" else None
+                        if builder_mode == "✨ 새 세트 만들기":
+                            # ㄴ. 신규 세트 생성 완료
+                            if new_scat not in st.session_state.db["sets"]:
+                                st.session_state.db["sets"][new_scat] = {}
+                            st.session_state.db["sets"][new_scat][new_sname] = {
+                                "recipe": _cur_norm,
+                                "image": image_ref, "sub_cat": sc_val,
+                                "desc": new_sdesc.strip(),
+                                "canvas": canvas_id or ""
+                            }
+                            save_sets_to_sheet(st.session_state.db["sets"])
+                            if not upload_failed:
+                                msg = f"✅ 신규 세트 '{new_sname}' 생성 완료! (분류: {new_scat}, 구성 {len(cur_recipe)}종"
                                 msg += ", 재편집 데이터 포함)" if canvas_id else ")"
                                 st.success(msg)
-                            else:
-                                # ㄱ. 기존 세트 변경: 구성 같으면 이미지·설명만, 다르면 구성도 갱신
-                                for cat_key, cat_items in st.session_state.db["sets"].items():
-                                    if new_sname in cat_items:
-                                        cat_items[new_sname]["image"] = new_id
-                                        cat_items[new_sname]["desc"] = new_sdesc.strip()
-                                        if canvas_id:
-                                            cat_items[new_sname]["canvas"] = canvas_id
-                                        if cur_recipe and recipe_changed:
-                                            cat_items[new_sname]["recipe"] = _cur_norm
-                                        break
-                                save_sets_to_sheet(st.session_state.db["sets"])
-                                if cur_recipe and recipe_changed:
-                                    st.success(f"✅ '{new_sname}' 이미지 교체 + 구성 갱신 완료! ({len(cur_recipe)}종)")
-                                else:
-                                    st.success(f"✅ '{new_sname}' 이미지·설명 교체 완료! (구성 유지)")
-                            # 브리지 데이터·캐시·집계 정리 후 새로고침
+                        else:
+                            # ㄱ. 기존 세트 변경: 분류가 바뀌면 해당 분류로 '이동', 구성은 캔버스대로 갱신
+                            old_info = None
+                            for cat_key in list(st.session_state.db["sets"].keys()):
+                                if new_sname in st.session_state.db["sets"][cat_key]:
+                                    old_info = st.session_state.db["sets"][cat_key].pop(new_sname)
+                                    break
+                            if old_info is None:
+                                old_info = {"recipe": {}, "image": "", "sub_cat": None, "desc": "", "canvas": ""}
+                            old_info["image"] = image_ref
+                            old_info["desc"] = new_sdesc.strip()
+                            old_info["sub_cat"] = sc_val
+                            if canvas_id:
+                                old_info["canvas"] = canvas_id
+                            if cur_recipe and recipe_changed:
+                                old_info["recipe"] = _cur_norm
+                            if new_scat not in st.session_state.db["sets"]:
+                                st.session_state.db["sets"][new_scat] = {}
+                            st.session_state.db["sets"][new_scat][new_sname] = old_info
+                            save_sets_to_sheet(st.session_state.db["sets"])
+                            if not upload_failed:
+                                _moved = (_existing_cat and _existing_cat != new_scat)
+                                _parts = []
+                                if _moved: _parts.append(f"분류 {_existing_cat}→{new_scat} 이동")
+                                if cur_recipe and recipe_changed: _parts.append(f"구성 갱신 {len(cur_recipe)}종")
+                                _parts.append("이미지·설명 교체")
+                                st.success("✅ '" + new_sname + "' 저장 완료! (" + ", ".join(_parts) + ")")
+
+                        # 성공 시에만 브리지·집계 정리 + 새로고침. (실패 시엔 안내가 사라지지 않도록 유지)
+                        if not upload_failed:
                             if _HAS_JS_EVAL:
                                 try:
                                     streamlit_js_eval(

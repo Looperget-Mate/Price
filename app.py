@@ -343,9 +343,33 @@ def get_admin_ppt_content():
     except Exception:
         return None
 
+def _product_image_index():
+    """[근본보강] 현재 제품 카탈로그의 코드(zfill5) → image(드라이브 ID) 인덱스.
+    db가 재로드되면 products 리스트 객체가 새로 생성되므로 id()로 캐시 무효화."""
+    db = st.session_state.get("db") or {}
+    prods = db.get("products", []) or []
+    key = id(prods)
+    cache = st.session_state.get("_prod_img_idx_cache")
+    if cache and cache[0] == key:
+        return cache[1]
+    idx = {}
+    for p in prods:
+        c = str(p.get("code", "")).strip().zfill(5)
+        iv = p.get("image", "")
+        if c and c != "00000" and iv and len(str(iv)) > 10:
+            idx[c] = str(iv)
+    st.session_state["_prod_img_idx_cache"] = (key, idx)
+    return idx
+
 def get_best_image_id(code, db_image_val, file_map):
+    # 이미지 해석 우선순위(견고성 순):
+    #  1) 코드명 파일 → 깊은 드라이브 맵 (products/ · sets/ 하위폴더 포함)
+    #  2) 코드 → 현재 제품 카탈로그의 image(드라이브 ID)  ← 항목 image_data 손실과 무관
+    #  3) 항목에 실린 image_data(드라이브 ID)            ← 최후 보루
     clean_code = str(code).strip().zfill(5)
     if clean_code in file_map: return file_map[clean_code]
+    pidx = _product_image_index()
+    if clean_code in pidx: return pidx[clean_code]
     if db_image_val and len(str(db_image_val)) > 10: return db_image_val
     return None
 
@@ -2061,7 +2085,7 @@ def create_advanced_pdf(final_data_list, service_items, quote_name, quote_date, 
     """
     견적서 PDF 생성 — 첨부 이미지 양식과 동일한 레이아웃
     """
-    drive_file_map = get_drive_file_map()
+    drive_file_map = get_drive_file_map_deep()
     pdf = PDF()
     pdf.title_text = '견 적 서'
     pdf.set_auto_page_break(False)
@@ -2347,7 +2371,7 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
     output = io.BytesIO()
     workbook = xlsxwriter.Workbook(output, {'in_memory': True})
     ws = workbook.add_worksheet("견적서")
-    drive_file_map = get_drive_file_map()
+    drive_file_map = get_drive_file_map_deep()
 
     FN = '맑은 고딕'  # 기본 폰트
 
@@ -2669,7 +2693,7 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
     return output.getvalue()
 
 def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db_sets, quote_name):
-    drive_file_map = get_drive_file_map()
+    drive_file_map = get_drive_file_map_deep()
     pdf = PDF()
     pdf.title_text = "자재 구성 명세서 (Composition Report)"
     pdf.set_auto_page_break(False)
@@ -2988,7 +3012,7 @@ def create_composition_pdf(set_cart, pipe_cart, final_data_list, db_products, db
 def create_composition_excel(set_cart, pipe_cart, final_data_list, db_products, db_sets, quote_name):
     output = io.BytesIO()
     workbook = xlsxwriter.Workbook(output, {'in_memory': True})
-    drive_file_map = get_drive_file_map()
+    drive_file_map = get_drive_file_map_deep()
     
     fmt_header = workbook.add_format({'bold': True, 'bg_color': '#f0f0f0', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
     fmt_center = workbook.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'})

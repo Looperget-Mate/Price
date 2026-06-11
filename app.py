@@ -413,6 +413,7 @@ REV_COL_MAP_JP = {v: k for k, v in COL_MAP_JP.items()}
 JP_CAT_MAP = {
     "주배관": "メイン配管", "주배관세트": "メイン配管",
     "가지관": "分岐配管",  "가지관세트": "分岐配管",
+    "살수": "散水",      "살수세트": "散水セット",
     "부속": "付属",
     "기타": "その他資材",  "기타자재": "その他資材",
     "관급비용": "管給費用"
@@ -1940,7 +1941,7 @@ function fitCanvasToArea() {{ zoomFit(); }}
                         break
 
             # 분류·하위분류 옵션 (신규·편집 공통 — 편집 시 기존값이 기본 선택)
-            _CATS = ["주배관세트", "가지관세트", "기타자재"]
+            _CATS = ["주배관세트", "가지관세트", "살수세트", "기타자재"]
             if _existing_cat and _existing_cat not in _CATS:
                 _CATS = [_existing_cat] + _CATS
             _SCS = ["50mm", "40mm", "기타", "-"]
@@ -3951,7 +3952,7 @@ if mode == "관리자 모드" or mode == "管理者モード":
             else:
                 st.warning("⚠️ 구글 드라이브 'Looperget_Admin' 폴더에 'Set_Composition_Master.pptx' 파일이 없습니다.")
             st.divider()
-            cat = st.selectbox("분류", ["주배관세트", "가지관세트", "기타자재"])
+            cat = st.selectbox("분류", ["주배관세트", "가지관세트", "살수세트", "기타자재"])
             cset = st.session_state.db["sets"].get(cat, {})
             if cset:
                 sl = [{"세트명": k, "부품수": len(v.get("recipe", {}))} for k,v in cset.items()]
@@ -4552,11 +4553,12 @@ else:
                 else:
                     st.warning("수량을 입력해주세요.")
         with st.expander("2. 가지관 및 기타 세트"):
-            c1, c2 = st.tabs(["가지관", "기타자재"])
+            c1, c2, c3 = st.tabs(["가지관", "살수", "기타자재"])
             with c1: inp_b = render_inputs_with_key(sets.get("가지관세트", {}), "b_set")
-            with c2: inp_e = render_inputs_with_key(sets.get("기타자재", {}), "e_set")
-            if st.button("➕ 가지관/기타 목록 추가"):
-                all_inputs = {**inp_b, **inp_e}
+            with c2: inp_s = render_inputs_with_key(sets.get("살수세트", {}), "s_set")
+            with c3: inp_e = render_inputs_with_key(sets.get("기타자재", {}), "e_set")
+            if st.button("➕ 가지관/살수/기타 목록 추가"):
+                all_inputs = {**inp_b, **inp_s, **inp_e}
                 added_count = 0
                 for set_name, qty in all_inputs.items():
                     if qty > 0:

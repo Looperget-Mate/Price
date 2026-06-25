@@ -92,6 +92,14 @@ def _get_ds():
 def get_or_create_drive_folder():
     ds = _get_ds()
     if not ds: return None
+    # [V20] 공유 드라이브 전환 대비: secrets에 DRIVE_FOLDER_ID가 있으면 이름검색 대신 ID 직접 사용
+    #       (옛 '내 드라이브' 폴더 오인 방지. 미설정 시 아래 기존 이름검색 로직 그대로 → 후방호환)
+    try:
+        _fixed_id = st.secrets.get("DRIVE_FOLDER_ID", "")
+        if _fixed_id:
+            return _fixed_id
+    except Exception:
+        pass
     try:
         query_shared = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and sharedWithMe=true and trashed=false"
         results_shared = ds.files().list(q=query_shared, fields="files(id)", includeItemsFromAllDrives=True, supportsAllDrives=True, corpora="allDrives").execute()
@@ -101,9 +109,9 @@ def get_or_create_drive_folder():
         results = ds.files().list(q=query, fields="files(id)", includeItemsFromAllDrives=True, supportsAllDrives=True, corpora="allDrives").execute()
         files = results.get('files', [])
         if files: return files[0]['id']
-        file_metadata = {'name': DRIVE_FOLDER_NAME, 'mimeType': 'application/vnd.google-apps.folder'}
-        folder = ds.files().create(body=file_metadata, fields='id', supportsAllDrives=True).execute()
-        return folder.get('id')
+        # [V20] 유령 폴더 생성 폴백 제거: 서비스계정(용량 0) 소유의 빈 폴더가 생기면
+        #       이후 검색이 가짜 폴더를 잡는 사고 발생. 미발견 시 None 반환(업로드 단의 수동안내가 처리).
+        return None
     except Exception as e:
         err = str(e)
         if "Broken pipe" in err or "Errno 32" in err:
@@ -112,7 +120,8 @@ def get_or_create_drive_folder():
                 ds2 = _get_ds()
                 if ds2:
                     q2 = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-                    r2 = ds2.files().list(q=q2, fields="files(id)").execute()
+                    # [V20] 재시도 경로에도 전 드라이브 플래그 추가 (공유 드라이브 폴더 누락 방지)
+                    r2 = ds2.files().list(q=q2, fields="files(id)", includeItemsFromAllDrives=True, supportsAllDrives=True, corpora="allDrives").execute()
                     f2 = r2.get('files', [])
                     if f2: return f2[0]['id']
             except Exception:
@@ -488,6 +497,14 @@ def load_data_from_sheet():
             try: rcp = json.loads(str(rec.get("레시피JSON", "{}")))
             except: rcp = {}
             data["sets"][cat][name] = {"recipe": rcp, "image": rec.get("이미지파일명"), "sub_cat": rec.get("하위분류"), "desc": rec.get("설명", ""), "canvas": rec.get("캔버스파일", "")}
+            # [V21, 2026-06-25] Track A-2 Phase 1A — Sets 시트 13컬럼 확장. 시트에 없으면 빈값(후방호환).
+            data["sets"][cat][name].update({
+                "gauge": rec.get("관경", ""), "install_phase": rec.get("설치단계", ""), "func_type": rec.get("기능타입", ""),
+                "head_model": rec.get("헤드모델", ""), "flow_lh": rec.get("유량(L/h)", ""), "pressure_bar": rec.get("권장수압(bar)", ""),
+                "spray_radius_m": rec.get("최대살수반경(m)", ""), "install_env": rec.get("설치환경", ""), "set_grade": rec.get("세트등급", ""),
+                "compat_sets": rec.get("호환필수세트", ""), "price_consumer": rec.get("소비자가", ""), "item_code": rec.get("자사품목코드", ""),
+                "gov_registered": rec.get("관급등록여부", "N"),
+            })
     except: pass
     try:
         sh = gc.open(SHEET_NAME)
@@ -692,10 +709,17 @@ def save_sets_to_sheet(sets_dict):
     try:
         sh = gc.open(SHEET_NAME)
         ws_sets = sh.worksheet("Sets")
-        rows = [["세트명", "카테고리", "하위분류", "이미지파일명", "레시피JSON", "설명", "캔버스파일"]]
+        # [V21, 2026-06-25] Track A-2 Phase 1A — 헤더·데이터 20컬럼 확장 (기존7 + 신규13). V15 §2-2 clear()+update() 패턴 유지.
+        rows = [["세트명", "카테고리", "하위분류", "이미지파일명", "레시피JSON", "설명", "캔버스파일",
+                 "관경", "설치단계", "기능타입", "헤드모델", "유량(L/h)", "권장수압(bar)",
+                 "최대살수반경(m)", "설치환경", "세트등급", "호환필수세트", "소비자가",
+                 "자사품목코드", "관급등록여부"]]
         for cat, items in sets_dict.items():
             for name, info in items.items():
-                rows.append([name, cat, info.get("sub_cat", ""), info.get("image", ""), json.dumps(info.get("recipe", {}), ensure_ascii=False), info.get("desc", ""), info.get("canvas", "")])
+                rows.append([name, cat, info.get("sub_cat", ""), info.get("image", ""), json.dumps(info.get("recipe", {}), ensure_ascii=False), info.get("desc", ""), info.get("canvas", ""),
+                             info.get("gauge", ""), info.get("install_phase", ""), info.get("func_type", ""), info.get("head_model", ""), info.get("flow_lh", ""), info.get("pressure_bar", ""),
+                             info.get("spray_radius_m", ""), info.get("install_env", ""), info.get("set_grade", ""), info.get("compat_sets", ""), info.get("price_consumer", ""),
+                             info.get("item_code", ""), info.get("gov_registered", "N")])
         ws_sets.clear()
         ws_sets.update(rows)
     except Exception as e:

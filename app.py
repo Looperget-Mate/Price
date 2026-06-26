@@ -504,6 +504,8 @@ def load_data_from_sheet():
                 "spray_radius_m": rec.get("최대살수반경(m)", ""), "install_env": rec.get("설치환경", ""), "set_grade": rec.get("세트등급", ""),
                 "compat_sets": rec.get("호환필수세트", ""), "price_consumer": rec.get("소비자가", ""), "item_code": rec.get("자사품목코드", ""),
                 "gov_registered": rec.get("관급등록여부", "N"),
+                # [V22, 2026-06-26] Track A-2 D안 — 조달용 부속 추가 BOM. 프로그램은 무시, 관급모드만 (레시피JSON ∪ 조달용추가BOM) 사용.
+                "gov_extra_bom": rec.get("조달용추가BOM", ""),
             })
     except: pass
     try:
@@ -710,16 +712,17 @@ def save_sets_to_sheet(sets_dict):
         sh = gc.open(SHEET_NAME)
         ws_sets = sh.worksheet("Sets")
         # [V21, 2026-06-25] Track A-2 Phase 1A — 헤더·데이터 20컬럼 확장 (기존7 + 신규13). V15 §2-2 clear()+update() 패턴 유지.
+        # [V22, 2026-06-26] Track A-2 D안 — 21번째 컬럼 "조달용추가BOM" 추가. 프로그램은 무시, 관급모드는 합산.
         rows = [["세트명", "카테고리", "하위분류", "이미지파일명", "레시피JSON", "설명", "캔버스파일",
                  "관경", "설치단계", "기능타입", "헤드모델", "유량(L/h)", "권장수압(bar)",
                  "최대살수반경(m)", "설치환경", "세트등급", "호환필수세트", "소비자가",
-                 "자사품목코드", "관급등록여부"]]
+                 "자사품목코드", "관급등록여부", "조달용추가BOM"]]
         for cat, items in sets_dict.items():
             for name, info in items.items():
                 rows.append([name, cat, info.get("sub_cat", ""), info.get("image", ""), json.dumps(info.get("recipe", {}), ensure_ascii=False), info.get("desc", ""), info.get("canvas", ""),
                              info.get("gauge", ""), info.get("install_phase", ""), info.get("func_type", ""), info.get("head_model", ""), info.get("flow_lh", ""), info.get("pressure_bar", ""),
                              info.get("spray_radius_m", ""), info.get("install_env", ""), info.get("set_grade", ""), info.get("compat_sets", ""), info.get("price_consumer", ""),
-                             info.get("item_code", ""), info.get("gov_registered", "N")])
+                             info.get("item_code", ""), info.get("gov_registered", "N"), info.get("gov_extra_bom", "")])
         ws_sets.clear()
         ws_sets.update(rows)
     except Exception as e:

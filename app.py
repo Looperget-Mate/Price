@@ -728,6 +728,56 @@ def save_sets_to_sheet(sets_dict):
     except Exception as e:
         st.error(f"세트 저장 오류: {e}")
 
+# [V23, 2026-06-28] Track A-2 Phase 1B — 세트명/분류 기반 메타데이터 자동 추론 (빌더 저장 폼 기본값)
+META_FUNC_TYPES = ["", "Filter", "Mix", "Branch", "Branch-Base", "Joint", "Pump", "Spray", "End-Cap", "Punch", "Gauge", "Drip"]
+META_PHASES = ["", "수원부", "주배관", "가지관분기", "가지관연결", "살수", "마감", "특수"]
+META_HEADS = ["(없음)", "Rivulis 427B", "Netafim 메가넷 200L"]
+META_ENVS = ["노지", "하우스", "벽부", "지붕", "조경", "관급", "산업분진"]
+META_GRADES = ["S", "M", "C", "D"]
+# 헤드모델 → (유량 L/h, 권장수압 bar, 최대살수반경 m). 메가넷은 박 대표님 기준 6m.
+META_HEAD_PERF = {"Rivulis 427B": ("850", "2-4", "12"), "Netafim 메가넷 200L": ("200", "2-3", "6")}
+
+def infer_set_meta(name, cat="", sub_cat=""):
+    """세트명·분류에서 메타데이터 기본값 추론 (룰 v1.3 반영). 빈 문자열이면 미상."""
+    import re
+    n = name or ""
+    sc = sub_cat or ""
+    # 관경
+    if sc in ("50mm", "40mm", "25mm"): gauge = sc.replace("mm", "")
+    elif "505050" in n or "5050" in n: gauge = "50"
+    elif "404040" in n or "4040" in n: gauge = "40"
+    elif "H20" in n or "P20" in n: gauge = "20"
+    elif "H25" in n or "P25" in n or n.endswith("-25"): gauge = "25"
+    elif "-50" in n: gauge = "50"
+    elif "-40" in n: gauge = "40"
+    else: gauge = ""
+    # 기능타입
+    if "Filter" in n or "Nomal-" in n: func = "Filter"
+    elif "Pump" in n: func = "Pump"
+    elif "Mix-" in n: func = "Mix"
+    elif "[LSS]" in n: func = "Spray"
+    elif "Cap-" in n: func = "Branch-Base"
+    elif "P-H20NP" in n or "P-P20NP" in n: func = "Gauge"
+    elif re.search(r'\bE-[0-9]', n): func = "End-Cap"
+    elif re.search(r'\bB-', n): func = "Branch"
+    elif re.search(r'\bT-[0-9]', n): func = "Branch"
+    elif re.search(r'\bL-[0-9]', n): func = "Joint"
+    elif re.search(r'\b1-[0-9]', n): func = "Joint"
+    else: func = ""
+    # 설치단계
+    if cat == "살수세트" or "[LSS]" in n: phase = "살수"
+    elif "Filter" in n or "Nomal-" in n or "Pump" in n: phase = "수원부"
+    elif re.search(r'\bE-[0-9]', n): phase = "마감"
+    elif cat == "가지관세트": phase = "가지관분기" if re.search(r'\bB-', n) else "가지관연결"
+    elif "Cap-" in n or "P-H" in n or "P-P" in n: phase = "특수"
+    else: phase = "주배관"
+    # 헤드모델
+    if "427b" in n or "427B" in n: head = "Rivulis 427B"
+    elif "Mega" in n: head = "Netafim 메가넷 200L"
+    else: head = "(없음)"
+    env = "벽부" if "Wall" in n else "노지"
+    return {"gauge": gauge, "func_type": func, "install_phase": phase, "head_model": head, "install_env": env}
+
 def format_prod_label(option):
     if isinstance(option, dict): return f"[{option.get('code','00000')}] {option.get('name','')} ({option.get('spec','-')})"
     return str(option)
@@ -1958,13 +2008,16 @@ function fitCanvasToArea() {{ zoomFit(); }}
 
             # 기존 세트의 레시피/설명/분류 조회 (편집 모드 비교·프리필용)
             _existing_recipe, _existing_desc, _existing_cat, _existing_sc = {}, "", "", ""
+            _existing_meta = {}  # [V23] Phase 1B — 편집 시 기존 메타데이터 프리필용
             if builder_mode != "✨ 새 세트 만들기" and target_set_name:
                 for _c, _items in st.session_state.db.get("sets", {}).items():
                     if target_set_name in _items:
-                        _existing_recipe = {str(k): v for k, v in _items[target_set_name].get("recipe", {}).items()}
-                        _existing_desc = _items[target_set_name].get("desc", "")
+                        _ti = _items[target_set_name]
+                        _existing_recipe = {str(k): v for k, v in _ti.get("recipe", {}).items()}
+                        _existing_desc = _ti.get("desc", "")
                         _existing_cat = _c
-                        _existing_sc = _items[target_set_name].get("sub_cat") or "-"
+                        _existing_sc = _ti.get("sub_cat") or "-"
+                        _existing_meta = {k: _ti.get(k, "") for k in ("gauge", "func_type", "install_phase", "head_model", "install_env", "set_grade", "gov_registered")}
                         break
 
             # 분류·하위분류 옵션 (신규·편집 공통 — 편집 시 기존값이 기본 선택)
@@ -1994,6 +2047,29 @@ function fitCanvasToArea() {{ zoomFit(); }}
                 "세트 설명 (선택)", value=_existing_desc, height=70, key="builder_set_desc",
                 help="견적서에서 세트 이미지 위에 마우스를 올리면 구성품 목록 아래에 함께 표시됩니다.",
                 placeholder="예: 50mm 주배관 표준 세트. 무절삭 시공으로 누수 위험 최소화.")
+
+            # [V23, 2026-06-28] Track A-2 Phase 1B — 세트 메타데이터 (선택, 세트명에서 자동 추론)
+            _md = infer_set_meta(new_sname, new_scat, (new_ssc if new_ssc != "-" else ""))
+            def _mget(key, fb):  # 편집 기존값 우선 → 추론 → fb
+                v = (_existing_meta.get(key) or "").strip() if _existing_meta else ""
+                return v or _md.get(key) or fb
+            def _midx(opts, val):
+                return opts.index(val) if val in opts else 0
+            with st.expander("🏷️ 세트 메타데이터 (분류·검색·관급용 — 선택, 자동 추론됨)", expanded=False):
+                _mc1, _mc2, _mc3 = st.columns(3)
+                with _mc1:
+                    meta_gauge = st.text_input("관경(mm)", value=_mget("gauge", ""), help="예: 50 또는 50,25")
+                    meta_env = st.selectbox("설치환경", META_ENVS, index=_midx(META_ENVS, _mget("install_env", "노지")))
+                with _mc2:
+                    meta_phase = st.selectbox("설치단계", META_PHASES, index=_midx(META_PHASES, _mget("install_phase", "")))
+                    meta_grade = st.selectbox("세트등급", META_GRADES, index=_midx(META_GRADES, ((_existing_meta.get("set_grade") if _existing_meta else "") or "S")))
+                with _mc3:
+                    meta_func = st.selectbox("기능타입", META_FUNC_TYPES, index=_midx(META_FUNC_TYPES, _mget("func_type", "")))
+                    meta_gov = st.selectbox("관급등록여부", ["N", "Y"], index=_midx(["N", "Y"], ((_existing_meta.get("gov_registered") if _existing_meta else "") or "N")))
+                meta_head = st.selectbox("헤드모델", META_HEADS, index=_midx(META_HEADS, _mget("head_model", "(없음)")))
+                _hf, _hp, _hr = META_HEAD_PERF.get(meta_head, ("", "", ""))
+                if meta_head != "(없음)":
+                    st.caption(f"↳ 헤드 사양 자동 반영: 유량 {_hf}L/h · 권장수압 {_hp}bar · 최대반경 {_hr}m")
 
             # [요청2] 저장 동작 미리보기 — 캔버스 집계 vs 기존 구성 자동 비교
             _cur_norm = {str(k): v for k, v in cur_recipe.items()}
@@ -2077,7 +2153,11 @@ function fitCanvasToArea() {{ zoomFit(); }}
                                 "recipe": _cur_norm,
                                 "image": image_ref, "sub_cat": sc_val,
                                 "desc": new_sdesc.strip(),
-                                "canvas": canvas_id or ""
+                                "canvas": canvas_id or "",
+                                # [V23] Phase 1B — 메타데이터 수집
+                                "gauge": meta_gauge.strip(), "func_type": meta_func, "install_phase": meta_phase,
+                                "head_model": meta_head, "flow_lh": _hf, "pressure_bar": _hp, "spray_radius_m": _hr,
+                                "install_env": meta_env, "set_grade": meta_grade, "gov_registered": meta_gov,
                             }
                             save_sets_to_sheet(st.session_state.db["sets"])
                             if not upload_failed:
@@ -2100,6 +2180,12 @@ function fitCanvasToArea() {{ zoomFit(); }}
                                 old_info["canvas"] = canvas_id
                             if cur_recipe and recipe_changed:
                                 old_info["recipe"] = _cur_norm
+                            # [V23] Phase 1B — 메타데이터 갱신 (기존 dict의 나머지 키는 보존)
+                            old_info["gauge"] = meta_gauge.strip(); old_info["func_type"] = meta_func
+                            old_info["install_phase"] = meta_phase; old_info["head_model"] = meta_head
+                            old_info["flow_lh"] = _hf; old_info["pressure_bar"] = _hp; old_info["spray_radius_m"] = _hr
+                            old_info["install_env"] = meta_env; old_info["set_grade"] = meta_grade
+                            old_info["gov_registered"] = meta_gov
                             if new_scat not in st.session_state.db["sets"]:
                                 st.session_state.db["sets"][new_scat] = {}
                             st.session_state.db["sets"][new_scat][new_sname] = old_info

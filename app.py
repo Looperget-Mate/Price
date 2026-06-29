@@ -498,14 +498,18 @@ def load_data_from_sheet():
             except: rcp = {}
             data["sets"][cat][name] = {"recipe": rcp, "image": rec.get("이미지파일명"), "sub_cat": rec.get("하위분류"), "desc": rec.get("설명", ""), "canvas": rec.get("캔버스파일", "")}
             # [V21, 2026-06-25] Track A-2 Phase 1A — Sets 시트 13컬럼 확장. 시트에 없으면 빈값(후방호환).
+            # [V24, 2026-06-29] 메타값 문자열 정규화 — gspread가 숫자 셀(관경 50 등)을 int로 반환 → 빌더 _mget .strip() 크래시 방지.
+            def _ms(v): return str(v).strip() if v not in (None, "") else ""
+            _ic = _ms(rec.get("자사품목코드", ""))
             data["sets"][cat][name].update({
-                "gauge": rec.get("관경", ""), "install_phase": rec.get("설치단계", ""), "func_type": rec.get("기능타입", ""),
-                "head_model": rec.get("헤드모델", ""), "flow_lh": rec.get("유량(L/h)", ""), "pressure_bar": rec.get("권장수압(bar)", ""),
-                "spray_radius_m": rec.get("최대살수반경(m)", ""), "install_env": rec.get("설치환경", ""), "set_grade": rec.get("세트등급", ""),
-                "compat_sets": rec.get("호환필수세트", ""), "price_consumer": rec.get("소비자가", ""), "item_code": rec.get("자사품목코드", ""),
-                "gov_registered": rec.get("관급등록여부", "N"),
+                "gauge": _ms(rec.get("관경", "")), "install_phase": _ms(rec.get("설치단계", "")), "func_type": _ms(rec.get("기능타입", "")),
+                "head_model": _ms(rec.get("헤드모델", "")), "flow_lh": _ms(rec.get("유량(L/h)", "")), "pressure_bar": _ms(rec.get("권장수압(bar)", "")),
+                "spray_radius_m": _ms(rec.get("최대살수반경(m)", "")), "install_env": _ms(rec.get("설치환경", "")), "set_grade": _ms(rec.get("세트등급", "")),
+                "compat_sets": _ms(rec.get("호환필수세트", "")), "price_consumer": _ms(rec.get("소비자가", "")),
+                "item_code": (_ic.zfill(5) if _ic else ""),  # 묶음코드 01998 등 선행0 복원
+                "gov_registered": _ms(rec.get("관급등록여부", "")) or "N",
                 # [V22, 2026-06-26] Track A-2 D안 — 조달용 부속 추가 BOM. 프로그램은 무시, 관급모드만 (레시피JSON ∪ 조달용추가BOM) 사용.
-                "gov_extra_bom": rec.get("조달용추가BOM", ""),
+                "gov_extra_bom": _ms(rec.get("조달용추가BOM", "")),
             })
     except: pass
     try:
@@ -2050,9 +2054,10 @@ function fitCanvasToArea() {{ zoomFit(); }}
 
             # [V23, 2026-06-28] Track A-2 Phase 1B — 세트 메타데이터 (선택, 세트명에서 자동 추론)
             _md = infer_set_meta(new_sname, new_scat, (new_ssc if new_ssc != "-" else ""))
-            def _mget(key, fb):  # 편집 기존값 우선 → 추론 → fb
-                v = (_existing_meta.get(key) or "").strip() if _existing_meta else ""
-                return v or _md.get(key) or fb
+            def _mget(key, fb):  # 편집 기존값 우선 → 추론 → fb. [V24] 숫자형 방어
+                raw = _existing_meta.get(key) if isinstance(_existing_meta, dict) else None
+                v = str(raw).strip() if raw not in (None, "") else ""
+                return v or (_md.get(key) if isinstance(_md, dict) else "") or fb
             def _midx(opts, val):
                 return opts.index(val) if val in opts else 0
             with st.expander("🏷️ 세트 메타데이터 (분류·검색·관급용 — 선택, 자동 추론됨)", expanded=False):

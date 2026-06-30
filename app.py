@@ -213,13 +213,20 @@ def get_drive_file_map_deep():
     """
     [V18] Looperget_Images 루트 + 모든 하위 폴더(products, sets 등)를 재귀 스캔.
     파일명(확장자 제외)을 키로, 파일 ID를 값으로. 숫자 파일명은 zfill(5) 키도 함께 생성.
-    같은 이름이 여러 폴더에 있으면 '나중 폴더'가 덮어씀 → 하위 폴더 우선되도록 루트를 먼저 스캔.
+    [V25, 2026-06-30] 같은 이름이 여러 폴더에 있으면 '가장 최근 수정' 파일이 이김.
+      (마이그레이션 복사본(sets/)이 새 빌더 저장(루트)을 가리던 버그 수정 — 옛 '하위폴더 우선' 폐기.)
     """
     root_id = get_or_create_drive_folder()
     if not root_id: return {}
     ds = get_google_services()[1]
     if not ds: return {}
     file_map = {}
+    file_mtime = {}  # 키별 채택 파일의 modifiedTime — 이름 충돌 시 최신 우선
+
+    def _put(key, fid, mt):
+        if key not in file_map or (mt or "") >= (file_mtime.get(key) or ""):
+            file_map[key] = fid
+            file_mtime[key] = mt or ""
 
     def _scan(folder_id):
         subfolders = []
@@ -229,7 +236,7 @@ def get_drive_file_map_deep():
                 resp = ds.files().list(
                     q=f"'{folder_id}' in parents and trashed=false",
                     spaces='drive',
-                    fields='nextPageToken, files(id, name, mimeType)',
+                    fields='nextPageToken, files(id, name, mimeType, modifiedTime)',
                     pageToken=page_token,
                     includeItemsFromAllDrives=True, supportsAllDrives=True
                 ).execute()
@@ -238,9 +245,10 @@ def get_drive_file_map_deep():
                         subfolders.append(f['id'])
                     else:
                         stem = os.path.splitext(f['name'])[0]
+                        mt = f.get('modifiedTime', '')
                         if stem.isdigit():
-                            file_map[str(stem).zfill(5)] = f['id']
-                        file_map[stem] = f['id']
+                            _put(str(stem).zfill(5), f['id'], mt)
+                        _put(stem, f['id'], mt)
                 page_token = resp.get('nextPageToken')
                 if not page_token: break
         except Exception as e:

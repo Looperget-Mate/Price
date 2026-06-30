@@ -1204,6 +1204,55 @@ let bgCleared = false;  // (구버전 호환, 미사용)
 let bgImageRef = null;  // [V14] 현재 배경 이미지 객체 참조
 let zoomLevel = 1;      // [V15] 화면 표시 배율 (저장 품질과 무관)
 
+// ── [V26] 작업중 배관·텍스트 영속화 (Streamlit 리런 견딤) ────────────────
+// 신규/빌드 모드는 리런마다 부속(PENDING_ITEMS)만 재주입되어 그린 배관(_isPipe)·
+// 텍스트(_isUserText)가 사라졌다. → 캔버스 변경마다 부모 localStorage에 저장하고
+// 초기화 직후 복원한다. 부속은 기존 방식 유지(서로 겹치지 않아 안전).
+const WORK_SIG = MODE_NEW ? 'NEW' : ('EDIT:' + (TARGET_SET || ''));
+const WORK_KEY = 'LOOPER_WORK';
+let _initializing = true;   // 초기화 중 저장 억제(빈 상태로 덮어쓰기 방지)
+let _initDone = false;      // finishInit 1회 보장
+let _workTimer = null;
+function _lstore() {{
+    try {{ return (window.parent && window.parent.localStorage) ? window.parent.localStorage : window.localStorage; }}
+    catch (e) {{ return window.localStorage; }}
+}}
+function saveWorkState() {{
+    if (_initializing) return;
+    try {{
+        const items = canvas.getObjects()
+            .filter(o => o._isPipe || o._isUserText)
+            .map(o => o.toObject(['_isPipe','_isUserText','_objId']));
+        _lstore().setItem(WORK_KEY, JSON.stringify({{sig: WORK_SIG, items: items}}));
+    }} catch (e) {{}}
+}}
+function saveWorkStateDebounced() {{
+    if (_workTimer) clearTimeout(_workTimer);
+    _workTimer = setTimeout(saveWorkState, 200);
+}}
+function clearWorkState() {{
+    try {{ _lstore().removeItem(WORK_KEY); }} catch (e) {{}}
+}}
+function restoreWorkPipes(done) {{
+    try {{
+        const raw = _lstore().getItem(WORK_KEY);
+        if (!raw) {{ if (done) done(); return; }}
+        const data = JSON.parse(raw);
+        if (!data || data.sig !== WORK_SIG || !data.items || !data.items.length) {{ if (done) done(); return; }}
+        canvas.getObjects().filter(o => o._isPipe || o._isUserText).forEach(o => canvas.remove(o));
+        fabric.util.enlivenObjects(data.items, function(objs) {{
+            objs.forEach(o => canvas.add(o));
+            canvas.renderAll();
+            if (done) done();
+        }});
+    }} catch (e) {{ if (done) done(); }}
+}}
+function finishInit() {{
+    if (_initDone) return;
+    _initDone = true;
+    restoreWorkPipes(function() {{ _initializing = false; }});
+}}
+
 // ── Fabric 초기화 ───────────────────────────────────────────────────
 window.onload = function() {{
     canvas = new fabric.Canvas('fabric-canvas', {{
@@ -1224,9 +1273,9 @@ window.onload = function() {{
     canvas.on('selection:created', onSelect);
     canvas.on('selection:updated', onSelect);
     canvas.on('selection:cleared', onDeselect);
-    canvas.on('object:modified', pushUndo);
-    canvas.on('object:added', () => {{ pushUndo(); updateRecipe(); }});
-    canvas.on('object:removed', () => {{ pushUndo(); updateRecipe(); }});
+    canvas.on('object:modified', () => {{ pushUndo(); saveWorkStateDebounced(); }});
+    canvas.on('object:added', () => {{ pushUndo(); updateRecipe(); saveWorkStateDebounced(); }});
+    canvas.on('object:removed', () => {{ pushUndo(); updateRecipe(); saveWorkStateDebounced(); }});
     canvas.on('contextmenu', onContextMenu);
 
     // 배관 굵기 슬라이더
@@ -1321,6 +1370,7 @@ window.onload = function() {{
             undoStack = []; redoStack = []; pushUndo();
             setTimeout(zoomFit, 30);
             setStatus('빌더 데이터 복원됨 — 부속·배관·텍스트를 자유롭게 수정하세요.');
+            finishInit();   // [V26] 작업중 배관·텍스트 복원
         }});
     }}
     // [V15] 배경 표시 여부는 Python(show_bg 체크박스)이 결정.
@@ -1342,8 +1392,11 @@ window.onload = function() {{
             canvas.renderAll();
             setTimeout(zoomFit, 30);
             setStatus('기존 이미지 로드됨 — 위에 부속을 배치하거나 PNG로 교체하세요.');
+            finishInit();   // [V26] 작업중 배관·텍스트 복원
         }});
     }}
+    // [V26] 위 편집(캔버스/배경) 분기가 안 도는 신규모드 등은 여기서 직접 복원
+    if (MODE_NEW || (!TARGET_SET_CANVAS_JSON && !TARGET_SET_IMG_B64)) finishInit();
 }};
 
 // ── [V14] 흰배경 자동 누끼 ───────────────────────────────────────────
@@ -1783,7 +1836,7 @@ function applyCrop() {{
     pushUndo();
 }}
 
-function clearCanvas() {{ if(!confirm('캔버스의 부속을 모두 비울까요?')) return; bgImageRef = null; canvas.clear(); objRecipe={{}}; undoStack=[]; redoStack=[]; pushUndo(); updateRecipe(); setStatus('캔버스를 비웠습니다. (배경은 좌측 \\'기존 세트 이미지를 배경으로 표시\\' 체크 해제로 제거)'); }}
+function clearCanvas() {{ if(!confirm('캔버스의 부속을 모두 비울까요?')) return; bgImageRef = null; canvas.clear(); objRecipe={{}}; undoStack=[]; redoStack=[]; pushUndo(); updateRecipe(); clearWorkState(); setStatus('캔버스를 비웠습니다. (배경은 좌측 \\'기존 세트 이미지를 배경으로 표시\\' 체크 해제로 제거)'); }}
 function removeBgOnly() {{ let removed=false; canvas.getObjects().forEach(o=>{{ if(o._isBgImage){{ canvas.remove(o); removed=true; }} }}); bgImageRef=null; canvas.renderAll(); pushUndo(); setStatus(removed ? '배경 제거됨 — 영구 적용하려면 좌측 \\'배경으로 표시\\' 체크를 해제하세요.' : '제거할 배경이 없습니다.'); }}
 
 // ── 우클릭 컨텍스트 메뉴 ────────────────────────────────────────────
@@ -1880,6 +1933,7 @@ function sendToApp() {{
         store.setItem('LOOPER_SET_JSON', cjson);
         store.setItem('LOOPER_SET_TS', String(Date.now()));   // 변경 감지용 타임스탬프
         store.setItem('LOOPER_SET_READY', '1');                // 처리 대기 플래그
+        clearWorkState();   // [V26] 저장 완료 → 작업중 상태 초기화(다음 세트 오염 방지)
         setStatus2('✅ 앱으로 전송했습니다. 아래에서 세트명·분류를 확인하고 저장을 마무리하세요.');
     }} catch (err) {{
         setStatus2('⚠ 자동 전송 실패(브라우저 보안). 아래 백업 버튼으로 다운로드 후 업로드하세요. ' + err);

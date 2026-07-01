@@ -1592,6 +1592,7 @@ function finalizePipe(p) {{
     canvas.renderAll();
     isPiping = false; pipeStart = null;
     pushUndo();
+    saveWorkState();   // [V26] 배관 생성 즉시 영속화 (리런 전에 확실히 저장)
 }}
 function onMouseMove(opt) {{
     if (curMode === 'crop' && cropStart && cropRect) {{
@@ -1738,6 +1739,7 @@ function addText() {{
     t.enterEditing(); t.selectAll();
     canvas.renderAll();
     pushUndo();
+    saveWorkState();   // [V26] 텍스트 생성 즉시 영속화
     setStatus('텍스트 추가됨 — 더블클릭으로 재편집, 우측 패널에서 크기·색상 변경.');
 }}
 function applyTextProp() {{
@@ -1933,7 +1935,6 @@ function sendToApp() {{
         store.setItem('LOOPER_SET_JSON', cjson);
         store.setItem('LOOPER_SET_TS', String(Date.now()));   // 변경 감지용 타임스탬프
         store.setItem('LOOPER_SET_READY', '1');                // 처리 대기 플래그
-        clearWorkState();   // [V26] 저장 완료 → 작업중 상태 초기화(다음 세트 오염 방지)
         setStatus2('✅ 앱으로 전송했습니다. 아래에서 세트명·분류를 확인하고 저장을 마무리하세요.');
     }} catch (err) {{
         setStatus2('⚠ 자동 전송 실패(브라우저 보안). 아래 백업 버튼으로 다운로드 후 업로드하세요. ' + err);
@@ -2270,7 +2271,7 @@ function fitCanvasToArea() {{ zoomFit(); }}
                             if _HAS_JS_EVAL:
                                 try:
                                     streamlit_js_eval(
-                                        js_expressions="window.parent.localStorage.removeItem('LOOPER_SET_PNG');window.parent.localStorage.removeItem('LOOPER_SET_JSON');window.parent.localStorage.removeItem('LOOPER_SET_TS');window.parent.localStorage.removeItem('LOOPER_SET_READY');",
+                                        js_expressions="window.parent.localStorage.removeItem('LOOPER_SET_PNG');window.parent.localStorage.removeItem('LOOPER_SET_JSON');window.parent.localStorage.removeItem('LOOPER_SET_TS');window.parent.localStorage.removeItem('LOOPER_SET_READY');window.parent.localStorage.removeItem('LOOPER_WORK');",
                                         key=f"clear_bridge_{int(time.time())}")
                                 except Exception:
                                     pass

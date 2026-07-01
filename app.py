@@ -1271,7 +1271,9 @@ window.onload = function() {{
     canvas.setWidth(CW); canvas.setHeight(CH);
 
     // 대기열에 품목이 있으면 캔버스에 자동 추가
-    if (PENDING_ITEMS && PENDING_ITEMS.length > 0) {{
+    // [V26.2] 편집(캔버스복원)모드에선 loadFromJSON이 캔버스를 clear→교체하므로 경쟁 방지 위해
+    //          여기서 즉시 추가하지 않고 loadFromJSON 완료 콜백에서 얹는다(아래). 그 외엔 즉시.
+    if (PENDING_ITEMS && PENDING_ITEMS.length > 0 && (MODE_NEW || !TARGET_SET_CANVAS_JSON)) {{
         applyPendingItems();
     }}
 
@@ -1379,6 +1381,8 @@ window.onload = function() {{
             undoStack = []; redoStack = []; pushUndo();
             setTimeout(zoomFit, 30);
             setStatus('빌더 데이터 복원됨 — 부속·배관·텍스트를 자유롭게 수정하세요.');
+            // [V26.2] 저장본 복원 완료 후에 새로 추가한 부속(PENDING)을 위에 얹음 → 기존 배치 보존
+            if (PENDING_ITEMS && PENDING_ITEMS.length > 0) applyPendingItems();
             finishInit();   // [V26] 작업중 배관·텍스트 복원
         }});
     }}
@@ -2062,10 +2066,10 @@ function fitCanvasToArea() {{ zoomFit(); }}
         if has_bridge:
             st.success("✅ 빌더에서 전송된 이미지가 준비됐습니다. 아래에서 세트명·분류만 확인하고 저장하세요.")
         else:
-            st.caption("위 빌더에서 **💾 저장** 버튼을 누르면 이미지·구성이 자동 전송됩니다. (전송이 안 되면 아래 백업 업로드 사용)")
+            st.warning("빌더에서 **💾 저장 (이미지+구성 자동 등록)** 을 누른 뒤, 이 자리가 초록색 **'전송된 이미지가 준비됐습니다'** 로 바뀌어야 저장됩니다.\n\n바로 안 바뀌면 아래 **🔄 전송 확인**을 한 번 누르세요. (전송 감지는 약간의 지연이 있을 수 있습니다.)")
             if _HAS_JS_EVAL:
-                st.button("🔄 전송 확인 / 새로고침", key="bridge_refresh",
-                          help="빌더에서 '💾 저장'을 눌렀는데 위에 인식이 안 되면 클릭하세요.")
+                st.button("🔄 전송 확인 / 새로고침", key="bridge_refresh", use_container_width=True,
+                          help="빌더에서 '💾 저장'을 눌렀는데 위가 초록색으로 안 바뀌면 클릭하세요.")
 
         # 현재 구성 집계(레시피) 미리보기
         cur_recipe = {c: info["qty"] for c, info in st.session_state.builder_recipe.items()}

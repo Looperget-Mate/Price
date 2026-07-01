@@ -17,6 +17,12 @@ import xlsxwriter
 from PIL import Image
 from fpdf import FPDF
 
+# [V27] 브랜드 로고(옐로우, 다크헤더용) — 없으면 텍스트 폴백
+try:
+    from looperget_brand import LOGO_YELLOW_B64
+except Exception:
+    LOGO_YELLOW_B64 = ""
+
 # 구글 연동 라이브러리
 import gspread
 from google.oauth2.service_account import Credentials
@@ -26,7 +32,61 @@ from googleapiclient.http import MediaIoBaseUpload
 # ==========================================
 # [중요] 0. 페이지 설정을 최상단으로 유지
 # ==========================================
-st.set_page_config(layout="wide", page_title="루퍼젯 프로 매니저 V12.0")
+st.set_page_config(layout="wide", page_title="Looperget 프로 매니저", page_icon="🟡")
+
+# ==========================================
+# [V27] 루퍼젯 브랜드 디자인 (다크 인더스트리얼) — 판매가이드 규격
+#   Yellow #F4D624 · Black #191414 · White #FFFFFF
+# ==========================================
+st.markdown("""
+<style>
+:root { --lg-yellow:#F4D624; --lg-ink:#191414; --lg-line:#3A3433; }
+.block-container { padding-top: 1.4rem; }
+
+/* 브랜드 헤더 */
+.lg-header { display:flex; align-items:center; gap:14px; padding:2px 2px 13px 2px;
+    margin-bottom:14px; border-bottom:3px solid var(--lg-yellow); }
+.lg-header img.lg-logo { height:38px; width:auto; display:block; }
+.lg-header .lg-sub { color:#F2F1EE; font-size:19px; font-weight:800; letter-spacing:.3px;
+    padding-left:16px; border-left:2px solid var(--lg-line); }
+.lg-header .lg-corp { margin-left:auto; color:#8C8681; font-size:12px; font-weight:600; letter-spacing:.3px; }
+.lg-header .lg-corp b { color:var(--lg-yellow); }
+
+/* 버튼 — 둥근 모서리·볼드 (색상은 테마 primaryColor=옐로우 사용) */
+.stButton>button, .stDownloadButton>button, .stFormSubmitButton>button {
+    border-radius:8px; font-weight:700; }
+
+/* 탭 활성 강조 */
+.stTabs [aria-selected="true"] { color:var(--lg-yellow) !important; }
+
+/* 구분선·사이드바 */
+hr { border-color:var(--lg-line); }
+[data-testid="stSidebar"] { border-right:1px solid var(--lg-line); }
+
+/* 브랜드 푸터 */
+.lg-footer { margin-top:30px; padding-top:11px; border-top:1px solid var(--lg-line);
+    color:#7C7773; font-size:11.5px; letter-spacing:.3px; }
+.lg-footer b { color:var(--lg-yellow); }
+</style>
+""", unsafe_allow_html=True)
+
+def render_brand_header(subtitle="프로 매니저"):
+    """[V27] 브랜드 헤더(로고+부제) 렌더. 로고 없으면 텍스트 폴백."""
+    if LOGO_YELLOW_B64:
+        logo_html = f'<img class="lg-logo" src="data:image/png;base64,{LOGO_YELLOW_B64}" alt="Looperget"/>'
+    else:
+        logo_html = '<span style="font-size:26px;font-weight:900;color:#F4D624;letter-spacing:1px;">Looperget</span>'
+    st.markdown(
+        f'<div class="lg-header">{logo_html}'
+        f'<span class="lg-sub">{subtitle}</span>'
+        f'<span class="lg-corp">by <b>ShinJin</b>ChemTech</span></div>',
+        unsafe_allow_html=True)
+
+def render_brand_footer():
+    """[V27] 브랜드 푸터."""
+    st.markdown(
+        '<div class="lg-footer"><b>Looperget</b> Pro Manager · ShinJinChemTech · © 2026 신진켐텍(주)</div>',
+        unsafe_allow_html=True)
 
 # 비상용 기본 데이터 글로벌 선언 (NameError 방지)
 DEFAULT_DATA = {
@@ -3517,7 +3577,13 @@ if st.session_state.lockout_time:
         st.session_state.lockout_time = None
 
 if not st.session_state.app_authenticated:
-    st.markdown("<h2 style='text-align: center; margin-top: 100px;'>🔒 루퍼젯 프로 매니저</h2>", unsafe_allow_html=True)
+    _logo_tag = (f'<img src="data:image/png;base64,{LOGO_YELLOW_B64}" style="height:58px;width:auto;margin-bottom:2px;"/>'
+                 if LOGO_YELLOW_B64 else '<span style="font-size:44px;font-weight:900;color:#F4D624;letter-spacing:1px;">Looperget</span>')
+    st.markdown(
+        f"<div style='text-align:center; margin-top:80px; margin-bottom:10px;'>{_logo_tag}"
+        f"<div style='color:#F2F1EE;font-size:17px;font-weight:800;letter-spacing:4px;margin-top:10px;'>PRO MANAGER</div>"
+        f"<div style='color:#8C8681;font-size:12px;letter-spacing:1px;margin-top:6px;'>🔒 ShinJinChemTech</div></div>",
+        unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 1, 1])
     with col2:
         with st.container(border=True):
@@ -3578,7 +3644,7 @@ if "ui_state" not in st.session_state:
 if "quote_remarks" not in st.session_state: 
     st.session_state.quote_remarks = "1. 견적 유효기간: 견적일로부터 15일 이내\n2. 출고: 결재 완료 후 즉시 또는 7일 이내"
 
-st.title("💧 루퍼젯 프로 매니저 V12.0 (Cloud)")
+render_brand_header("프로 매니저")
 
 # ── V12 글로벌 CSS (카드 + 툴팁) ─────────────────────────────────────
 st.markdown("""

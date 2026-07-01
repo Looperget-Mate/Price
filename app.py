@@ -141,7 +141,6 @@ gc, drive_service = get_google_services()
 
 # --- 구글 드라이브 함수 ---
 DRIVE_FOLDER_NAME = "Looperget_Images"
-DRIVE_SET_FOLDER_NAME = "Looperget_Images" 
 ADMIN_FOLDER_NAME = "Looperget_Admin"
 ADMIN_PPT_NAME = "Set_Composition_Master.pptx"
 
@@ -187,9 +186,6 @@ def get_or_create_drive_folder():
             except Exception:
                 pass
         return None  # st.warning 제거 → 반복 오류 메시지 차단
-
-def get_or_create_set_drive_folder():
-    return get_or_create_drive_folder()
 
 def upload_image_to_drive(file_obj, filename):
     folder_id = get_or_create_drive_folder()
@@ -322,10 +318,6 @@ def get_drive_file_map_deep():
     _scan(root_id)
     return file_map
 
-@st.cache_data(ttl=600)
-def get_set_drive_file_map():
-    return get_drive_file_map()
-
 def _do_download_image(ds, file_id):
     """실제 드라이브 다운로드 (재시도 로직 분리)
     - 원본 비율 유지 (지주대 등 세장형 품목 대응)
@@ -450,9 +442,6 @@ def get_best_image_id(code, db_image_val, file_map):
     if clean_code in pidx: return pidx[clean_code]
     if db_image_val and len(str(db_image_val)) > 10: return db_image_val
     return None
-
-def list_files_in_drive_folder():
-    return get_drive_file_map()
 
 # --- 구글 시트 함수 ---
 SHEET_NAME = "Looperget_DB"
@@ -877,8 +866,6 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
 
     if "_img_cache" not in st.session_state:
         st.session_state._img_cache = {}
-    if "builder_pending_items" not in st.session_state:
-        st.session_state.builder_pending_items = []   # [{code,name,spec,qty,b64}] — JS 캔버스 추가 대기
     if "builder_recipe" not in st.session_state:
         st.session_state.builder_recipe = {}          # {code: {name,spec,qty}} — 레시피 집계
     if "builder_canvas_items" not in st.session_state:
@@ -972,7 +959,6 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
                 st.markdown(f"- [{c}] {info['name']} × **{info['qty']}**")
             if st.button("🗑 집계 초기화", key="builder_clear_recipe"):
                 st.session_state.builder_recipe = {}
-                st.session_state.builder_pending_items = []
                 st.session_state.builder_canvas_items = []
                 st.rerun()
 
@@ -1260,7 +1246,6 @@ let pipeStart = null, isPiping = false;
 let undoStack = [], redoStack = [];
 let objRecipe = {{}};   // objId -> {{code, name, qty}}
 let lastObjId = 0;
-let bgCleared = false;  // (구버전 호환, 미사용)
 let bgImageRef = null;  // [V14] 현재 배경 이미지 객체 참조
 let zoomLevel = 1;      // [V15] 화면 표시 배율 (저장 품질과 무관)
 
@@ -1567,34 +1552,6 @@ function applyPendingItems() {{
         const total = PENDING_ITEMS.reduce((s, x) => s + x.qty, 0);
         setStatus(`${{total}}개 품목이 캔버스에 추가되었습니다.`);
     }}
-}}
-
-// ── 팔레트 → 캔버스 추가 (b64 직접 전달용, 하위 호환) ───────────────
-function addFromPalette(item) {{
-    const qty = item.qty || 1;
-    for (let i = 0; i < qty; i++) {{
-        if (item.b64) {{
-            makeTransparentBg(item.b64, function(cleanUrl) {{
-                fabric.Image.fromURL(cleanUrl, function(img) {{
-                    img.set({{
-                        left: 80 + i * 30, top: 80 + i * 20,
-                        scaleX: 0.5, scaleY: 0.5,
-                        cornerSize: 8, hasRotatingPoint: true,
-                    }});
-                    img._looperCode = item.code;
-                    img._looperName = item.name;
-                    img._looperSpec = item.spec;
-                    img._objId = ++lastObjId;
-                    objRecipe[img._objId] = {{code: item.code, name: item.name, qty: 1}};
-                    canvas.add(img);
-                    canvas.setActiveObject(img);
-                    canvas.renderAll();
-                }});
-            }});
-        }}
-    }}
-    updateRecipe();
-    setStatus(`"${{item.name}}" ${{qty}}개 추가됨`);
 }}
 
 // ── 모드 전환 ────────────────────────────────────────────────────────
@@ -2083,9 +2040,6 @@ function zoomFit() {{
 function zoomIn()  {{ zoomLevel = Math.min(zoomLevel + 0.1, 3.0); applyZoom(); }}
 function zoomOut() {{ zoomLevel = Math.max(zoomLevel - 0.1, 0.2); applyZoom(); }}
 window.addEventListener('resize', zoomFit);
-
-// 하위호환: 기존 호출부가 fitCanvasToArea를 부를 수 있으므로 별칭 유지
-function fitCanvasToArea() {{ zoomFit(); }}
 </script>
 </body>
 </html>
@@ -3608,7 +3562,6 @@ if not st.session_state.app_authenticated:
 
 # --- Authenticated App Start ---
 
-if "history" not in st.session_state: st.session_state.history = {} 
 if "quote_step" not in st.session_state: st.session_state.quote_step = 1
 if "quote_items" not in st.session_state: st.session_state.quote_items = {}
 if "services" not in st.session_state: st.session_state.services = []
@@ -3725,10 +3678,11 @@ with st.sidebar:
     st.header("🗂️ 견적 보관함")
     q_name = st.text_input("현장명 (저장용)", value=st.session_state.current_quote_name)
     
-    col_s1, col_s2, col_s3 = st.columns(3)
-    with col_s1: btn_save_temp = st.button("💾 임시저장")
-    with col_s2: btn_save_off = st.button("✅ 정식저장")
-    with col_s3: btn_init = st.button("✨ 초기화")
+    # [V28] 3열 압착 → 2열+전폭 (좁은 사이드바에서 버튼 글자 세로 꺾임 방지)
+    col_s1, col_s2 = st.columns(2)
+    with col_s1: btn_save_temp = st.button("💾 임시저장", use_container_width=True)
+    with col_s2: btn_save_off = st.button("✅ 정식저장", use_container_width=True)
+    btn_init = st.button("✨ 견적 초기화", use_container_width=True)
     
     if btn_save_temp or btn_save_off:
         save_type = "정식" if btn_save_off else "임시"
@@ -3851,10 +3805,10 @@ with st.sidebar:
             
         sel_idx = st.selectbox("불러오기 (구글 시트)", range(len(df_kr)), format_func=format_quote_label)
         
-        c_l1, c_l2, c_l3 = st.columns(3)
-        with c_l1: btn_load = st.button("📂 불러오기")
-        with c_l2: btn_copy = st.button("📝 복사/수정")
-        with c_l3: btn_del = st.button("🗑️ 삭제")
+        btn_load = st.button("📂 불러오기", use_container_width=True)
+        c_l2, c_l3 = st.columns(2)
+        with c_l2: btn_copy = st.button("📝 복사/수정", use_container_width=True)
+        with c_l3: btn_del = st.button("🗑️ 삭제", use_container_width=True)
         
         if btn_load or btn_copy:
             try:
@@ -4207,12 +4161,11 @@ if mode == "관리자 모드" or mode == "管理者モード":
                     else: st.error(f"실패: {msg}")
         with t2:
             st.subheader("세트 관리")
+            # [V28] PPT 일람표는 구(PPT 기반) 워크플로 유물 — 파일이 있을 때만 버튼 표시, 없으면 조용히 숨김(상시 경고 제거)
             ppt_data = get_admin_ppt_content()
             if ppt_data:
                 st.download_button(label="📥 세트 구성 일람표(PPT) 다운로드", data=ppt_data, file_name="Set_Composition_Master.pptx", mime="application/vnd.openxmlformats-officedocument.presentationml.presentation", use_container_width=True)
-            else:
-                st.warning("⚠️ 구글 드라이브 'Looperget_Admin' 폴더에 'Set_Composition_Master.pptx' 파일이 없습니다.")
-            st.divider()
+                st.divider()
             cat = st.selectbox("분류", ["주배관세트", "가지관세트", "살수세트", "기타자재"])
             cset = st.session_state.db["sets"].get(cat, {})
             if cset:
@@ -4228,11 +4181,9 @@ if mode == "관리자 모드" or mode == "管理者モード":
                             if st.button(f"✏️ '{tg}' 구성품 수정하기", use_container_width=True):
                                 st.session_state.temp_set_recipe = cset[tg].get("recipe", {}).copy()
                                 st.session_state.target_set_edit = tg
-                                st.session_state.set_manage_mode = "수정" 
                                 st.rerun()
                         with col_img:
                             with st.expander("🖼️ 세트 이미지 관리", expanded=True):
-                                set_folder_id = get_or_create_set_drive_folder()
                                 current_set_data = st.session_state.db["sets"][cat][tg]
                                 current_img_id = current_set_data.get("image", "")
                                 if current_img_id:
@@ -4310,60 +4261,17 @@ if mode == "관리자 모드" or mode == "管理者モード":
                             else:
                                 st.warning("매칭되는 이미지가 없습니다. (파일명이 세트명과 같은지 확인하세요)")
             st.divider()
-            st.divider()
             # ── V12: 세트 이미지 빌더 (Fabric.js) ─────────────────────────
             st.markdown("##### 🎨 세트 이미지 빌더 (Fabric.js)")
             with st.expander("캔버스에서 부속 배치 → 세트 이미지 생성 / 신규 세트 통합 등록", expanded=False):
                 build_set_image_editor(st.session_state.db.get("sets", {}), st.session_state.db.get("products", []), get_drive_file_map_deep())
-            if "set_manage_mode" not in st.session_state: st.session_state.set_manage_mode = "신규"
-            mt = st.radio("작업", ["신규", "수정"], horizontal=True, key="set_manage_mode")
-            sub_cat = None
-            if cat == "주배관세트": sub_cat = st.selectbox("하위분류", ["50mm", "40mm", "기타"], key="sub_c")
+            # [V28] 구(舊) '신규 세트' 수동 생성 UI 제거 — 세트 생성·이미지·메타데이터는 위의
+            #  🎨 세트 이미지 빌더로 일원화. (구 UI는 동일 세트명으로 저장 시 이미지·캔버스·메타데이터를
+            #  통째로 비우던 사고 경로. 롤백: app.py.bak_pre_v28)
             products_obj = st.session_state.db["products"]
             code_name_map = {str(p.get("code")): f"[{p.get('code')}] {p.get('name')} ({p.get('spec')})" for p in products_obj}
-            
-            if mt == "신규":
-                nn = st.text_input("세트명")
-                c1, c2, c3 = st.columns([3,2,1])
-                with c1: sp_obj = st.selectbox("부품", products_obj, format_func=format_prod_label, key="nsp")
-                with c2: sq = st.number_input("수량", 1, key="nsq")
-                with c3: 
-                    if st.button("담기"): st.session_state.temp_set_recipe[str(sp_obj['code'])] = sq
-                st.caption("구성 품목 (수량 수정 및 행 삭제 가능)")
-                
-                if st.session_state.temp_set_recipe:
-                    recipe_list = []
-                    for k, v in st.session_state.temp_set_recipe.items():
-                        recipe_list.append({"품목코드": str(k), "품목명": code_name_map.get(str(k), str(k)), "수량": int(v), "삭제": False})
-                    
-                    edited_recipe = st.data_editor(
-                        pd.DataFrame(recipe_list),
-                        num_rows="dynamic",
-                        width="stretch",
-                        hide_index=True,
-                        disabled=["품목코드", "품목명"],
-                        column_config={
-                            "삭제": st.column_config.CheckboxColumn(label="삭제?", default=False)
-                        },
-                        key="recipe_editor_new"
-                    )
-                    
-                    new_recipe = {}
-                    for _, row in edited_recipe.iterrows():
-                        if row.get("삭제"): continue
-                        c = str(row.get("품목코드", "")).strip()
-                        try: q = int(row.get("수량", 0))
-                        except: q = 0
-                        if c and q > 0:
-                            new_recipe[c] = q
-                    st.session_state.temp_set_recipe = new_recipe
-                else:
-                    st.info("담긴 품목이 없습니다.")
-                
-                if st.button("저장", key="btn_new_set"):
-                    if cat not in st.session_state.db["sets"]: st.session_state.db["sets"][cat] = {}
-                    st.session_state.db["sets"][cat][nn] = {"recipe": st.session_state.temp_set_recipe, "image": "", "sub_cat": sub_cat}
-                    save_sets_to_sheet(st.session_state.db["sets"]); st.session_state.temp_set_recipe={}; st.success("저장")
+            if not st.session_state.get("target_set_edit"):
+                st.caption("💡 세트 생성·이미지·메타데이터는 위의 🎨 세트 이미지 빌더에서. 구성품만 빠르게 고치려면 상단 표에서 세트 선택 → ✏️ 버튼.")
             else:
                 if "target_set_edit" in st.session_state and st.session_state.target_set_edit:
                     tg = st.session_state.target_set_edit
@@ -4529,7 +4437,10 @@ elif mode == "🇯🇵 일본 수출 분석":
                     pdf = PDF(orientation='L')
                     pdf.title_text = "輸出利益分析書 (Export Profit Analysis)"
                     pdf.add_page()
-                    pdf.set_font(FONT_REGULAR if os.path.exists(FONT_REGULAR) else 'Helvetica', '', 10)
+                    # [V28] 버그수정: set_font에는 파일명이 아닌 등록된 패밀리명('NanumGothic')을 써야 함 (아니면 FPDF 예외)
+                    _jf = 'NanumGothic' if os.path.exists(FONT_REGULAR) else 'Helvetica'
+                    _jb = 'B' if os.path.exists(FONT_BOLD) else ''
+                    pdf.set_font(_jf, '', 10)
                     
                     pdf.cell(0, 10, f"Analysis Date: {datetime.datetime.now().strftime('%Y-%m-%d')}", ln=True, align='R')
                     pdf.cell(0, 10, f"Quote Name: {target_quote.get('현장명')}", ln=True)
@@ -4542,7 +4453,7 @@ elif mode == "🇯🇵 일본 수출 분석":
                         pdf.cell(w, 10, head, border=1, align='C', fill=True)
                     pdf.ln()
                     
-                    pdf.set_font(FONT_REGULAR if os.path.exists(FONT_REGULAR) else 'Helvetica', '', 8)
+                    pdf.set_font(_jf, '', 8)
                     for _, row in df_analysis.iterrows():
                         pdf.cell(widths[0], 8, str(row['품목코드']), border=1, align='C')
                         pdf.cell(widths[1], 8, str(row['품목명']), border=1)
@@ -4555,7 +4466,7 @@ elif mode == "🇯🇵 일본 수출 분석":
                         pdf.cell(widths[8], 8, f"{int(row['순이익']):,}", border=1, align='R')
                         pdf.ln()
                     
-                    pdf.set_font(FONT_BOLD if os.path.exists(FONT_BOLD) else 'Helvetica', 'B', 10)
+                    pdf.set_font(_jf, _jb, 10)
                     total_w = sum(widths[:6])
                     pdf.cell(total_w, 10, "TOTAL (KRW)", border=1, align='C', fill=True)
                     pdf.cell(widths[6], 10, f"{t_rev:,}", border=1, align='R')
@@ -4637,7 +4548,9 @@ else:
                         all_inp = {}
                         for d in [inp_m_50, inp_m_40, inp_m_etc, inp_m_all]:
                             for k, v in d.items(): all_inp[k] = all_inp.get(k,0) + v
-                        added = sum(1 for k,v in all_inp.items() if v > 0 and not st.session_state.set_cart.append({"name":k,"qty":v,"type":"メイン管"}) for _ in [None] if v>0)
+                        for k, v in all_inp.items():
+                            if v > 0:
+                                st.session_state.set_cart.append({"name": k, "qty": v, "type": "メイン管"})
                         st.rerun()
                 with st.expander("配管数量入力"):
                     ptype = st.radio("配管区分", ["주배관","가지관"], horizontal=True, key="jp_pipe_radio",
@@ -4802,7 +4715,9 @@ else:
                             result[k] = result.get(k, 0) + v
                     return result
                 
-                all_inputs = sum_dictionaries(inp_m_50, inp_m_40, inp_m_etc, grouped.get("미분류", {}), inp_m_all)
+                # [V28] 버그수정: 미분류 그룹은 '수량 dict'가 아닌 '세트정보 dict'라 합산 시 TypeError.
+                #        미분류 세트는 '전체' 탭(inp_m_all)에 이미 포함되므로 그것으로 충분.
+                all_inputs = sum_dictionaries(inp_m_50, inp_m_40, inp_m_etc, inp_m_all)
                 
                 added_count = 0
                 for set_name, qty in all_inputs.items():
@@ -5482,7 +5397,7 @@ else:
                 st.session_state.files_ready = False
                 st.rerun()
         with c2:
-            if st.button("🔄 처음으로"): 
+            if st.button("🔄 처음으로"):
                 st.session_state.quote_step = 1
                 st.session_state.quote_items = {}
                 st.session_state.services = []
@@ -5493,3 +5408,6 @@ else:
                 st.session_state.step3_ready = False
                 st.session_state.files_ready = False
                 st.rerun()
+
+# [V28] 브랜드 푸터 (V27 정의분 활성화)
+render_brand_footer()

@@ -41,11 +41,11 @@ st.set_page_config(layout="wide", page_title="Looperget 프로 매니저", page_
 st.markdown("""
 <style>
 :root { --lg-yellow:#F4D624; --lg-ink:#191414; --lg-line:#3A3433; }
-.block-container { padding-top: 1.4rem; }
+.block-container { padding-top: 3.2rem; }
 
 /* 브랜드 헤더 */
-.lg-header { display:flex; align-items:center; gap:14px; padding:2px 2px 13px 2px;
-    margin-bottom:14px; border-bottom:3px solid var(--lg-yellow); }
+.lg-header { display:flex; align-items:center; gap:14px; padding:8px 2px 13px 2px;
+    margin-bottom:14px; border-bottom:3px solid var(--lg-yellow); overflow:visible; }
 .lg-header img.lg-logo { height:38px; width:auto; display:block; }
 .lg-header .lg-sub { color:#F2F1EE; font-size:19px; font-weight:800; letter-spacing:.3px;
     padding-left:16px; border-left:2px solid var(--lg-line); }
@@ -3586,9 +3586,10 @@ if not st.session_state.app_authenticated:
         unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 1, 1])
     with col2:
-        with st.container(border=True):
+        with st.form("login_form", border=True):
             pwd = st.text_input("프로그램 접속 비밀번호", type="password", key="app_pwd")
-            if st.button("접속", use_container_width=True):
+            # [V27] 폼: 비밀번호 입력 후 Enter 또는 '접속' 클릭 둘 다 제출
+            if st.form_submit_button("접속", use_container_width=True, type="primary"):
                 app_pwd_db = str(st.session_state.db.get("config", {}).get("app_pwd", "1234"))
                 if pwd == app_pwd_db:
                     st.session_state.app_authenticated = True

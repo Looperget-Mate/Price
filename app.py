@@ -1220,9 +1220,14 @@ function _lstore() {{
 function saveWorkState() {{
     if (_initializing) return;
     try {{
-        const items = canvas.getObjects()
-            .filter(o => o._isPipe || o._isUserText)
-            .map(o => o.toObject(['_isPipe','_isUserText','_objId']));
+        const items = [];
+        canvas.getObjects().forEach(function(o, idx) {{
+            if (o._isPipe || o._isUserText) {{
+                const j = o.toObject(['_isPipe','_isUserText','_objId']);
+                j.__z = idx;   // [V26.1] 전체 스택 인덱스 보존(맨앞/맨뒤 순서 복원용)
+                items.push(j);
+            }}
+        }});
         _lstore().setItem(WORK_KEY, JSON.stringify({{sig: WORK_SIG, items: items}}));
     }} catch (e) {{}}
 }}
@@ -1241,7 +1246,11 @@ function restoreWorkPipes(done) {{
         if (!data || data.sig !== WORK_SIG || !data.items || !data.items.length) {{ if (done) done(); return; }}
         canvas.getObjects().filter(o => o._isPipe || o._isUserText).forEach(o => canvas.remove(o));
         fabric.util.enlivenObjects(data.items, function(objs) {{
-            objs.forEach(o => canvas.add(o));
+            // [V26.1] 저장된 스택 인덱스(__z) 오름차순으로 제자리 이동 → 맨뒤/맨앞 순서 복원
+            const withZ = objs.map((o, i) => ({{o: o, z: (data.items[i] && data.items[i].__z != null) ? data.items[i].__z : 99999}}));
+            withZ.sort((a, b) => a.z - b.z);
+            withZ.forEach(x => canvas.add(x.o));
+            withZ.forEach(x => {{ try {{ canvas.moveTo(x.o, x.z); }} catch (e2) {{}} }});
             canvas.renderAll();
             if (done) done();
         }});
@@ -1699,10 +1708,10 @@ function applyLineProp() {{
 // ── 변환 버튼들 ─────────────────────────────────────────────────────
 function flipX() {{ const o=canvas.getActiveObject(); if(o){{ o.set('flipX',!o.flipX); canvas.renderAll(); pushUndo(); }} }}
 function flipY() {{ const o=canvas.getActiveObject(); if(o){{ o.set('flipY',!o.flipY); canvas.renderAll(); pushUndo(); }} }}
-function bringFwd()   {{ const o=canvas.getActiveObject(); if(o){{ canvas.bringForward(o); pushUndo(); }} }}
-function sendBck()    {{ const o=canvas.getActiveObject(); if(o){{ canvas.sendBackwards(o); pushUndo(); }} }}
-function bringFront() {{ const o=canvas.getActiveObject(); if(o){{ canvas.bringToFront(o); pushUndo(); }} }}
-function sendBack()   {{ const o=canvas.getActiveObject(); if(o){{ canvas.sendToBack(o); pushUndo(); }} }}
+function bringFwd()   {{ const o=canvas.getActiveObject(); if(o){{ canvas.bringForward(o); pushUndo(); saveWorkState(); }} }}
+function sendBck()    {{ const o=canvas.getActiveObject(); if(o){{ canvas.sendBackwards(o); pushUndo(); saveWorkState(); }} }}
+function bringFront() {{ const o=canvas.getActiveObject(); if(o){{ canvas.bringToFront(o); pushUndo(); saveWorkState(); }} }}
+function sendBack()   {{ const o=canvas.getActiveObject(); if(o){{ canvas.sendToBack(o); pushUndo(); saveWorkState(); }} }}
 function deleteObj()  {{ const o=canvas.getActiveObject(); if(o){{ if(o._objId) delete objRecipe[o._objId]; canvas.remove(o); pushUndo(); updateRecipe(); }} }}
 function duplicateObj() {{
     const o = canvas.getActiveObject();

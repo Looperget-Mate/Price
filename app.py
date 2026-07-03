@@ -187,34 +187,45 @@ def get_or_create_drive_folder():
                 pass
         return None  # st.warning 제거 → 반복 오류 메시지 차단
 
+# [V32] 소켓 끊김(Broken pipe 등) 감지 키워드 — 재인증 재시도 판단 공통.
+_SOCKET_ERRS = ("Broken pipe", "Errno 32", "ConnectionReset", "RemoteDisconnected", "EOF occurred")
+
 def upload_image_to_drive(file_obj, filename):
     folder_id = get_or_create_drive_folder()
     if not folder_id: return None
-    try:
-        file_content = file_obj.getvalue()
-        buffer = io.BytesIO(file_content)
-        buffer.seek(0)
-        file_metadata = {'name': filename, 'parents': [folder_id]}
-        media = MediaIoBaseUpload(buffer, mimetype=file_obj.type, resumable=False)
-        _get_ds().files().create(body=file_metadata, media_body=media, fields='id', supportsAllDrives=True).execute()
+    def _do():
+        buf = io.BytesIO(file_obj.getvalue()); buf.seek(0)
+        media = MediaIoBaseUpload(buf, mimetype=file_obj.type, resumable=False)
+        _get_ds().files().create(body={'name': filename, 'parents': [folder_id]}, media_body=media, fields='id', supportsAllDrives=True).execute()
         return filename
+    try:
+        return _do()
     except Exception as e:
+        if any(k in str(e) for k in _SOCKET_ERRS):   # [V32] 끊긴 연결 → 재인증 후 재시도
+            try:
+                get_google_services.clear(); return _do()
+            except Exception as e2:
+                st.error(f"업로드 실패(재연결 후에도): {e2}. 잠시 뒤 다시 시도해주세요."); return None
         st.error(f"업로드 실패: {e}")
         return None
 
 def upload_set_image_to_drive(file_obj, filename):
     folder_id = get_or_create_drive_folder()
     if not folder_id: return None
+    def _do():
+        buf = io.BytesIO(file_obj.getvalue()); buf.seek(0)
+        media = MediaIoBaseUpload(buf, mimetype=file_obj.type, resumable=False)
+        info = _get_ds().files().create(body={'name': filename, 'parents': [folder_id]}, media_body=media, fields='id', supportsAllDrives=True).execute()
+        return info.get('id')
     try:
-        file_content = file_obj.getvalue()
-        buffer = io.BytesIO(file_content)
-        buffer.seek(0)
-        file_metadata = {'name': filename, 'parents': [folder_id]}
-        media = MediaIoBaseUpload(buffer, mimetype=file_obj.type, resumable=False)
-        file_info = _get_ds().files().create(body=file_metadata, media_body=media, fields='id', supportsAllDrives=True).execute()
-        return file_info.get('id')
+        return _do()
     except Exception as e:
         error_msg = str(e)
+        if any(k in error_msg for k in _SOCKET_ERRS):   # [V32] 끊긴 연결 → 재인증 후 재시도
+            try:
+                get_google_services.clear(); return _do()
+            except Exception as e2:
+                st.error(f"세트 이미지 업로드 실패(재연결 후에도): {e2}. 잠시 뒤 다시 시도해주세요."); return None
         if "storageQuotaExceeded" in error_msg:
             st.error("⚠️ 구글 드라이브 용량/권한 정책으로 인해 봇이 직접 파일을 업로드할 수 없습니다.")
             st.info(f"💡 해결책: '{filename}' 파일을 구글 드라이브 '{DRIVE_FOLDER_NAME}' 폴더에 직접 올리신 후, 상단의 [🔄 드라이브 세트 이미지 자동 동기화] 버튼을 눌러주세요.")
@@ -226,14 +237,29 @@ def upload_bytes_to_drive(byte_data: bytes, filename: str, mimetype: str = "imag
     """bytes 데이터를 드라이브에 직접 업로드. 빌더 PNG/PPTX 저장에 사용."""
     folder_id = get_or_create_drive_folder()
     if not folder_id: return None
+    def _do():
+        # [V32] 재시도마다 새 버퍼(소진 방지) + 최신 서비스객체(_get_ds)
+        buf = io.BytesIO(byte_data); buf.seek(0)
+        meta = {'name': filename, 'parents': [folder_id]}
+        media = MediaIoBaseUpload(buf, mimetype=mimetype, resumable=False)
+        info = _get_ds().files().create(body=meta, media_body=media, fields='id', supportsAllDrives=True).execute()
+        return info.get('id')
     try:
-        buffer = io.BytesIO(byte_data)
-        buffer.seek(0)
-        file_metadata = {'name': filename, 'parents': [folder_id]}
-        media = MediaIoBaseUpload(buffer, mimetype=mimetype, resumable=False)
-        file_info = _get_ds().files().create(body=file_metadata, media_body=media, fields='id', supportsAllDrives=True).execute()
-        return file_info.get('id')
+        return _do()
     except Exception as e:
+        err = str(e)
+        # [V32] Broken pipe/소켓 끊김 = 캐시된 드라이브 연결이 죽은 것(30분 TTL·유휴). 재인증 후 1회 재시도.
+        #  (공유드라이브 전환 완료 상태이므로 권한 문제 아님 — 대개 재시도로 성공.)
+        if any(k in err for k in ("Broken pipe", "Errno 32", "ConnectionReset", "RemoteDisconnected", "EOF occurred")):
+            try:
+                get_google_services.clear()
+                return _do()
+            except Exception as e2:
+                st.error(f"업로드 실패(재연결 후에도): {e2}. 잠시 뒤 다시 시도해주세요.")
+                return None
+        if "storageQuotaExceeded" in err:
+            st.error("업로드 실패: 드라이브 용량/권한(서비스계정). 공유드라이브 설정을 확인하세요.")
+            return None
         st.error(f"업로드 실패: {e}")
         return None
 
@@ -2269,18 +2295,20 @@ window.addEventListener('resize', zoomFit);
                             except Exception:
                                 canvas_id = None
 
-                        # [작업 손실 방지] 이미지 업로드가 실패(서비스계정 용량 0 등)해도
+                        # [작업 손실 방지] 이미지 업로드가 실패(네트워크·소켓끊김 등)해도
                         #  구성·분류·설명은 시트에 저장한다. 이미지 참조는 파일명으로 기록 →
                         #  나중에 같은 이름 PNG를 폴더에 올리면 코드/이름으로 자동 연결된다.
                         upload_failed = not new_id
                         image_ref = new_id or fname
                         if upload_failed:
+                            # [V32] 공유드라이브 전환 완료 상태 → 대부분 일시적 네트워크(Broken pipe) 문제. 재시도 우선 안내.
                             st.warning(
-                                f"⚠️ 이미지 자동 업로드가 막혔습니다(서비스계정은 드라이브에 파일 생성 불가). "
-                                f"**구성·분류·설명은 저장**했습니다. 이미지는 아래처럼 처리하세요:\n\n"
+                                f"⚠️ 이미지 자동 업로드가 일시적으로 실패했습니다(대개 네트워크 끊김). "
+                                f"**구성·분류·설명은 저장**됐습니다.\n\n"
+                                f"👉 **먼저 [세트로 저장/등록]을 한 번 더 눌러보세요** — 새 연결로 대개 성공합니다.\n\n"
+                                f"그래도 안 되면(백업 경로):\n"
                                 f"1. 빌더에서 **📥 PNG만 내려받기** → 파일명을 **`{fname}`** 로 변경\n"
-                                f"2. 구글 드라이브의 세트 이미지 폴더(`sets/`)에 그 PNG를 직접 업로드\n"
-                                f"→ 견적서에서 코드/이름으로 자동 연결됩니다. (근본 해결: 공유 드라이브 또는 OAuth — 안내 참고)")
+                                f"2. 구글 드라이브 세트 이미지 폴더에 그 PNG 직접 업로드 → 견적서에서 코드/이름으로 자동 연결")
 
                         get_drive_file_map.clear()
                         get_drive_file_map_deep.clear()

@@ -327,7 +327,16 @@ def _do_download_image(ds, file_id):
     request = ds.files().get_media(fileId=file_id)
     downloader = request.execute()
     with Image.open(io.BytesIO(downloader)) as img:
-        img_rgb = img.convert('RGB')
+        # [V29] 투명 PNG(RGBA/LA/P+투명) → 흰 배경에 합성 후 RGB.
+        #  기존 convert('RGB')는 알파를 검정으로 채워, 누끼 PNG가 빌더·견적서에서 검정배경이 되는 사고 유발(V15 §2-6).
+        #  흰 배경 합성 시 빌더의 흰배경 키아웃(makeTransparentBg)·여백자르기가 정상 동작.
+        if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+            _rgba = img.convert('RGBA')
+            _wbg = Image.new('RGBA', _rgba.size, (255, 255, 255, 255))
+            _wbg.paste(_rgba, (0, 0), _rgba)   # 알파를 마스크로 → 투명영역은 흰색
+            img_rgb = _wbg.convert('RGB')
+        else:
+            img_rgb = img.convert('RGB')
         # 비율 유지하면서 300×225 박스 안에 맞춤 (LANCZOS: 고품질 다운샘플링)
         img_rgb.thumbnail((300, 225), Image.LANCZOS)
         # 흰 배경 300×225 캔버스에 중앙 배치 (비율이 달라도 여백으로 채움)

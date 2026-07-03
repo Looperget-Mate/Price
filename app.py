@@ -1009,9 +1009,11 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
 
     with col_canvas:
         # ── 모드 선택 ──────────────────────────────────────────────────
+        # [V31] 기본값=새 세트 만들기(index=1). 기존엔 기본이 '편집'이라 열자마자 첫 세트가
+        #  편집대상으로 잡혀, 새 세트로 알고 배치·저장하면 기존 세트를 통째로 덮어쓰는 사고 유발.
         builder_mode = st.radio("빌더 작업 모드",
                                 ["🖼️ 기존 세트 이미지 편집", "✨ 새 세트 만들기"],
-                                horizontal=True, key="builder_mode")
+                                index=1, horizontal=True, key="builder_mode")
 
         target_set_name = ""
         if builder_mode == "🖼️ 기존 세트 이미지 편집":
@@ -1275,15 +1277,28 @@ function saveWorkState() {{
     if (_initializing) return;
     try {{
         const items = [];
+        const parts = {{}};   // [V31] 부속 위치/크기(리런 보존) — _pendKey 기준
         canvas.getObjects().forEach(function(o, idx) {{
             if (o._isPipe || o._isUserText) {{
                 const j = o.toObject(['_isPipe','_isUserText','_objId']);
                 j.__z = idx;   // [V26.1] 전체 스택 인덱스 보존(맨앞/맨뒤 순서 복원용)
                 items.push(j);
+            }} else if (o._looperCode && o._pendKey) {{
+                parts[o._pendKey] = {{left:o.left, top:o.top, scaleX:o.scaleX, scaleY:o.scaleY, angle:(o.angle||0), flipX:!!o.flipX, flipY:!!o.flipY}};
             }}
         }});
-        _lstore().setItem(WORK_KEY, JSON.stringify({{sig: WORK_SIG, items: items}}));
+        _lstore().setItem(WORK_KEY, JSON.stringify({{sig: WORK_SIG, items: items, parts: parts}}));
     }} catch (e) {{}}
+}}
+function _loadSavedParts() {{
+    // [V31] 현재 세션(sig)에서 저장해둔 부속 위치/크기 맵 반환
+    try {{
+        const raw = _lstore().getItem(WORK_KEY);
+        if (!raw) return {{}};
+        const d = JSON.parse(raw);
+        if (d && d.sig === WORK_SIG && d.parts) return d.parts;
+    }} catch (e) {{}}
+    return {{}};
 }}
 function saveWorkStateDebounced() {{
     if (_workTimer) clearTimeout(_workTimer);
@@ -1507,17 +1522,24 @@ function makeTransparentBg(srcUrl, cb) {{
 // PENDING_ITEMS: [code, name, spec, qty, b64 ...]
 // qty만큼 이미지를 격자 배치, b64 없으면 텍스트 라벨로 대체
 function applyPendingItems() {{
+    const savedParts = _loadSavedParts();   // [V31] 저장된 부속 위치/크기 복원용
+    const COLS = 5;
+    const _tot = PENDING_ITEMS.reduce((s, x) => s + (x.qty || 1), 0);
+    const _rows = Math.max(1, Math.ceil(_tot / COLS));
+    const STEP_X = 135;
+    // [V31] 캔버스 높이에 맞춰 세로 간격 축소 → 부속이 16개 넘어도 전부 캔버스 안에 보이게(밖으로 나가던 문제 해결)
+    const STEP_Y = Math.min(98, Math.max(46, Math.floor((CH - 60) / _rows)));
+    const OFFSET_X = 24, OFFSET_Y = 24;
     let col = 0, row = 0;
-    const COLS = 4;
-    const STEP_X = 130, STEP_Y = 130;
-    const OFFSET_X = 30, OFFSET_Y = 30;
 
-    PENDING_ITEMS.forEach(item => {{
+    PENDING_ITEMS.forEach((item, itemIdx) => {{
         for (let i = 0; i < item.qty; i++) {{
             const lx = OFFSET_X + (col % COLS) * STEP_X;
             const ly = OFFSET_Y + row * STEP_Y;
             col++;
             if (col % COLS === 0) row++;
+            const partKey = itemIdx + '_' + i;   // [V31] 리런에도 안정적인 부속 인스턴스 키
+            const savedT = savedParts[partKey];
 
             if (item.b64) {{
                 makeTransparentBg(item.b64, function(cleanUrl) {{
@@ -1531,6 +1553,9 @@ function applyPendingItems() {{
                         img._looperName = item.name;
                         img._looperSpec = item.spec;
                         img._objId = ++lastObjId;
+                        img._pendKey = partKey;
+                        if (savedT) {{ img.set(savedT); }}   // [V31] 저장된 위치/크기 복원
+                        img.setCoords();
                         objRecipe[img._objId] = {{code: item.code, name: item.name, qty: 1}};
                         canvas.add(img);
                         canvas.renderAll();
@@ -1549,6 +1574,9 @@ function applyPendingItems() {{
                 txt._looperName = item.name;
                 txt._looperSpec = item.spec;
                 txt._objId = ++lastObjId;
+                txt._pendKey = partKey;
+                if (savedT) {{ txt.set(savedT); }}   // [V31] 저장된 위치/크기 복원
+                txt.setCoords();
                 objRecipe[txt._objId] = {{code: item.code, name: item.name, qty: 1}};
                 canvas.add(txt);
                 canvas.renderAll();

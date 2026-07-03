@@ -2087,6 +2087,7 @@ window.addEventListener('resize', zoomFit);
 
         has_bridge = bool(st.session_state.get("_bridge_png"))
         if has_bridge:
+            st.session_state["_bridge_retry"] = 0   # [V30] 감지 성공 → 재시도 카운터 리셋
             st.success("✅ 빌더에서 전송된 이미지가 준비됐습니다. 아래에서 세트명·분류만 확인하고 저장하세요.")
         else:
             st.warning("빌더에서 **💾 저장 (이미지+구성 자동 등록)** 을 누른 뒤, 이 자리가 초록색 **'전송된 이미지가 준비됐습니다'** 로 바뀌어야 저장됩니다.\n\n바로 안 바뀌면 아래 **🔄 전송 확인**을 한 번 누르세요. (전송 감지는 약간의 지연이 있을 수 있습니다.)")
@@ -2207,7 +2208,17 @@ window.addEventListener('resize', zoomFit);
                     json_text = uploaded_json.getvalue().decode("utf-8") if uploaded_json is not None else None
 
                 if png_bytes is None:
-                    st.error("저장할 이미지가 없습니다. 빌더에서 '💾 저장'을 누르거나 백업 업로드를 사용하세요.")
+                    # [V30] 브리지 전송이 아직 감지 안 됨(js_eval 비동기 지연). 백업 업로드도 없으면
+                    #  빨간 에러 대신 '확인 중' 안내 + 자동 재감지 리런으로 초록 상태를 앞당김.
+                    #  (제출 1회당 1리런; submitted는 클릭한 run에서만 True라 무한루프 없음. has_bridge 시 카운터 리셋.)
+                    _br = st.session_state.get("_bridge_retry", 0)
+                    if _HAS_JS_EVAL and uploaded_png is None and _br < 4:
+                        st.session_state["_bridge_retry"] = _br + 1
+                        st.info("⏳ 전송 확인 중… 위 안내가 초록색 '준비됐습니다'로 바뀌면 **[세트로 저장/등록]**을 한 번 더 눌러주세요.")
+                        time.sleep(0.7)
+                        st.rerun()
+                    else:
+                        st.error("아직 전송이 확인되지 않았습니다. 빌더에서 **💾 저장**을 누른 뒤, 아래 안내가 **초록색**으로 바뀐 것을 확인하고 다시 시도하세요. (안 바뀌면 **🔄 전송 확인** 클릭, 그래도 안 되면 백업 업로드 사용)")
                 elif not new_sname:
                     st.error("세트명을 입력/선택하세요.")
                 else:

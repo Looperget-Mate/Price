@@ -1015,8 +1015,11 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
 
             # [V33] 부속 빼기 — 캔버스 항목별 −1/전체빼기 (구성·캔버스 동시 반영).
             #  3개 넣고 1개만 빼기 = 해당 줄의 [−1]. 남은 부속 배치는 uid 키로 보존됨.
+            # [V34] 👁 이미지 숨김 토글 — 구성(레시피)엔 남기고 캔버스·저장 PNG에서만 제외.
+            #  용도: 재단 배관을 구성에 넣되, 그림은 '배관 그리기'로 대체할 때.
             if st.session_state.builder_canvas_items:
-                with st.expander("➖ 부속 빼기 (캔버스·구성 동시 반영)", expanded=False):
+                with st.expander("🧺 캔버스 부속 관리 (빼기·이미지 숨김)", expanded=False):
+                    st.caption("👁=이미지 숨김/표시(구성엔 유지) · −1=하나 빼기 · ✕=전체 빼기")
                     def _remove_canvas_qty(idx, n):
                         it = st.session_state.builder_canvas_items[idx]
                         n = min(n, it["qty"])
@@ -1029,9 +1032,16 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
                         if it["qty"] <= 0:
                             st.session_state.builder_canvas_items.pop(idx)
                     for _i, _it in enumerate(st.session_state.builder_canvas_items):
-                        _rc1, _rc2, _rc3 = st.columns([3, 1, 1])
+                        _hid = bool(_it.get("hidden"))
+                        _rc1, _rc0, _rc2, _rc3 = st.columns([2.6, 1, 1, 1])
                         with _rc1:
-                            st.caption(f"[{_it['code']}] {_it['name']} ×{_it['qty']}")
+                            _lbl = f"[{_it['code']}] {_it['name']} ×{_it['qty']}"
+                            st.caption(("🚫 " + _lbl) if _hid else _lbl)
+                        with _rc0:
+                            if st.button("👁" if _hid else "🙈", key=f"bhide_{_it.get('uid', _i)}", use_container_width=True,
+                                         help=("이미지 다시 표시" if _hid else "이미지 숨김 (구성엔 유지 — 배관그리기 대체용)")):
+                                _it["hidden"] = not _hid
+                                st.rerun()
                         with _rc2:
                             if st.button("−1", key=f"bdel1_{_it.get('uid', _i)}", use_container_width=True):
                                 _remove_canvas_qty(_i, 1)
@@ -1078,6 +1088,7 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
                 st.session_state._img_cache[code] = b64
         _canvas_payload.append({
             "uid": it.get("uid", 0),   # [V33] 삭제에도 안정적인 위치보존 키
+            "hidden": bool(it.get("hidden")),   # [V34] 이미지 숨김(구성 유지, PNG 제외)
             "code": code, "name": it.get("name", ""),
             "spec": it.get("spec", "-"), "qty": it.get("qty", 1),
             "b64": b64 or ""
@@ -1633,6 +1644,7 @@ function applyPendingItems() {{
                         img._objId = ++lastObjId;
                         img._pendKey = partKey;
                         if (savedT) {{ img.set(savedT); }}   // [V31] 저장된 위치/크기 복원
+                        if (item.hidden) {{ img.visible = false; }}   // [V34] 이미지 숨김(구성·집계엔 포함, 렌더·PNG 제외)
                         img.setCoords();
                         objRecipe[img._objId] = {{code: item.code, name: item.name, qty: 1}};
                         canvas.add(img);
@@ -1654,6 +1666,7 @@ function applyPendingItems() {{
                 txt._objId = ++lastObjId;
                 txt._pendKey = partKey;
                 if (savedT) {{ txt.set(savedT); }}   // [V31] 저장된 위치/크기 복원
+                if (item.hidden) {{ txt.visible = false; }}   // [V34] 이미지 숨김
                 txt.setCoords();
                 objRecipe[txt._objId] = {{code: item.code, name: item.name, qty: 1}};
                 canvas.add(txt);
@@ -4020,11 +4033,13 @@ if mode == "관리자 모드" or mode == "管理者モード":
     st.header("🛠 관리자 모드")
     if st.button("🔄 구글시트 데이터 새로고침"): st.session_state.db = load_data_from_sheet(); st.session_state._img_cache = {}; st.success("완료"); st.rerun()
     if not st.session_state.auth_admin:
-        pw = st.text_input("관리자 비밀번호", type="password")
-        if st.button("로그인"):
-            admin_pwd_db = str(st.session_state.db.get("config", {}).get("admin_pwd", "1234"))
-            if pw == admin_pwd_db: st.session_state.auth_admin = True; st.rerun()
-            else: st.error("비밀번호 불일치")
+        # [V34] form: 비밀번호 입력 후 Enter로도 로그인
+        with st.form("admin_login_form"):
+            pw = st.text_input("관리자 비밀번호", type="password")
+            if st.form_submit_button("로그인", type="primary"):
+                admin_pwd_db = str(st.session_state.db.get("config", {}).get("admin_pwd", "1234"))
+                if pw == admin_pwd_db: st.session_state.auth_admin = True; st.rerun()
+                else: st.error("비밀번호 불일치")
     else:
         if st.button("로그아웃"): st.session_state.auth_admin = False; st.rerun()
         t1, t2, t3 = st.tabs(["부품 관리", "세트 관리", "설정"])
@@ -4975,11 +4990,13 @@ else:
         c_lock, c_view = st.columns([1, 2])
         with c_lock:
             if not st.session_state.auth_price:
-                pw = st.text_input("원가 조회 비번", type="password")
-                if st.button("해제"):
-                    admin_pwd_db = str(st.session_state.db.get("config", {}).get("admin_pwd", "1234"))
-                    if pw == admin_pwd_db: st.session_state.auth_price = True; st.rerun()
-                    else: st.error("오류")
+                # [V34] form: Enter로도 해제
+                with st.form("step2_price_form"):
+                    pw = st.text_input("원가 조회 비번", type="password")
+                    if st.form_submit_button("해제"):
+                        admin_pwd_db = str(st.session_state.db.get("config", {}).get("admin_pwd", "1234"))
+                        if pw == admin_pwd_db: st.session_state.auth_price = True; st.rerun()
+                        else: st.error("오류")
             else: st.success("🔓 원가 조회 가능")
         
         with c_view: view = st.radio("단가 보기", view_opts, horizontal=True, key="step2_price_view")
@@ -5128,10 +5145,14 @@ else:
             
             if "이익" in form_type and not st.session_state.auth_price:
                 st.warning("🔒 원가 정보를 보려면 비밀번호를 입력하세요.")
-                c_pw, c_btn = st.columns([2,1])
-                with c_pw: input_pw = st.text_input("비밀번호", type="password", key="step3_pw")
-                with c_btn: 
-                    if st.button("해제", key="step3_btn"):
+                # [V34] form: Enter로도 해제
+                with st.form("step3_pw_form"):
+                    c_pw, c_btn = st.columns([2,1])
+                    with c_pw: input_pw = st.text_input("비밀번호", type="password", key="step3_pw")
+                    with c_btn:
+                        st.write("")
+                        submitted_pw = st.form_submit_button("해제", use_container_width=True)
+                    if submitted_pw:
                         admin_pwd_db = str(st.session_state.db.get("config", {}).get("admin_pwd", "1234"))
                         if input_pw == admin_pwd_db: st.session_state.auth_price = True; st.rerun()
                         else: st.error("불일치")

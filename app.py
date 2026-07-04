@@ -379,7 +379,8 @@ def _do_download_image(ds, file_id):
 # [V33] 실패(None)를 캐시하지 않는다 — 예전엔 Broken pipe 한 번이면 None이 1시간 캐시돼
 #  해당 부속이 리런마다 계속 빈칸/사라진 것처럼 보였음. st.cache_data는 예외를 캐시하지 않으므로,
 #  캐시되는 내부 함수는 실패 시 예외를 던지고 외부 래퍼가 None으로 감싼다. (다음 리런에 자동 재시도)
-@st.cache_data(ttl=3600, show_spinner=False)
+# [V35] ttl 1h→24h — 키가 파일ID라 안전(이미지 교체 시 새 ID 발급 → 자동 반영). 매시간 전체 재다운로드 폭풍 제거.
+@st.cache_data(ttl=86400, show_spinner=False)
 def _download_image_cached(file_id):
     ds = get_google_services()[1]  # 항상 최신 서비스 객체 사용
     if not ds: raise RuntimeError("drive service unavailable")
@@ -4823,7 +4824,6 @@ else:
                 sc = v.get("sub_cat", "미분류") if isinstance(v, dict) else "미분류"
                 if sc not in grouped: grouped[sc] = {}
                 grouped[sc][k] = v
-            mt1, mt2, mt3, mt4 = st.tabs(["50mm", "40mm", "기타", "전체"])
             # ── V12: 세션 캐시 + 카드 + 툴팁 렌더 ──────────────────────────
             def get_cached_set_image(set_name, img_ref):
                 if "_img_cache" not in st.session_state:
@@ -4833,13 +4833,14 @@ else:
                 return st.session_state._img_cache.get(set_name)
 
             def render_inputs_with_key(d, pf):
+                # [V35] 코드→이름 맵 1회만 생성 (기존엔 카드마다 재생성 → 세트 많을수록 급격히 느려짐)
+                pdb_local = {str(p.get("code","")): p.get("name","") for p in st.session_state.db.get("products", [])}
                 cols = st.columns(4); res = {}
                 for i, (n, v) in enumerate(d.items()):
                     with cols[i % 4]:
                         img_name = v.get("image") if isinstance(v, dict) else None
                         recipe = v.get("recipe", {}) if isinstance(v, dict) else {}
                         if recipe:
-                            pdb_local = {str(p.get("code","")): p.get("name","") for p in st.session_state.db.get("products", [])}
                             tip_lines = [f"· {pdb_local.get(str(c), c)} ×{q}" for c, q in recipe.items()]
                             tooltip_html = "<br>".join(tip_lines)
                         else:
@@ -4856,13 +4857,25 @@ else:
                         res[n] = st.number_input(n, 0, key=f"{pf}_{n}_input")
                 return res
 
-            with mt1: inp_m_50 = render_inputs_with_key(grouped.get("50mm", {}), "m50")
-            with mt2: inp_m_40 = render_inputs_with_key(grouped.get("40mm", {}), "m40")
-            with mt3: inp_m_etc = render_inputs_with_key(grouped.get("기타", {}), "metc")
-            with mt4: inp_m_all = render_inputs_with_key(m_sets, "mall")
-            
-            st.write("")
-            if st.button("➕ 입력한 수량 세트 목록에 추가"):
+            # [V35] '전체' 탭은 모든 카드를 한 번 더 렌더(2배 부하) → 기본 꺼두고 필요할 때만 사용
+            _show_all = st.checkbox("'전체' 탭 사용 (모든 세트 한눈에 · 미분류 포함 — 로딩 느려짐)",
+                                    value=False, key="step1_show_all_tab")
+            # [V35] form — 수량 입력 중엔 리런 없음(세트 카드 전체 재전송 방지), '추가' 클릭 때 한 번만 반영
+            with st.form("step1_main_sets_form", border=False):
+                mt1, mt2, mt3, mt4 = st.tabs(["50mm", "40mm", "기타", "전체"])
+                with mt1: inp_m_50 = render_inputs_with_key(grouped.get("50mm", {}), "m50")
+                with mt2: inp_m_40 = render_inputs_with_key(grouped.get("40mm", {}), "m40")
+                with mt3: inp_m_etc = render_inputs_with_key(grouped.get("기타", {}), "metc")
+                with mt4:
+                    if _show_all:
+                        inp_m_all = render_inputs_with_key(m_sets, "mall")
+                    else:
+                        inp_m_all = {}
+                        st.caption("바로 위 \"'전체' 탭 사용\"을 켜면 모든 세트(미분류 포함)가 여기 표시됩니다.")
+
+                st.write("")
+                submitted_main_sets = st.form_submit_button("➕ 입력한 수량 세트 목록에 추가")
+            if submitted_main_sets:
                 def sum_dictionaries(*dicts):
                     result = {}
                     for d in dicts:
@@ -4884,11 +4897,14 @@ else:
                 else:
                     st.warning("수량을 입력해주세요.")
         with st.expander("2. 가지관 및 기타 세트"):
-            c1, c2, c3 = st.tabs(["가지관", "살수", "기타자재"])
-            with c1: inp_b = render_inputs_with_key(sets.get("가지관세트", {}), "b_set")
-            with c2: inp_s = render_inputs_with_key(sets.get("살수세트", {}), "s_set")
-            with c3: inp_e = render_inputs_with_key(sets.get("기타자재", {}), "e_set")
-            if st.button("➕ 가지관/살수/기타 목록 추가"):
+            # [V35] form — 수량 입력 중 리런 방지 (위와 동일)
+            with st.form("step1_sub_sets_form", border=False):
+                c1, c2, c3 = st.tabs(["가지관", "살수", "기타자재"])
+                with c1: inp_b = render_inputs_with_key(sets.get("가지관세트", {}), "b_set")
+                with c2: inp_s = render_inputs_with_key(sets.get("살수세트", {}), "s_set")
+                with c3: inp_e = render_inputs_with_key(sets.get("기타자재", {}), "e_set")
+                submitted_sub_sets = st.form_submit_button("➕ 가지관/살수/기타 목록 추가")
+            if submitted_sub_sets:
                 all_inputs = {**inp_b, **inp_s, **inp_e}
                 added_count = 0
                 for set_name, qty in all_inputs.items():

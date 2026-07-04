@@ -376,28 +376,32 @@ def _do_download_image(ds, file_id):
     return f"data:image/jpeg;base64,{base64.b64encode(buffer.getvalue()).decode()}"
 
 # 이미지 다운로드 + 캐시 (ttl=3600)
+# [V33] 실패(None)를 캐시하지 않는다 — 예전엔 Broken pipe 한 번이면 None이 1시간 캐시돼
+#  해당 부속이 리런마다 계속 빈칸/사라진 것처럼 보였음. st.cache_data는 예외를 캐시하지 않으므로,
+#  캐시되는 내부 함수는 실패 시 예외를 던지고 외부 래퍼가 None으로 감싼다. (다음 리런에 자동 재시도)
 @st.cache_data(ttl=3600, show_spinner=False)
-def download_image_by_id(file_id):
-    if not file_id: return None
+def _download_image_cached(file_id):
     ds = get_google_services()[1]  # 항상 최신 서비스 객체 사용
-    if not ds: return None
+    if not ds: raise RuntimeError("drive service unavailable")
     try:
         return _do_download_image(ds, file_id)
     except Exception as e:
-        err = str(e)
-        if "Broken pipe" in err or "Errno 32" in err or "ConnectionReset" in err:
-            # 소켓 끊김 → 서비스 재생성 후 1회 재시도
-            try:
-                get_google_services.clear()  # cache_resource 강제 갱신
-                ds2 = get_google_services()[1]
-                if ds2:
-                    return _do_download_image(ds2, file_id)
-            except Exception:
-                pass
+        if any(k in str(e) for k in _SOCKET_ERRS):
+            get_google_services.clear()  # 소켓 끊김 → 재인증 후 1회 재시도
+            ds2 = get_google_services()[1]
+            if ds2:
+                return _do_download_image(ds2, file_id)
+        raise
+
+def download_image_by_id(file_id):
+    if not file_id: return None
+    try:
+        return _download_image_cached(file_id)
+    except Exception:
         return None
 
-@st.cache_data(ttl=3600)
 def get_image_from_drive(filename_or_id):
+    # [V33] 캐시 데코레이터 제거 — 맵·다운로드가 이미 캐시라 중복이고, 실패 None을 1시간 물고 있었음.
     if not filename_or_id: return None
     stem = os.path.splitext(filename_or_id)[0]
     # 루트 맵 우선, 없으면 하위 폴더까지 포함한 깊은 맵 조회
@@ -804,24 +808,37 @@ def load_jp_merged_products(kr_products: list, exchange_rate: float) -> list:
 # 구글 API 호출 최소화를 위해 init_db() 호출 없이 바로 업데이트 수행
 def save_sets_to_sheet(sets_dict):
     if not gc: return
-    try:
-        sh = gc.open(SHEET_NAME)
+    # [V21, 2026-06-25] Track A-2 Phase 1A — 헤더·데이터 20컬럼 확장 (기존7 + 신규13). V15 §2-2 clear()+update() 패턴 유지.
+    # [V22, 2026-06-26] Track A-2 D안 — 21번째 컬럼 "조달용추가BOM" 추가. 프로그램은 무시, 관급모드는 합산.
+    rows = [["세트명", "카테고리", "하위분류", "이미지파일명", "레시피JSON", "설명", "캔버스파일",
+             "관경", "설치단계", "기능타입", "헤드모델", "유량(L/h)", "권장수압(bar)",
+             "최대살수반경(m)", "설치환경", "세트등급", "호환필수세트", "소비자가",
+             "자사품목코드", "관급등록여부", "조달용추가BOM"]]
+    for cat, items in sets_dict.items():
+        for name, info in items.items():
+            rows.append([name, cat, info.get("sub_cat", ""), info.get("image", ""), json.dumps(info.get("recipe", {}), ensure_ascii=False), info.get("desc", ""), info.get("canvas", ""),
+                         info.get("gauge", ""), info.get("install_phase", ""), info.get("func_type", ""), info.get("head_model", ""), info.get("flow_lh", ""), info.get("pressure_bar", ""),
+                         info.get("spray_radius_m", ""), info.get("install_env", ""), info.get("set_grade", ""), info.get("compat_sets", ""), info.get("price_consumer", ""),
+                         info.get("item_code", ""), info.get("gov_registered", "N"), info.get("gov_extra_bom", "")])
+    def _do(client):
+        sh = client.open(SHEET_NAME)
         ws_sets = sh.worksheet("Sets")
-        # [V21, 2026-06-25] Track A-2 Phase 1A — 헤더·데이터 20컬럼 확장 (기존7 + 신규13). V15 §2-2 clear()+update() 패턴 유지.
-        # [V22, 2026-06-26] Track A-2 D안 — 21번째 컬럼 "조달용추가BOM" 추가. 프로그램은 무시, 관급모드는 합산.
-        rows = [["세트명", "카테고리", "하위분류", "이미지파일명", "레시피JSON", "설명", "캔버스파일",
-                 "관경", "설치단계", "기능타입", "헤드모델", "유량(L/h)", "권장수압(bar)",
-                 "최대살수반경(m)", "설치환경", "세트등급", "호환필수세트", "소비자가",
-                 "자사품목코드", "관급등록여부", "조달용추가BOM"]]
-        for cat, items in sets_dict.items():
-            for name, info in items.items():
-                rows.append([name, cat, info.get("sub_cat", ""), info.get("image", ""), json.dumps(info.get("recipe", {}), ensure_ascii=False), info.get("desc", ""), info.get("canvas", ""),
-                             info.get("gauge", ""), info.get("install_phase", ""), info.get("func_type", ""), info.get("head_model", ""), info.get("flow_lh", ""), info.get("pressure_bar", ""),
-                             info.get("spray_radius_m", ""), info.get("install_env", ""), info.get("set_grade", ""), info.get("compat_sets", ""), info.get("price_consumer", ""),
-                             info.get("item_code", ""), info.get("gov_registered", "N"), info.get("gov_extra_bom", "")])
         ws_sets.clear()
         ws_sets.update(rows)
+    try:
+        _do(gc)
     except Exception as e:
+        # [V32/V33] 소켓 끊김이면 재인증 후 새 클라이언트로 1회 재시도 (시트 저장도 업로드처럼 유휴 끊김에 취약)
+        if any(k in str(e) for k in _SOCKET_ERRS):
+            try:
+                get_google_services.clear()
+                gc2 = get_google_services()[0]
+                if gc2:
+                    _do(gc2)
+                    return
+            except Exception as e2:
+                st.error(f"세트 저장 오류(재연결 후에도): {e2}")
+                return
         st.error(f"세트 저장 오류: {e}")
 
 # [V23, 2026-06-28] Track A-2 Phase 1B — 세트명/분류 기반 메타데이터 자동 추론 (빌더 저장 폼 기본값)
@@ -973,7 +990,10 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
                                     "name": m["name"], "spec": m["spec"], "qty": qty
                                 }
                             # [V16] 캔버스 누적 아이템에 등록 (rerun에도 유지)
+                            # [V33] uid = 항목 삭제에도 흔들리지 않는 고유키 (부속 위치보존 _pendKey의 기반)
+                            st.session_state["builder_uid_seq"] = st.session_state.get("builder_uid_seq", 0) + 1
                             st.session_state.builder_canvas_items.append({
+                                "uid": st.session_state["builder_uid_seq"],
                                 "code": code, "name": m["name"],
                                 "spec": m["spec"] or "-",
                                 "qty": qty,
@@ -992,6 +1012,36 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
             st.markdown("**📋 구성 집계**")
             for c, info in st.session_state.builder_recipe.items():
                 st.markdown(f"- [{c}] {info['name']} × **{info['qty']}**")
+
+            # [V33] 부속 빼기 — 캔버스 항목별 −1/전체빼기 (구성·캔버스 동시 반영).
+            #  3개 넣고 1개만 빼기 = 해당 줄의 [−1]. 남은 부속 배치는 uid 키로 보존됨.
+            if st.session_state.builder_canvas_items:
+                with st.expander("➖ 부속 빼기 (캔버스·구성 동시 반영)", expanded=False):
+                    def _remove_canvas_qty(idx, n):
+                        it = st.session_state.builder_canvas_items[idx]
+                        n = min(n, it["qty"])
+                        it["qty"] -= n
+                        _rc = st.session_state.builder_recipe.get(it["code"])
+                        if _rc:
+                            _rc["qty"] -= n
+                            if _rc["qty"] <= 0:
+                                st.session_state.builder_recipe.pop(it["code"], None)
+                        if it["qty"] <= 0:
+                            st.session_state.builder_canvas_items.pop(idx)
+                    for _i, _it in enumerate(st.session_state.builder_canvas_items):
+                        _rc1, _rc2, _rc3 = st.columns([3, 1, 1])
+                        with _rc1:
+                            st.caption(f"[{_it['code']}] {_it['name']} ×{_it['qty']}")
+                        with _rc2:
+                            if st.button("−1", key=f"bdel1_{_it.get('uid', _i)}", use_container_width=True):
+                                _remove_canvas_qty(_i, 1)
+                                st.rerun()
+                        with _rc3:
+                            if st.button("✕", key=f"bdelall_{_it.get('uid', _i)}", use_container_width=True,
+                                         help="이 항목 전체 빼기"):
+                                _remove_canvas_qty(_i, _it["qty"])
+                                st.rerun()
+
             if st.button("🗑 집계 초기화", key="builder_clear_recipe"):
                 st.session_state.builder_recipe = {}
                 st.session_state.builder_canvas_items = []
@@ -1027,6 +1077,7 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
             if b64:
                 st.session_state._img_cache[code] = b64
         _canvas_payload.append({
+            "uid": it.get("uid", 0),   # [V33] 삭제에도 안정적인 위치보존 키
             "code": code, "name": it.get("name", ""),
             "spec": it.get("spec", "-"), "qty": it.get("qty", 1),
             "b64": b64 or ""
@@ -1564,7 +1615,8 @@ function applyPendingItems() {{
             const ly = OFFSET_Y + row * STEP_Y;
             col++;
             if (col % COLS === 0) row++;
-            const partKey = itemIdx + '_' + i;   // [V31] 리런에도 안정적인 부속 인스턴스 키
+            // [V33] uid 기반 키 — 항목을 빼도 다른 부속의 저장 위치가 안 흔들림 (uid 없으면 구키 폴백)
+            const partKey = (item.uid ? 'u' + item.uid : String(itemIdx)) + '_' + i;
             const savedT = savedParts[partKey];
 
             if (item.b64) {{
@@ -1796,7 +1848,19 @@ function bringFwd()   {{ const o=canvas.getActiveObject(); if(o){{ canvas.bringF
 function sendBck()    {{ const o=canvas.getActiveObject(); if(o){{ canvas.sendBackwards(o); pushUndo(); saveWorkState(); }} }}
 function bringFront() {{ const o=canvas.getActiveObject(); if(o){{ canvas.bringToFront(o); pushUndo(); saveWorkState(); }} }}
 function sendBack()   {{ const o=canvas.getActiveObject(); if(o){{ canvas.sendToBack(o); pushUndo(); saveWorkState(); }} }}
-function deleteObj()  {{ const o=canvas.getActiveObject(); if(o){{ if(o._objId) delete objRecipe[o._objId]; canvas.remove(o); pushUndo(); updateRecipe(); }} }}
+function deleteObj()  {{
+    const o = canvas.getActiveObject();
+    if (!o) return;
+    // [V33] 부속(제품 이미지)은 여기서 지워도 리런 때 되살아나고 구성(레시피)과 어긋남 →
+    //        왼쪽 '➖ 부속 빼기'로 유도. 배관·텍스트는 그대로 삭제 가능(작업상태에 반영).
+    if (o._looperCode) {{
+        setStatus('부속은 왼쪽 \\'➖ 부속 빼기\\' 목록에서 빼주세요. (캔버스에서 지우면 구성과 어긋나고 다시 나타납니다)');
+        return;
+    }}
+    if (o._objId) delete objRecipe[o._objId];
+    canvas.remove(o); pushUndo(); updateRecipe();
+    saveWorkState();   // [V33] 배관·텍스트 삭제 즉시 영속화
+}}
 function duplicateObj() {{
     const o = canvas.getActiveObject();
     if (!o) {{ setStatus('복사할 오브젝트를 먼저 선택하세요.'); return; }}

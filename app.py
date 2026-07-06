@@ -1104,11 +1104,13 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
 
     with col_canvas:
         # ── 모드 선택 ──────────────────────────────────────────────────
-        # [V31] 기본값=새 세트 만들기(index=1). 기존엔 기본이 '편집'이라 열자마자 첫 세트가
-        #  편집대상으로 잡혀, 새 세트로 알고 배치·저장하면 기존 세트를 통째로 덮어쓰는 사고 유발.
+        # [V31] 기본값=새 세트 만들기. [V38] index+key 동시지정 제거 — 위젯 리셋 시 화면·상태
+        #  어긋남(라디오는 편집인데 로직은 새세트) 원인 후보 차단. 세션상태 초기화 방식이 정석.
+        if "builder_mode" not in st.session_state:
+            st.session_state.builder_mode = "✨ 새 세트 만들기"
         builder_mode = st.radio("빌더 작업 모드",
                                 ["🖼️ 기존 세트 이미지 편집", "✨ 새 세트 만들기"],
-                                index=1, horizontal=True, key="builder_mode")
+                                horizontal=True, key="builder_mode")
 
         target_set_name = ""
         if builder_mode == "🖼️ 기존 세트 이미지 편집":
@@ -2374,6 +2376,11 @@ window.addEventListener('resize', zoomFit);
                 else:
                     st.markdown("**저장 시:** 구성이 기존과 동일 → **이미지·설명만 교체**됩니다.")
 
+            # [V38] 새세트 모드에서 기존 세트명과 일치하면 미리 경고 (저장은 업데이트로 안전 처리됨)
+            if builder_mode == "✨ 새 세트 만들기" and new_sname and any(
+                    new_sname in _its for _its in st.session_state.db.get("sets", {}).values()):
+                st.warning(f"⚠ '{new_sname}' 는 이미 등록된 세트입니다 — 저장 시 새로 만들지 않고 **기존 세트 업데이트**로 처리됩니다(메타데이터·기존 필드 보존).")
+
             submitted = st.form_submit_button("💾 세트로 저장/등록", type="primary", use_container_width=True)
 
             if submitted:
@@ -2448,7 +2455,10 @@ window.addEventListener('resize', zoomFit);
                         except Exception: pass
 
                         sc_val = new_ssc if new_ssc != "-" else None
-                        if builder_mode == "✨ 새 세트 만들기":
+                        # [V38] 업서트 방어: 신규 모드라도 같은 이름의 세트가 이미 있으면 아래 '기존 세트 변경'
+                        #  경로로 처리 — 모드 혼선 시 기존 세트의 메타데이터·구성·캔버스가 통째로 초기화되는 사고 차단.
+                        _name_exists = any(new_sname in _its for _its in st.session_state.db.get("sets", {}).values())
+                        if builder_mode == "✨ 새 세트 만들기" and not _name_exists:
                             # ㄴ. 신규 세트 생성 완료
                             if new_scat not in st.session_state.db["sets"]:
                                 st.session_state.db["sets"][new_scat] = {}
@@ -2477,7 +2487,9 @@ window.addEventListener('resize', zoomFit);
                             if old_info is None:
                                 old_info = {"recipe": {}, "image": "", "sub_cat": None, "desc": "", "canvas": ""}
                             old_info["image"] = image_ref
-                            old_info["desc"] = new_sdesc.strip()
+                            # [V38] 새세트 모드發 업서트에서 빈 설명이 기존 설명을 지우지 않게
+                            if new_sdesc.strip() or builder_mode != "✨ 새 세트 만들기":
+                                old_info["desc"] = new_sdesc.strip()
                             old_info["sub_cat"] = sc_val
                             if canvas_id:
                                 old_info["canvas"] = canvas_id

@@ -1096,7 +1096,11 @@ def build_set_image_editor(db_sets, db_products, drive_file_map):
             "spec": it.get("spec", "-"), "qty": it.get("qty", 1),
             "b64": b64 or ""
         })
-    pending_json = json.dumps(_canvas_payload, ensure_ascii=False)
+    # [V37] 세션 토큰 — 부속 위치 저장소(LOOPER_WORK_PARTS)를 이 세션의 부속 목록과만 결부
+    #        (이전 세션 잔재·다른 탭의 uid 충돌 무시). 보간 필드는 5개 유지, payload 내부만 확장.
+    if "builder_ws_token" not in st.session_state:
+        st.session_state.builder_ws_token = str(int(time.time() * 1000))
+    pending_json = json.dumps({"token": st.session_state.builder_ws_token, "items": _canvas_payload}, ensure_ascii=False)
 
     with col_canvas:
         # ── 모드 선택 ──────────────────────────────────────────────────
@@ -1340,7 +1344,9 @@ const MODE_NEW = {mode_new};
 const TARGET_SET = {target_set_json};
 const TARGET_SET_IMG_B64 = {target_set_img_b64};
 const TARGET_SET_CANVAS_JSON = {target_set_canvas_json};  // 빌더로 만든 세트의 편집용 캔버스 데이터
-const PENDING_ITEMS = {pending_json};  // Python에서 "추가" 버튼 누른 품목 [code/name/spec/qty/b64]
+const PENDING_WRAP = {pending_json};  // [V37] {{token, items}}
+const PENDING_ITEMS = (PENDING_WRAP && PENDING_WRAP.items) ? PENDING_WRAP.items : [];
+const WS_TOKEN = (PENDING_WRAP && PENDING_WRAP.token) ? String(PENDING_WRAP.token) : '';
 let CW = 720, CH = 540;
 
 let canvas, curMode = 'select';
@@ -1357,6 +1363,7 @@ let zoomLevel = 1;      // [V15] 화면 표시 배율 (저장 품질과 무관)
 // 초기화 직후 복원한다. 부속은 기존 방식 유지(서로 겹치지 않아 안전).
 const WORK_SIG = MODE_NEW ? 'NEW' : ('EDIT:' + (TARGET_SET || ''));
 const WORK_KEY = 'LOOPER_WORK';
+const PARTS_KEY = 'LOOPER_WORK_PARTS';   // [V37] 부속 위치 저장소 — 모드(sig) 전환에도 유지, 세션 토큰으로 보호
 let _initializing = true;   // 초기화 중 저장 억제(빈 상태로 덮어쓰기 방지)
 let _initDone = false;      // finishInit 1회 보장
 let _workTimer = null;
@@ -1368,26 +1375,30 @@ function saveWorkState() {{
     if (_initializing) return;
     try {{
         const items = [];
-        const parts = {{}};   // [V31] 부속 위치/크기(리런 보존) — _pendKey 기준
+        const curParts = {{}};
         canvas.getObjects().forEach(function(o, idx) {{
             if (o._isPipe || o._isUserText) {{
                 const j = o.toObject(['_isPipe','_isUserText','_objId']);
                 j.__z = idx;   // [V26.1] 전체 스택 인덱스 보존(맨앞/맨뒤 순서 복원용)
                 items.push(j);
             }} else if (o._looperCode && o._pendKey) {{
-                parts[o._pendKey] = {{left:o.left, top:o.top, scaleX:o.scaleX, scaleY:o.scaleY, angle:(o.angle||0), flipX:!!o.flipX, flipY:!!o.flipY}};
+                curParts[o._pendKey] = {{left:o.left, top:o.top, scaleX:o.scaleX, scaleY:o.scaleY, angle:(o.angle||0), flipX:!!o.flipX, flipY:!!o.flipY}};
             }}
         }});
-        _lstore().setItem(WORK_KEY, JSON.stringify({{sig: WORK_SIG, items: items, parts: parts}}));
+        _lstore().setItem(WORK_KEY, JSON.stringify({{sig: WORK_SIG, items: items}}));
+        // [V37] 부속 위치는 모드와 무관한 별도 키에 '병합' 저장 — ①이미지 로딩 중의 부분 저장이
+        //        아직 안 뜬 부속의 위치를 지우지 않게(리셋 원인) ②신규↔편집 전환에도 배치 유지.
+        const merged = Object.assign({{}}, _loadSavedParts(), curParts);
+        _lstore().setItem(PARTS_KEY, JSON.stringify({{token: WS_TOKEN, parts: merged}}));
     }} catch (e) {{}}
 }}
 function _loadSavedParts() {{
-    // [V31] 현재 세션(sig)에서 저장해둔 부속 위치/크기 맵 반환
+    // [V37] 부속 위치는 PARTS_KEY(토큰 검증)에서 — 모드·세트 전환에도 유지, 이전 세션 잔재는 무시
     try {{
-        const raw = _lstore().getItem(WORK_KEY);
+        const raw = _lstore().getItem(PARTS_KEY);
         if (!raw) return {{}};
         const d = JSON.parse(raw);
-        if (d && d.sig === WORK_SIG && d.parts) return d.parts;
+        if (d && String(d.token) === WS_TOKEN && d.parts) return d.parts;
     }} catch (e) {{}}
     return {{}};
 }}
@@ -1396,7 +1407,7 @@ function saveWorkStateDebounced() {{
     _workTimer = setTimeout(saveWorkState, 200);
 }}
 function clearWorkState() {{
-    try {{ _lstore().removeItem(WORK_KEY); }} catch (e) {{}}
+    try {{ _lstore().removeItem(WORK_KEY); _lstore().removeItem(PARTS_KEY); }} catch (e) {{}}
 }}
 function restoreWorkPipes(done) {{
     try {{
@@ -1590,19 +1601,46 @@ function makeTransparentBg(srcUrl, cb) {{
         try {{ data = cx.getImageData(0, 0, cv.width, cv.height); }}
         catch(e) {{ cb(srcUrl); return; }}  // CORS 등 실패 시 원본 그대로
         const d = data.data;
-        const WHITE = 238;   // 이 값 이상이면 배경 후보 (R,G,B 모두)
-        const SOFT  = 225;   // 경계 완화 시작점
-        for (let p = 0; p < d.length; p += 4) {{
-            const r = d[p], g = d[p+1], b = d[p+2];
+        // [V37] 테두리 연결 플러드필 — 배경(흰~밝은 회색·그라데이션·JPEG 이음새)만 투명화.
+        //  전역 임계(구 238)와 달리 회색 배경도 제거하고 제품 내부의 밝은 픽셀(금속 광택 등)은 보존.
+        //  임계는 테두리 밝기 중앙값 기반 적응. (00278·01513 실측: 배경 제거 OK, 제품 침식 0)
+        const W = cv.width, H = cv.height;
+        const samp = [];
+        const stepX = Math.max(1, (W / 80) | 0);
+        for (let x = 0; x < W; x += stepX) {{
+            samp.push(Math.min(d[x*4], d[x*4+1], d[x*4+2]));
+            const bIdx = ((H-1)*W + x) * 4;
+            samp.push(Math.min(d[bIdx], d[bIdx+1], d[bIdx+2]));
+        }}
+        samp.sort(function(a, b) {{ return a - b; }});
+        const med = samp.length ? samp[(samp.length / 2) | 0] : 255;
+        const TH = Math.max(200, Math.min(238, med - 18));
+        const SATMAX = 26;
+        function _isBg(p) {{
+            const r = d[p*4], g = d[p*4+1], b = d[p*4+2];
             const mn = Math.min(r, g, b), mx = Math.max(r, g, b);
-            const sat = mx - mn;            // 채도(낮을수록 무채색=흰/회)
-            if (r >= WHITE && g >= WHITE && b >= WHITE && sat <= 18) {{
-                d[p+3] = 0;                 // 완전 투명
-            }} else if (r >= SOFT && g >= SOFT && b >= SOFT && sat <= 24) {{
-                // 경계 픽셀: 밝기에 비례해 부분 투명 (계단현상 완화)
-                const t = (Math.min(r, g, b) - SOFT) / (WHITE - SOFT);
-                d[p+3] = Math.round(255 * (1 - Math.max(0, Math.min(1, t))));
-            }}
+            return mn >= TH && (mx - mn) <= SATMAX;
+        }}
+        const visited = new Uint8Array(W * H);
+        const stack = [];
+        for (let x = 0; x < W; x++) {{
+            const t = x, bt = (H-1)*W + x;
+            if (!visited[t] && _isBg(t)) {{ visited[t] = 1; stack.push(t); }}
+            if (!visited[bt] && _isBg(bt)) {{ visited[bt] = 1; stack.push(bt); }}
+        }}
+        for (let y = 0; y < H; y++) {{
+            const l = y*W, rr = y*W + W - 1;
+            if (!visited[l] && _isBg(l)) {{ visited[l] = 1; stack.push(l); }}
+            if (!visited[rr] && _isBg(rr)) {{ visited[rr] = 1; stack.push(rr); }}
+        }}
+        while (stack.length) {{
+            const p = stack.pop();
+            d[p*4 + 3] = 0;
+            const x = p % W, y = (p / W) | 0;
+            if (x > 0)     {{ const q = p - 1; if (!visited[q] && _isBg(q)) {{ visited[q] = 1; stack.push(q); }} }}
+            if (x < W - 1) {{ const q = p + 1; if (!visited[q] && _isBg(q)) {{ visited[q] = 1; stack.push(q); }} }}
+            if (y > 0)     {{ const q = p - W; if (!visited[q] && _isBg(q)) {{ visited[q] = 1; stack.push(q); }} }}
+            if (y < H - 1) {{ const q = p + W; if (!visited[q] && _isBg(q)) {{ visited[q] = 1; stack.push(q); }} }}
         }}
         cx.putImageData(data, 0, 0);
         cb(cv.toDataURL('image/png'));
@@ -1781,6 +1819,11 @@ function onMouseMove(opt) {{
     canvas.renderAll();
 }}
 function onMouseUp(opt) {{
+    // [V37] 영역자르기: 드래그를 놓는 순간 바로 적용 (두 번째 버튼 클릭 불필요)
+    if (curMode === 'crop' && cropStart && cropRect) {{
+        applyCrop();
+        return;
+    }}
     // 드래그식(누른 채 이동 후 떼기)도 지원: 충분히 움직였으면 확정
     if (curMode === 'pipe' && isPiping && tempLine) {{
         const p = canvas.getPointer(opt.e);
@@ -2272,6 +2315,7 @@ window.addEventListener('resize', zoomFit);
                 _SCS = [_existing_sc] + _SCS
 
             if builder_mode == "✨ 새 세트 만들기":
+                st.caption("✨ 새 세트 모드입니다 — 기존 세트를 고치려면 상단 '빌더 작업 모드'에서 **기존 세트 이미지 편집**을 선택하세요. (모드를 바꿔도 캔버스 부속·배치는 유지됩니다)")
                 new_sname = st.text_input("세트명 (예: [LHC]1-1-5050)", key="builder_new_name2")
             else:
                 new_sname = target_set_name
@@ -2462,7 +2506,7 @@ window.addEventListener('resize', zoomFit);
                             if _HAS_JS_EVAL:
                                 try:
                                     streamlit_js_eval(
-                                        js_expressions="window.parent.localStorage.removeItem('LOOPER_SET_PNG');window.parent.localStorage.removeItem('LOOPER_SET_JSON');window.parent.localStorage.removeItem('LOOPER_SET_TS');window.parent.localStorage.removeItem('LOOPER_SET_READY');window.parent.localStorage.removeItem('LOOPER_WORK');",
+                                        js_expressions="window.parent.localStorage.removeItem('LOOPER_SET_PNG');window.parent.localStorage.removeItem('LOOPER_SET_JSON');window.parent.localStorage.removeItem('LOOPER_SET_TS');window.parent.localStorage.removeItem('LOOPER_SET_READY');window.parent.localStorage.removeItem('LOOPER_WORK');window.parent.localStorage.removeItem('LOOPER_WORK_PARTS');",
                                         key=f"clear_bridge_{int(time.time())}")
                                 except Exception:
                                     pass

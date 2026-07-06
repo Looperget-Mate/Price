@@ -188,7 +188,9 @@ def get_or_create_drive_folder():
         return None  # st.warning 제거 → 반복 오류 메시지 차단
 
 # [V32] 소켓 끊김(Broken pipe 등) 감지 키워드 — 재인증 재시도 판단 공통.
-_SOCKET_ERRS = ("Broken pipe", "Errno 32", "ConnectionReset", "RemoteDisconnected", "EOF occurred")
+_SOCKET_ERRS = ("Broken pipe", "Errno 32", "Errno 104", "10053", "10054",
+                "Connection reset", "Connection aborted", "ConnectionReset",
+                "RemoteDisconnected", "EOF occurred", "IncompleteRead", "timed out")
 
 def upload_image_to_drive(file_obj, filename):
     folder_id = get_or_create_drive_folder()
@@ -196,7 +198,7 @@ def upload_image_to_drive(file_obj, filename):
     def _do():
         buf = io.BytesIO(file_obj.getvalue()); buf.seek(0)
         media = MediaIoBaseUpload(buf, mimetype=file_obj.type, resumable=False)
-        _get_ds().files().create(body={'name': filename, 'parents': [folder_id]}, media_body=media, fields='id', supportsAllDrives=True).execute()
+        _get_ds().files().create(body={'name': filename, 'parents': [folder_id]}, media_body=media, fields='id', supportsAllDrives=True).execute(num_retries=3)
         return filename
     try:
         return _do()
@@ -215,7 +217,7 @@ def upload_set_image_to_drive(file_obj, filename):
     def _do():
         buf = io.BytesIO(file_obj.getvalue()); buf.seek(0)
         media = MediaIoBaseUpload(buf, mimetype=file_obj.type, resumable=False)
-        info = _get_ds().files().create(body={'name': filename, 'parents': [folder_id]}, media_body=media, fields='id', supportsAllDrives=True).execute()
+        info = _get_ds().files().create(body={'name': filename, 'parents': [folder_id]}, media_body=media, fields='id', supportsAllDrives=True).execute(num_retries=3)
         return info.get('id')
     try:
         return _do()
@@ -242,7 +244,7 @@ def upload_bytes_to_drive(byte_data: bytes, filename: str, mimetype: str = "imag
         buf = io.BytesIO(byte_data); buf.seek(0)
         meta = {'name': filename, 'parents': [folder_id]}
         media = MediaIoBaseUpload(buf, mimetype=mimetype, resumable=False)
-        info = _get_ds().files().create(body=meta, media_body=media, fields='id', supportsAllDrives=True).execute()
+        info = _get_ds().files().create(body=meta, media_body=media, fields='id', supportsAllDrives=True).execute(num_retries=3)
         return info.get('id')
     try:
         return _do()
@@ -351,7 +353,7 @@ def _do_download_image(ds, file_id):
     - 드라이브 파일 원본은 건드리지 않음
     """
     request = ds.files().get_media(fileId=file_id)
-    downloader = request.execute()
+    downloader = request.execute(num_retries=3)   # [V36] 소켓 끊김 자동 재시도
     with Image.open(io.BytesIO(downloader)) as img:
         # [V29] 투명 PNG(RGBA/LA/P+투명) → 흰 배경에 합성 후 RGB.
         #  기존 convert('RGB')는 알파를 검정으로 채워, 누끼 PNG가 빌더·견적서에서 검정배경이 되는 사고 유발(V15 §2-6).
@@ -421,14 +423,14 @@ def download_text_from_drive(file_id):
     ds = get_google_services()[1]
     if not ds: return None
     try:
-        raw = ds.files().get_media(fileId=file_id).execute()
+        raw = ds.files().get_media(fileId=file_id).execute(num_retries=3)
         return raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
     except Exception:
         try:
             get_google_services.clear()
             ds2 = get_google_services()[1]
             if ds2:
-                raw = ds2.files().get_media(fileId=file_id).execute()
+                raw = ds2.files().get_media(fileId=file_id).execute(num_retries=3)
                 return raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
         except Exception:
             pass
@@ -449,7 +451,7 @@ def get_admin_ppt_content():
         if not files: return None
         file_id = files[0]['id']
         request = _get_ds().files().get_media(fileId=file_id)
-        return request.execute()
+        return request.execute(num_retries=3)
     except Exception:
         return None
 
@@ -1516,6 +1518,8 @@ window.onload = function() {{
     pushUndo();
     setMode('select');
     setTimeout(zoomFit, 80);   // [V15] 레이아웃 확정 후 영역 맞춤
+    // [V36] 2초 주기 자동저장(안전망) — 개별 훅이 놓친 변경도 리런 전에 보존
+    setInterval(function() {{ if (!_initializing) saveWorkState(); }}, 2000);
 
     // ── 기존 세트 이미지 캔버스 로드 (편집 모드) ─────────────────────
     // [재편집] 빌더로 만든 세트는 캔버스 데이터(JSON)가 있으면 객체를 그대로 복원
@@ -1838,6 +1842,7 @@ function applyProp() {{
     obj.setCoords();
     canvas.renderAll();
     pushUndo();
+    saveWorkStateDebounced();   // [V36] 패널(X/Y/W/H/각도) 조정 영속화 — 프로그램적 set은 object:modified 미발화
 }}
 function applyLineProp() {{
     const obj = canvas.getActiveObject();
@@ -1853,11 +1858,12 @@ function applyLineProp() {{
     obj.setCoords();
     canvas.renderAll();
     pushUndo();
+    saveWorkStateDebounced();   // [V36] 배관 속성 패널 조정 영속화
 }}
 
 // ── 변환 버튼들 ─────────────────────────────────────────────────────
-function flipX() {{ const o=canvas.getActiveObject(); if(o){{ o.set('flipX',!o.flipX); canvas.renderAll(); pushUndo(); }} }}
-function flipY() {{ const o=canvas.getActiveObject(); if(o){{ o.set('flipY',!o.flipY); canvas.renderAll(); pushUndo(); }} }}
+function flipX() {{ const o=canvas.getActiveObject(); if(o){{ o.set('flipX',!o.flipX); canvas.renderAll(); pushUndo(); saveWorkStateDebounced(); }} }}
+function flipY() {{ const o=canvas.getActiveObject(); if(o){{ o.set('flipY',!o.flipY); canvas.renderAll(); pushUndo(); saveWorkStateDebounced(); }} }}
 function bringFwd()   {{ const o=canvas.getActiveObject(); if(o){{ canvas.bringForward(o); pushUndo(); saveWorkState(); }} }}
 function sendBck()    {{ const o=canvas.getActiveObject(); if(o){{ canvas.sendBackwards(o); pushUndo(); saveWorkState(); }} }}
 function bringFront() {{ const o=canvas.getActiveObject(); if(o){{ canvas.bringToFront(o); pushUndo(); saveWorkState(); }} }}
@@ -1878,21 +1884,21 @@ function deleteObj()  {{
 function duplicateObj() {{
     const o = canvas.getActiveObject();
     if (!o) {{ setStatus('복사할 오브젝트를 먼저 선택하세요.'); return; }}
+    // [V36] 부속 복사는 차단 — 복사본은 파이썬 구성에 없어서 리런 때 사라지고 집계와 어긋남.
+    //        수량을 늘리려면 왼쪽 검색에서 추가(구성·캔버스 동시 반영).
+    if (o._looperCode) {{
+        setStatus('부속 수량 추가는 왼쪽 검색에서 [➕ 추가]를 사용하세요. (여기서 복사하면 저장 시 구성과 어긋나고 사라집니다)');
+        return;
+    }}
     o.clone(function(cl) {{
         cl.set({{ left: o.left + 24, top: o.top + 24 }});
-        // 부속(이미지)이면 메타·집계 복제
-        if (o._looperCode) {{
-            cl._looperCode = o._looperCode;
-            cl._looperName = o._looperName;
-            cl._looperSpec = o._looperSpec;
-            cl._objId = ++lastObjId;
-            objRecipe[cl._objId] = {{code:o._looperCode, name:o._looperName, qty:1}};
-        }}
         if (o._isPipe) cl._isPipe = true;
+        if (o._isUserText) cl._isUserText = true;
         canvas.add(cl);
         canvas.setActiveObject(cl);
         canvas.renderAll();
         pushUndo(); updateRecipe();
+        saveWorkState();   // [V36] 배관·텍스트 복사 즉시 영속화
     }});
 }}
 
@@ -1920,6 +1926,7 @@ function applyTextProp() {{
     const fc = document.getElementById('prop-font-color').value;
     o.set({{ fontSize: isNaN(fs) ? o.fontSize : fs, fill: fc }});
     o.setCoords(); canvas.renderAll(); pushUndo();
+    saveWorkStateDebounced();   // [V36] 텍스트 속성 조정 영속화
 }}
 
 // ── [추가] 누끼 여백 자동 자르기 (선택 이미지의 투명 테두리 제거) ──────
@@ -2033,7 +2040,7 @@ function ctxDelete()     {{ deleteObj();  document.getElementById('ctx-menu').st
 
 // ── Undo / Redo ──────────────────────────────────────────────────────
 function pushUndo() {{
-    const state = JSON.stringify(canvas.toJSON(['_looperCode','_looperName','_looperSpec','_objId','_isPipe','_isBgImage','_isUserText']));
+    const state = JSON.stringify(canvas.toJSON(['_looperCode','_looperName','_looperSpec','_objId','_isPipe','_isBgImage','_isUserText','_pendKey']));
     if (undoStack[undoStack.length-1] === state) return;
     undoStack.push(state);
     if (undoStack.length > 50) undoStack.shift();
@@ -2043,13 +2050,13 @@ function doUndo() {{
     if (undoStack.length <= 1) return;
     redoStack.push(undoStack.pop());
     const state = undoStack[undoStack.length-1];
-    canvas.loadFromJSON(state, () => {{ canvas.renderAll(); updateRecipe(); }});
+    canvas.loadFromJSON(state, () => {{ canvas.renderAll(); updateRecipe(); saveWorkStateDebounced(); }});   // [V36] 언두 후 상태 영속화
 }}
 function doRedo() {{
     if (!redoStack.length) return;
     const state = redoStack.pop();
     undoStack.push(state);
-    canvas.loadFromJSON(state, () => {{ canvas.renderAll(); updateRecipe(); }});
+    canvas.loadFromJSON(state, () => {{ canvas.renderAll(); updateRecipe(); saveWorkStateDebounced(); }});   // [V36] 리두 후 상태 영속화
 }}
 
 // ── 레시피 집계 ─────────────────────────────────────────────────────
@@ -2083,7 +2090,7 @@ function downloadPng() {{
 // ── [재편집] 캔버스 데이터(.json) 내려받기 ───────────────────────────
 // 부속 위치/배관/텍스트를 그대로 담은 JSON. 나중에 편집 모드로 불러오면 복원됨.
 function downloadCanvasJson() {{
-    const data = JSON.stringify(canvas.toJSON(['_looperCode','_looperName','_looperSpec','_objId','_isPipe','_isUserText']));
+    const data = JSON.stringify(canvas.toJSON(['_looperCode','_looperName','_looperSpec','_objId','_isPipe','_isUserText','_pendKey']));
     const blob = new Blob([data], {{type:'application/json'}});
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
@@ -2100,7 +2107,7 @@ function downloadCanvasJson() {{
 function sendToApp() {{
     try {{
         const png = exportWhiteBgDataUrl(2);   // 흰배경 합성 PNG dataURL
-        const cjson = JSON.stringify(canvas.toJSON(['_looperCode','_looperName','_looperSpec','_objId','_isPipe','_isUserText']));
+        const cjson = JSON.stringify(canvas.toJSON(['_looperCode','_looperName','_looperSpec','_objId','_isPipe','_isUserText','_pendKey']));
         const store = window.parent && window.parent.localStorage ? window.parent.localStorage : window.localStorage;
         store.setItem('LOOPER_SET_PNG', png);
         store.setItem('LOOPER_SET_JSON', cjson);
@@ -2356,12 +2363,15 @@ window.addEventListener('resize', zoomFit);
                 else:
                     with st.spinner("저장 중..."):
                         fname = f"{new_sname}.png"
-                        # 기존 동일 파일명 삭제(중복 방지)
+                        # 기존 동일 파일명 정리(중복 방지)
+                        # [V36-실측] 서비스계정=공유드라이브 '콘텐츠 관리자' → files().delete(영구삭제)는 404로 항상 실패(관리자 전용).
+                        #  → update(trashed=True) 휴지통 이동으로 교체(canTrash=True 실측 확인). 옛 PNG·canvas.json 누적 방지.
                         try:
                             fmap = get_drive_file_map_deep()
-                            old_id = fmap.get(new_sname)
-                            if old_id:
-                                _get_ds().files().delete(fileId=old_id, supportsAllDrives=True).execute()
+                            for _old_key in (new_sname, f"{new_sname}.canvas"):
+                                _old_id = fmap.get(_old_key)
+                                if _old_id:
+                                    _get_ds().files().update(fileId=_old_id, body={"trashed": True}, supportsAllDrives=True).execute(num_retries=3)
                         except Exception:
                             pass
                         new_id = upload_bytes_to_drive(png_bytes, fname, "image/png")

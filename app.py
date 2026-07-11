@@ -497,7 +497,8 @@ COL_MAP = {
     "소비자가": "price_cons", "단가(현장)": "price_site", 
     "이미지데이터": "image",
     "신정공급가": "price_supply_jp",
-    "최근수정일": "last_updated"
+    "최근수정일": "last_updated",
+    "가격정책": "price_policy"  # [V39] 고정=정책 고정가(재계산 불허, 직접입력만), 빈값=자동
 }
 REV_COL_MAP = {v: k for k, v in COL_MAP.items()}
 
@@ -715,6 +716,65 @@ def recalc_prices_from_buy(old_prod: dict, new_buy: int) -> dict:
         else:
             result[f] = smart_roundup(old_val * ratio, apply_vat_fit=True)
     return result
+
+# ── [V39] 매입단가 변동 시뮬레이터 엔진 (박 대표님 승인 규칙, 2026-07-11) ──
+def snap_band_price(v) -> int:
+    """가격대별 단위 스냅(반올림). ~1천=10원 / 1천~1만=100원 / 1만~10만=100원 / 10만~=1,000원."""
+    try: v = float(v)
+    except (TypeError, ValueError): return 0
+    if v <= 0: return 0
+    unit = 10 if v < 1000 else (100 if v < 100000 else 1000)
+    return int(round(v / unit) * unit)
+
+def margin_pct(sell, buy):
+    """이익율% = (판매-매입)/판매. 기존 이익분석과 동일 기준(VAT포함가 대 VAT포함가)."""
+    try:
+        sell = float(sell or 0); buy = float(buy or 0)
+        if sell <= 0: return None
+        return (sell - buy) / sell * 100.0
+    except (TypeError, ValueError): return None
+
+def price_segment(prod) -> str:
+    """추천 이익율 산출용 세그먼트: 부속은 매입가 밴드 세분, 그 외 카테고리 단위."""
+    cat = str(prod.get("category", "")).strip() or "기타"
+    if cat != "부속": return cat
+    try: buy = float(prod.get("price_buy", 0) or 0)
+    except (TypeError, ValueError): buy = 0
+    if buy < 3000: return "부속·소형"
+    if buy < 20000: return "부속·중형"
+    if buy < 100000: return "부속·대형"
+    return "부속·고가(펌프류)"
+
+def recommend_tier_margins(products: list) -> dict:
+    """세그먼트×단가필드별 권장 이익율%(중앙값) — 데이터가 쌓일수록 추천이 진화."""
+    import statistics
+    pool = {}
+    for p in products:
+        try: buy = float(p.get("price_buy", 0) or 0)
+        except (TypeError, ValueError): buy = 0
+        if buy <= 0: continue
+        seg = price_segment(p)
+        for f in KR_PRICE_FIELDS:
+            if f == "price_buy": continue
+            m = margin_pct(p.get(f), buy)
+            if m is not None and -50 < m < 99:
+                pool.setdefault(seg, {}).setdefault(f, []).append(m)
+    return {seg: {f: statistics.median(v) for f, v in fields.items() if v}
+            for seg, fields in pool.items()}
+
+def recalc_keep_margin(prod: dict, new_buy: int) -> dict:
+    """기존 이익율 유지 재계산 + 단위 스냅. 이익율 산출 불가(기존가 0 등)면 0 유지."""
+    old_buy = float(prod.get("price_buy", 0) or 0)
+    out = {"price_buy": int(new_buy)}
+    for f in KR_PRICE_FIELDS:
+        if f == "price_buy": continue
+        old_v = float(prod.get(f, 0) or 0)
+        if old_v <= 0: out[f] = 0; continue
+        m = margin_pct(old_v, old_buy)
+        if m is None or m >= 100: out[f] = int(old_v); continue
+        raw = new_buy / (1 - m / 100.0) if m < 100 else old_v
+        out[f] = snap_band_price(raw)
+    return out
 
 def sync_products_jp_to_sheet(kr_products: list, exchange_rate: float):
     """한국 Products → Products_JP 자동 동기화. 기존 JP 단가 비율 유지."""
@@ -4263,19 +4323,21 @@ if mode == "관리자 모드" or mode == "管理者モード":
                                 if p["name"] == tp: p["image"] = fid
                             save_products_to_sheet(st.session_state.db["products"]); st.success("완료")
 
-            # ── [V11] 매입단가 변동 → 전체 단가 자동 재계산 ────────────
+            # ── [V39] 매입단가 변동 시뮬레이터 (이익율 검토 → 확정) ────────────
             st.divider()
-            st.markdown("##### 💹 매입단가 변동 → 전체 단가 자동 재계산")
-            with st.expander("품목을 선택하여 매입단가 변경 시 다른 단가를 자동 재계산합니다.", expanded=False):
-                st.info("매입단가를 입력하면 기존 단가 구조(비율)를 유지하며 자동 재계산합니다.\n라운드업 규칙: ~999원→1원 단위 / 1천~9999원→10원 단위 / 1만원~→100원 단위")
+            st.markdown("##### 💹 매입단가 변동 시뮬레이터")
+            with st.expander("매입단가 변경 → 이익율 검토·수정 → 확정 저장", expanded=False):
+                st.info("제안가는 **기존 이익율 유지** 기준이며 단위 스냅(~1천=10원 / 1천~10만=100원 / 10만~=1,000원) 적용. "
+                        "변경후 열을 직접 수정하면 아래 검증표에서 이익율%가 즉시 재계산됩니다. 저장 시 입력값도 단위 스냅됩니다.")
 
                 products_for_recalc = st.session_state.db["products"]
                 recalc_target = st.selectbox(
-                    "재계산 대상 품목 선택",
+                    "대상 품목 선택",
                     products_for_recalc,
                     format_func=lambda p: (
                         f"[{p.get('code','?')}] {p.get('name','')} ({p.get('spec','-')}) "
                         f"| 매입가: {int(p.get('price_buy', 0) or 0):,}원"
+                        + (" | 🔒고정가" if str(p.get('price_policy','')).strip() == "고정" else "")
                         + (f" | 🕒 {p.get('last_updated','')}" if p.get('last_updated') else "")
                     ),
                     key="recalc_product_sel"
@@ -4283,60 +4345,78 @@ if mode == "관리자 모드" or mode == "管理者モード":
 
                 if recalc_target:
                     old_buy = int(recalc_target.get("price_buy", 0) or 0)
-                    col_new_buy, col_preview = st.columns([1, 2])
-                    with col_new_buy:
-                        new_buy_input = st.number_input(
-                            "새 매입단가 (원)", min_value=0, value=old_buy, step=10, key="new_buy_input"
-                        )
+                    _is_fixed = str(recalc_target.get("price_policy", "")).strip() == "고정"
+                    if _is_fixed:
+                        st.warning("🔒 **정책 고정가 품목** (루퍼젯/루퍼젯+송수호스) — 재계산이 적용되지 않습니다. 변경후 열에 직접 입력한 값만 저장됩니다.")
+                    new_buy_input = st.number_input(
+                        "새 매입단가 (원)", min_value=0, value=old_buy, step=10, key="new_buy_input"
+                    )
 
                     if new_buy_input > 0:
-                        # 매입가 변동 여부와 무관하게 항상 editor 표시
-                        preview = recalc_prices_from_buy(recalc_target, new_buy_input)
-                        with col_preview:
-                            st.markdown("**📊 재계산 미리보기**")
-                            preview_rows = []
-                            for fk, label in KR_PRICE_LABELS.items():
-                                old_v = float(recalc_target.get(fk, 0) or 0)
-                                new_v = float(preview.get(fk, 0))
-                                delta = new_v - old_v
-                                fmt = lambda x: round(x, 1) if x < 1000 else int(x)
-                                preview_rows.append({
-                                    "_field": fk,
-                                    "항목": label,
-                                    "기존": fmt(old_v),
-                                    "변경후": fmt(new_v),
-                                })
-                            edited_preview = st.data_editor(
-                                pd.DataFrame(preview_rows),
-                                column_config={
-                                    "_field": None,  # 숨김
-                                    "항목": st.column_config.TextColumn("항목", disabled=True, width="small"),
-                                    "기존": st.column_config.NumberColumn("기존", disabled=True, format="%.1f", width="small"),
-                                    "변경후": st.column_config.NumberColumn("변경후 ✏️", format="%.1f", width="small"),
-                                },
-                                hide_index=True,
-                                use_container_width=True,
-                                key="preview_editor"
-                            )
-                            # 수정된 값으로 preview 덮어쓰기
-                            for _, row in edited_preview.iterrows():
-                                fk = row["_field"]
-                                if fk in preview:
-                                    preview[fk] = row["변경후"]
+                        # 세그먼트 추천 이익율 (해당 세그먼트 품목들의 중앙값 — 데이터 누적 시 자동 진화)
+                        _seg = price_segment(recalc_target)
+                        _rec = recommend_tier_margins(products_for_recalc).get(_seg, {})
+                        _prop = ({f: int(recalc_target.get(f, 0) or 0) for f in KR_PRICE_FIELDS}
+                                 if _is_fixed else recalc_keep_margin(recalc_target, new_buy_input))
+                        _prop["price_buy"] = int(new_buy_input)
+
+                        preview_rows = []
+                        for fk, label in KR_PRICE_LABELS.items():
+                            if fk == "price_buy": continue
+                            old_v = int(float(recalc_target.get(fk, 0) or 0))
+                            m_old = margin_pct(old_v, old_buy)
+                            m_rec = _rec.get(fk)
+                            preview_rows.append({
+                                "_field": fk, "항목": label, "기존가": old_v,
+                                "기존%": round(m_old, 1) if m_old is not None else None,
+                                "추천%": round(m_rec, 1) if m_rec is not None else None,
+                                "변경후": int(_prop.get(fk, 0)),
+                            })
+                        edited_preview = st.data_editor(
+                            pd.DataFrame(preview_rows),
+                            column_config={
+                                "_field": None,
+                                "항목": st.column_config.TextColumn("항목", disabled=True, width="small"),
+                                "기존가": st.column_config.NumberColumn("기존가", disabled=True, format="%d", width="small"),
+                                "기존%": st.column_config.NumberColumn("기존 이익%", disabled=True, format="%.1f", width="small"),
+                                "추천%": st.column_config.NumberColumn(f"추천%({_seg})", disabled=True, format="%.1f", width="small",
+                                                                      help="같은 세그먼트 품목들의 이익율 중앙값"),
+                                "변경후": st.column_config.NumberColumn("변경후 ✏️", format="%d", width="small"),
+                            },
+                            hide_index=True, use_container_width=True,
+                            key=f"preview_editor_{new_buy_input}_{recalc_target.get('code','')}"
+                        )
+
+                        # 검증표: 편집값 → 스냅 결과 + 새 이익율 즉시 재계산
+                        final_prices = {"price_buy": int(new_buy_input)}
+                        check_rows = []
+                        for _, row in edited_preview.iterrows():
+                            fk = row["_field"]
+                            raw_v = float(row["변경후"] or 0)
+                            snapped = raw_v if _is_fixed else snap_band_price(raw_v)
+                            final_prices[fk] = int(snapped)
+                            m_new = margin_pct(snapped, new_buy_input)
+                            check_rows.append({
+                                "항목": row["항목"], "저장될 가격": int(snapped),
+                                "새 이익율%": round(m_new, 1) if m_new is not None else None,
+                                "스냅조정": "→" + format(int(snapped), ",") if int(snapped) != int(raw_v) else "",
+                            })
+                        st.markdown("**✅ 저장 전 검증 — 새 이익 구조**")
+                        st.dataframe(pd.DataFrame(check_rows), hide_index=True, use_container_width=True)
 
                         if new_buy_input != old_buy:
-                            st.warning(f"⚠️ [{recalc_target.get('code')}] {recalc_target.get('name')} 의 단가를 위와 같이 변경합니다.")
+                            st.warning(f"⚠️ [{recalc_target.get('code')}] {recalc_target.get('name')} 의 단가를 위 검증표대로 변경합니다.")
                         else:
-                            st.info(f"ℹ️ 매입가 동일 — 변경후 열을 직접 수정한 항목만 저장됩니다.")
+                            st.info("ℹ️ 매입가 동일 — 변경후 열을 직접 수정한 항목만 반영됩니다.")
                         col_ok, col_cancel = st.columns(2)
                         with col_ok:
-                            if st.button("✅ 확인 — 단가 반영 및 저장", key="btn_recalc_confirm", type="primary"):
+                            if st.button("✅ 확정 — 단가 반영 및 저장", key="btn_recalc_confirm", type="primary"):
                                 target_code = str(recalc_target.get("code", "")).strip()
                                 today_str = datetime.datetime.now().strftime("%Y-%m-%d")
                                 updated_products = []
                                 for p in st.session_state.db["products"]:
                                     if str(p.get("code", "")).strip() == target_code:
-                                        p.update(preview)
+                                        p.update(final_prices)
                                         p["last_updated"] = today_str  # 수정일 기록
                                     updated_products.append(p)
                                 save_products_to_sheet(updated_products)

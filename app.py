@@ -498,7 +498,8 @@ COL_MAP = {
     "이미지데이터": "image",
     "신정공급가": "price_supply_jp",
     "최근수정일": "last_updated",
-    "가격정책": "price_policy"  # [V39] 고정=정책 고정가(재계산 불허, 직접입력만), 빈값=자동
+    "가격정책": "price_policy",  # [V39] 고정=정책 고정가(재계산 불허, 직접입력만), 빈값=자동
+    "세부카테고리": "subcategory"  # [V40] 가격결정용 세분류(쉼표 구분 다중 허용), 기존 '카테고리'와 별개
 }
 REV_COL_MAP = {v: k for k, v in COL_MAP.items()}
 
@@ -735,7 +736,9 @@ def margin_pct(sell, buy):
     except (TypeError, ValueError): return None
 
 def price_segment(prod) -> str:
-    """추천 이익율 산출용 세그먼트: 부속은 매입가 밴드 세분, 그 외 카테고리 단위."""
+    """추천 이익율 산출용 세그먼트: [V40] 세부카테고리 우선(첫 태그), 없으면 구 로직(매입가 밴드)."""
+    sub = str(prod.get("subcategory", "")).split(",")[0].strip()
+    if sub: return sub
     cat = str(prod.get("category", "")).strip() or "기타"
     if cat != "부속": return cat
     try: buy = float(prod.get("price_buy", 0) or 0)
@@ -761,6 +764,37 @@ def recommend_tier_margins(products: list) -> dict:
                 pool.setdefault(seg, {}).setdefault(f, []).append(m)
     return {seg: {f: statistics.median(v) for f, v in fields.items() if v}
             for seg, fields in pool.items()}
+
+def load_price_policy():
+    """[V40] PricePolicy 시트 → {세부카테고리: {티어라벨: 목표이익%}}. 실패/부재 시 빈 dict."""
+    try:
+        sh = gc.open(SHEET_NAME)
+        out = {}
+        for r in sh.worksheet("PricePolicy").get_all_records():
+            sub = str(r.get("세부카테고리", "")).strip()
+            if not sub: continue
+            d = {}
+            for k, v in r.items():
+                if k == "세부카테고리": continue
+                s = str(v).strip()
+                if s:
+                    try: d[k] = float(s)
+                    except ValueError: pass
+            out[sub] = d
+        return out
+    except Exception:
+        return {}
+
+def save_price_policy(policy_rows: list):
+    """[V40] 지침 편집 저장: [{세부카테고리, 티어라벨:%...}] → PricePolicy 시트 재기록."""
+    sh = gc.open(SHEET_NAME)
+    try: ws = sh.worksheet("PricePolicy")
+    except Exception: ws = sh.add_worksheet(title="PricePolicy", rows=40, cols=12)
+    tiers = [lb for fk, lb in KR_PRICE_LABELS.items() if fk != "price_buy"]
+    grid = [["세부카테고리"] + tiers]
+    for r in policy_rows:
+        grid.append([r.get("세부카테고리", "")] + [r.get(t, "") if r.get(t) is not None else "" for t in tiers])
+    ws.clear(); ws.update(grid)
 
 def recalc_keep_margin(prod: dict, new_buy: int) -> dict:
     """기존 이익율 유지 재계산 + 단위 스냅. 이익율 산출 불가(기존가 0 등)면 0 유지."""
@@ -4323,71 +4357,105 @@ if mode == "관리자 모드" or mode == "管理者モード":
                                 if p["name"] == tp: p["image"] = fid
                             save_products_to_sheet(st.session_state.db["products"]); st.success("완료")
 
-            # ── [V39] 매입단가 변동 시뮬레이터 (이익율 검토 → 확정) ────────────
+            # ── [V40] 매입단가 변동 시뮬레이터 v2 (카테고리·지침% 통합) ────────────
             st.divider()
             st.markdown("##### 💹 매입단가 변동 시뮬레이터")
-            with st.expander("매입단가 변경 → 이익율 검토·수정 → 확정 저장", expanded=False):
-                st.info("제안가는 **기존 이익율 유지** 기준이며 단위 스냅(~1천=10원 / 1천~10만=100원 / 10만~=1,000원) 적용. "
-                        "변경후 열을 직접 수정하면 아래 검증표에서 이익율%가 즉시 재계산됩니다. 저장 시 입력값도 단위 스냅됩니다.")
+            with st.expander("매입단가 변경 → 이익구조 검토(기존·추천·지침) → 확정 저장", expanded=False):
+                if "price_policy_map" not in st.session_state:
+                    st.session_state.price_policy_map = load_price_policy()
+                _policy = st.session_state.price_policy_map
 
                 products_for_recalc = st.session_state.db["products"]
-                recalc_target = st.selectbox(
-                    "대상 품목 선택",
-                    products_for_recalc,
-                    format_func=lambda p: (
-                        f"[{p.get('code','?')}] {p.get('name','')} ({p.get('spec','-')}) "
-                        f"| 매입가: {int(p.get('price_buy', 0) or 0):,}원"
-                        + (" | 🔒고정가" if str(p.get('price_policy','')).strip() == "고정" else "")
-                        + (f" | 🕒 {p.get('last_updated','')}" if p.get('last_updated') else "")
-                    ),
-                    key="recalc_product_sel"
-                )
+                _subcats = sorted({s.strip() for p in products_for_recalc
+                                   for s in str(p.get("subcategory", "")).split(",")
+                                   if s.strip() and s.strip() != "관급비용"})
+                col_cat, col_item = st.columns([1, 2])
+                with col_cat:
+                    _sel_cat = st.selectbox("📂 카테고리", ["전체"] + _subcats, key="sim_cat_sel")
+                _pool = [p for p in products_for_recalc
+                         if str(p.get("subcategory", "")).strip() != "관급비용"
+                         and (_sel_cat == "전체"
+                              or _sel_cat in [s.strip() for s in str(p.get("subcategory", "")).split(",")])]
+                with col_item:
+                    recalc_target = st.selectbox(
+                        "🔍 품목", _pool,
+                        format_func=lambda p: (
+                            f"[{p.get('code','?')}] {p.get('name','')} ({p.get('spec','-')}) "
+                            f"| 매입 {int(p.get('price_buy', 0) or 0):,}원"
+                            + (" 🔒" if str(p.get('price_policy','')).strip() == "고정" else "")
+                        ),
+                        key="recalc_product_sel"
+                    ) if _pool else None
 
                 if recalc_target:
                     old_buy = int(recalc_target.get("price_buy", 0) or 0)
                     _is_fixed = str(recalc_target.get("price_policy", "")).strip() == "고정"
-                    if _is_fixed:
-                        st.warning("🔒 **정책 고정가 품목** (루퍼젯/루퍼젯+송수호스) — 재계산이 적용되지 않습니다. 변경후 열에 직접 입력한 값만 저장됩니다.")
+                    _seg = price_segment(recalc_target)
+                    # 선택 품목 헤드라인 카드 — 결정권자가 지금 무엇을 다루는지 크게 표시
+                    st.markdown(
+                        f'<div style="background:#241F1F;border-left:6px solid #F4D624;border-radius:8px;'
+                        f'padding:14px 18px;margin:6px 0 10px 0;">'
+                        f'<span style="font-size:1.45em;font-weight:800;color:#F4D624;">'
+                        f'{"🔒 " if _is_fixed else ""}{recalc_target.get("name","")}</span>'
+                        f'<span style="font-size:1.05em;opacity:.85;"> &nbsp;[{recalc_target.get("code","")}] '
+                        f'{recalc_target.get("spec","")}</span><br>'
+                        f'<span style="font-size:1.1em;">{_seg}'
+                        f'{" · <b>정책 고정가 — 재계산 없음, 직접 입력만</b>" if _is_fixed else ""}'
+                        f' · 현재 매입단가 <b style="font-size:1.25em;color:#F4D624;">{old_buy:,}원</b></span></div>',
+                        unsafe_allow_html=True)
+
                     new_buy_input = st.number_input(
-                        "새 매입단가 (원)", min_value=0, value=old_buy, step=10, key="new_buy_input"
+                        "🟡 새 매입단가 (원)", min_value=0, value=old_buy, step=10, key="new_buy_input"
                     )
 
                     if new_buy_input > 0:
-                        # 세그먼트 추천 이익율 (해당 세그먼트 품목들의 중앙값 — 데이터 누적 시 자동 진화)
-                        _seg = price_segment(recalc_target)
+                        # 이 카테고리의 실제 이익율 현황(중앙값) — 실시간 계산
                         _rec = recommend_tier_margins(products_for_recalc).get(_seg, {})
+                        if _rec:
+                            _cur_row = {KR_PRICE_LABELS[fk]: f"{v:.0f}%" for fk, v in _rec.items() if fk in KR_PRICE_LABELS}
+                            st.caption(f"📊 **{_seg}** 카테고리의 현재 이익율 분포(중앙값) — 이 품목이 속한 시장의 실제 위치")
+                            st.dataframe(pd.DataFrame([_cur_row]), hide_index=True, use_container_width=True)
+
                         _prop = ({f: int(recalc_target.get(f, 0) or 0) for f in KR_PRICE_FIELDS}
                                  if _is_fixed else recalc_keep_margin(recalc_target, new_buy_input))
                         _prop["price_buy"] = int(new_buy_input)
+                        _g_of = _policy.get(_seg, {})  # 회사 지침(티어별 목표 이익%)
 
                         preview_rows = []
                         for fk, label in KR_PRICE_LABELS.items():
                             if fk == "price_buy": continue
                             old_v = int(float(recalc_target.get(fk, 0) or 0))
                             m_old = margin_pct(old_v, old_buy)
-                            m_rec = _rec.get(fk)
+                            g_pct = _g_of.get(label)
+                            g_price = (snap_band_price(new_buy_input / (1 - g_pct / 100.0))
+                                       if (g_pct is not None and g_pct < 100 and not _is_fixed) else None)
                             preview_rows.append({
                                 "_field": fk, "항목": label, "기존가": old_v,
                                 "기존%": round(m_old, 1) if m_old is not None else None,
-                                "추천%": round(m_rec, 1) if m_rec is not None else None,
+                                "추천가": int(_prop.get(fk, 0)),
+                                "지침%": g_pct,
+                                "지침가": g_price,
                                 "변경후": int(_prop.get(fk, 0)),
                             })
+                        st.markdown("**세 가지 기준을 놓고 결정하세요** — ①기존 이익율 유지 시 **추천가** ②회사 **지침%** 적용 시 **지침가** ③판단 반영한 **변경후✏️**")
                         edited_preview = st.data_editor(
                             pd.DataFrame(preview_rows),
                             column_config={
                                 "_field": None,
                                 "항목": st.column_config.TextColumn("항목", disabled=True, width="small"),
                                 "기존가": st.column_config.NumberColumn("기존가", disabled=True, format="%d", width="small"),
-                                "기존%": st.column_config.NumberColumn("기존 이익%", disabled=True, format="%.1f", width="small"),
-                                "추천%": st.column_config.NumberColumn(f"추천%({_seg})", disabled=True, format="%.1f", width="small",
-                                                                      help="같은 세그먼트 품목들의 이익율 중앙값"),
-                                "변경후": st.column_config.NumberColumn("변경후 ✏️", format="%d", width="small"),
+                                "기존%": st.column_config.NumberColumn("기존%", disabled=True, format="%.1f", width="small"),
+                                "추천가": st.column_config.NumberColumn("추천가(기존%유지)", disabled=True, format="%d", width="small"),
+                                "지침%": st.column_config.NumberColumn("지침%", disabled=True, format="%.0f", width="small",
+                                                                      help="회사가 정한 티어별 목표 이익율(PricePolicy). 아래 '가격 지침 관리'에서 수정"),
+                                "지침가": st.column_config.NumberColumn("지침가", disabled=True, format="%d", width="small"),
+                                "변경후": st.column_config.NumberColumn("변경후 ✏️", format="%d", width="medium"),
                             },
                             hide_index=True, use_container_width=True,
                             key=f"preview_editor_{new_buy_input}_{recalc_target.get('code','')}"
                         )
 
-                        # 검증표: 편집값 → 스냅 결과 + 새 이익율 즉시 재계산
+                        # 검증표: 편집값 → 스냅 결과 + 새 이익율 + 지침 대비 편차 즉시 재계산
                         final_prices = {"price_buy": int(new_buy_input)}
                         check_rows = []
                         for _, row in edited_preview.iterrows():
@@ -4396,12 +4464,15 @@ if mode == "관리자 모드" or mode == "管理者モード":
                             snapped = raw_v if _is_fixed else snap_band_price(raw_v)
                             final_prices[fk] = int(snapped)
                             m_new = margin_pct(snapped, new_buy_input)
+                            g_pct = row["지침%"]
+                            gap = (round(m_new - float(g_pct), 1) if (m_new is not None and g_pct is not None and not pd.isna(g_pct)) else None)
                             check_rows.append({
                                 "항목": row["항목"], "저장될 가격": int(snapped),
                                 "새 이익율%": round(m_new, 1) if m_new is not None else None,
+                                "지침 대비(%p)": (f"{gap:+.1f}" if gap is not None else ""),
                                 "스냅조정": "→" + format(int(snapped), ",") if int(snapped) != int(raw_v) else "",
                             })
-                        st.markdown("**✅ 저장 전 검증 — 새 이익 구조**")
+                        st.markdown("**✅ 저장 전 검증 — 새 이익 구조** (지침 대비 +면 지침보다 이익 높음)")
                         st.dataframe(pd.DataFrame(check_rows), hide_index=True, use_container_width=True)
 
                         if new_buy_input != old_buy:
@@ -4448,6 +4519,35 @@ if mode == "관리자 모드" or mode == "管理者モード":
                         if st.button("나중에", key="btn_jp_sync_no"):
                             st.session_state.pending_jp_sync = False
                             st.rerun()
+
+            # ── [V40] 가격 지침(티어별 목표 이익%) 관리 ────────────
+            with st.expander("📐 가격 지침 관리 — 카테고리×티어별 목표 이익% (시뮬레이터의 '지침%' 원본)", expanded=False):
+                st.caption("여기 값이 시뮬레이터의 지침%·지침가로 표시됩니다. 초기값은 기존 데이터의 이익율 중앙값 — 회사 방침에 맞게 다듬어 저장하세요.")
+                if "price_policy_map" not in st.session_state:
+                    st.session_state.price_policy_map = load_price_policy()
+                _pol_rows = []
+                _tier_labels = [lb for fk, lb in KR_PRICE_LABELS.items() if fk != "price_buy"]
+                for _sub, _d in sorted(st.session_state.price_policy_map.items()):
+                    _pol_rows.append({"세부카테고리": _sub, **{t: _d.get(t) for t in _tier_labels}})
+                if _pol_rows:
+                    _pol_edit = st.data_editor(
+                        pd.DataFrame(_pol_rows),
+                        column_config={"세부카테고리": st.column_config.TextColumn("세부카테고리", disabled=True)},
+                        hide_index=True, use_container_width=True, key="policy_editor")
+                    c_ps, c_pr = st.columns(2)
+                    with c_ps:
+                        if st.button("💾 지침 저장", key="btn_policy_save", type="primary"):
+                            try:
+                                save_price_policy(_pol_edit.to_dict("records"))
+                                st.session_state.price_policy_map = load_price_policy()
+                                st.success("✅ 가격 지침 저장 완료"); st.rerun()
+                            except Exception as _pe:
+                                st.error(f"저장 실패: {_pe}")
+                    with c_pr:
+                        if st.button("🔄 시트에서 다시 불러오기", key="btn_policy_reload"):
+                            st.session_state.price_policy_map = load_price_policy(); st.rerun()
+                else:
+                    st.info("PricePolicy 시트가 비어있습니다. 시트에 지침을 입력하거나 관리자에게 문의하세요.")
 
             # ── [V11] 일본 Products_JP 일괄 동기화 ──────────────────────
             st.divider()

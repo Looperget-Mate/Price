@@ -898,6 +898,81 @@ def aq_save_sites(sites_rows):
     grid = [hdrs] + [[str(s.get(h, "")) for h in hdrs] for s in sites_rows]
     ws.clear(); ws.update(grid, value_input_option='RAW')
 
+# ── [V44] 표준 시스템(Aqunaris V1) — 도면 1:7.5 역산 상수 + 재현 검증 엔진 ──
+#  근거: Aqunaris V1.ai 벡터 실측(2026-07-18). 상자 개수 91/54/53/38 = 구매수량과 정확 일치.
+#  검증 모델: 층수 = floor(단높이/상자높이), Σ(상자폭÷층수) ≤ 내측폭 862 → V1 실배치 51/51단 적합.
+AQ_STD_SITE = "표준(Aqunaris V1)"
+AQ_STD_INNER = 862          # 랙 W900 - 기둥(19×2)
+AQ_STD_RACK_H = {
+    "01": [1042, 727], "02": [405, 442, 405, 517], "03": [292, 330, 1148],
+    "04": [405, 368, 330, 668], "05": [368, 368, 368, 668], "06": [368, 405, 375, 623],
+    "07": [292, 292, 292, 255, 638], "08": [292, 292, 292, 255, 638],
+    "09": [292, 292, 292, 255, 638], "10": [292, 292, 292, 255, 638],
+    "11": [292, 292, 292, 255, 638], "12": [292, 292, 292, 255, 638],
+}
+
+def aq_box_dims_map(boxes):
+    """AQ_Boxes → {상자종류: (폭mm, 높이mm)} (치수 있는 것만)."""
+    out = {}
+    for b in boxes:
+        name = str(b.get("상자종류", "")).strip()
+        try:
+            w = int(float(str(b.get("폭mm") or 0))); h = int(float(str(b.get("높이mm") or 0)))
+        except Exception:
+            continue
+        if name and w > 0 and h > 0: out[name] = (w, h)
+    return out
+
+def aq_capacity_rows(aq_items, plan_items, box_dims, rack_h_by_sec, inner=AQ_STD_INNER, inner_by_sec=None):
+    """표준 위치(섹션-단) 기반 단별 용량 검증. plan_items의 상자 오버라이드 반영.
+    반환: [{섹션,단,단높이,품목수,사용폭,판정,미지정}]"""
+    shelf = {}
+    for r in aq_items:
+        sec = str(r.get("섹션", "")).strip()
+        dan = str(r.get("단", "")).strip()
+        if not sec or not dan: continue
+        code = r["품목코드"]
+        ov = plan_items.get(code, {}) if isinstance(plan_items, dict) else {}
+        box = str((ov.get("box") if isinstance(ov, dict) else "") or r.get("기본상자") or "").strip()
+        shelf.setdefault((sec, dan), []).append(box)
+    rows = []
+    for (sec, dan), boxes_on in sorted(shelf.items()):
+        hs = rack_h_by_sec.get(sec, [])
+        try: dan_h = hs[int(dan) - 1] if 0 < int(dan) <= len(hs) else 0
+        except Exception: dan_h = 0
+        used = 0.0; unknown = 0
+        for bx in boxes_on:
+            if bx not in box_dims:
+                unknown += 1; continue
+            w, h = box_dims[bx]
+            layers = max(1, dan_h // h) if dan_h else 1
+            used += w / layers
+        _inner = (inner_by_sec or {}).get(sec, inner)
+        rows.append({"섹션": sec, "단": dan, "단높이": dan_h, "품목수": len(boxes_on),
+                     "사용폭": int(round(used)), "내측폭": _inner,
+                     "판정": "✓ 적합" if used <= _inner else "⚠ 초과", "미지정": unknown})
+    return rows
+
+def aq_std_payload(aq_items):
+    """표준 사이트의 랙구성·배치 JSON 생성 (AQ_Items 기본값 기반)."""
+    plan_items, groups = {}, set()
+    for r in aq_items:
+        box = str(r.get("기본상자", "")).strip()
+        try: qty = int(float(str(r.get("기본수량") or 0)))
+        except Exception: qty = 0
+        g = str(r.get("진열분류", "")).strip()
+        if g: groups.add(g)
+        if box or qty:
+            plan_items[r["품목코드"]] = {"box": box, "qty": qty, "ori": "세로"}
+    racks = []
+    for s in sorted(AQ_STD_RACK_H):
+        racks.append({"명칭": f"섹션{s}", "폭mm": 900, "깊이mm": 450, "단수": len(AQ_STD_RACK_H[s]),
+                      "단높이mm(콤마구분)": ",".join(str(x) for x in AQ_STD_RACK_H[s]),
+                      "단깊이mm(콤마구분)": "", "비고": "표준(V1 역산)"})
+    plan = {"groups": sorted(groups), "items": plan_items,
+            "updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M") + " (표준)"}
+    return racks, plan
+
 def sync_products_jp_to_sheet(kr_products: list, exchange_rate: float):
     """한국 Products → Products_JP 자동 동기화. 기존 JP 단가 비율 유지."""
     if not gc:
@@ -4875,7 +4950,7 @@ elif mode == "🏪 아쿠나리스":
             if aq_sites:
                 df_sites = pd.DataFrame(aq_sites)
                 cols_show = [c for c in ["농협ID", "농협명", "지역", "상태", "설치일", "비고"] if c in df_sites.columns]
-                st.dataframe(df_sites[cols_show], hide_index=True)
+                st.dataframe(df_sites[cols_show].astype(str), hide_index=True)
             else:
                 st.info("등록된 농협이 없습니다. (AQ_Sites 시트)")
 
@@ -4926,12 +5001,13 @@ elif mode == "🏪 아쿠나리스":
                 p = prod_by_code.get(r["품목코드"], {})
                 loc = "-".join(str(x) for x in [r.get("섹션", ""), r.get("단", ""), r.get("열", "")] if str(x).strip())
                 rows_view.append({
-                    "품목코드": r["품목코드"], "품목명": r.get("품목명_AQ", ""), "규격": r.get("규격_AQ", ""),
-                    "진열분류": r.get("진열분류", ""), "위치(섹션-단-열)": loc,
-                    "기본상자": r.get("기본상자", ""), "기본수량": r.get("기본수량", ""),
+                    "품목코드": r["품목코드"], "품목명": str(r.get("품목명_AQ", "") or ""), "규격": str(r.get("규격_AQ", "") or ""),
+                    "진열분류": str(r.get("진열분류", "") or ""), "위치(섹션-단-열)": loc,
+                    "기본상자": str(r.get("기본상자", "") or ""), "기본수량": str(r.get("기본수량", "") or ""),
                     "수용기록": len(aq_caps.get(r["품목코드"], {})),
-                    "스티커": r.get("스티커", ""), "지역농협가": p.get("price_nh_loc", ""),
-                    "소비자가": p.get("price_cons", ""), "계통등록": r.get("계통등록", ""), "상태": r.get("상태", ""),
+                    "스티커": str(r.get("스티커", "") or ""), "지역농협가": str(p.get("price_nh_loc", "") or ""),
+                    "소비자가": str(p.get("price_cons", "") or ""), "계통등록": str(r.get("계통등록", "") or ""),
+                    "상태": str(r.get("상태", "") or ""),
                 })
             st.caption(f"표시 {len(rows_view)}개 품목 (매입가 미표시 · 기본상자/기본수량은 폴백 기본값, 실제 배치는 사이트별 조정 · 수용기록=축적된 상자별 수용량 데이터 수)")
             st.dataframe(pd.DataFrame(rows_view), hide_index=True, height=480)
@@ -4972,7 +5048,7 @@ elif mode == "🏪 아쿠나리스":
                     bx = str(r.get("기본상자", "")).strip()
                     if bx: box_cnt[bx] = box_cnt.get(bx, 0) + 1
                     det_rows.append({
-                        "품목코드": r["품목코드"], "품목명": r.get("품목명_AQ", ""), "규격": r.get("규격_AQ", ""),
+                        "품목코드": r["품목코드"], "품목명": str(r.get("품목명_AQ", "") or ""), "규격": str(r.get("규격_AQ", "") or ""),
                         "상자": bx, "수량": q_fill, "지역농협가": int(unit), "금액": int(amt),
                     })
                 box_sum = sum(aq_box_prices.get(b, 0) * n for b, n in box_cnt.items()) if aq_inc_box else 0
@@ -5007,7 +5083,7 @@ elif mode == "🏪 아쿠나리스":
                 if aq_boxes:
                     df_bx = pd.DataFrame(aq_boxes)
                     _cols_show = [c for c in ["상자종류", "폭mm", "깊이mm", "높이mm", "단가", "상태", "비고"] if c in df_bx.columns]
-                    st.dataframe(df_bx[_cols_show], hide_index=True)
+                    st.dataframe(df_bx[_cols_show].astype(str), hide_index=True)
                 else:
                     st.info("등록된 상자가 없습니다.")
             with c_add:
@@ -5080,7 +5156,7 @@ elif mode == "🏪 아쿠나리스":
                 st.markdown("##### 🕘 최근 기록")
                 if aq_itembox:
                     _recent = aq_itembox[-15:][::-1]
-                    st.dataframe(pd.DataFrame(_recent), hide_index=True, height=280)
+                    st.dataframe(pd.DataFrame(_recent).astype(str), hide_index=True, height=280)
                 else:
                     st.info("기록이 없습니다.")
 
@@ -5089,7 +5165,38 @@ elif mode == "🏪 아쿠나리스":
             aq_sites_all = aq_load_sites()
             st.markdown("##### 🏢 농협(사이트) 선택")
             _site_names = [str(s.get("농협명", "")).strip() for s in aq_sites_all]
-            sel_site = st.selectbox("사이트", ["(신규 등록)"] + _site_names, key="aq_site_sel")
+            # [V44] 표준 불러오기 후 자동 선택 점프 (위젯 생성 전에만 키 설정 가능)
+            if st.session_state.get("_aq_site_jump"):
+                _jump = st.session_state.pop("_aq_site_jump")
+                if _jump in _site_names:
+                    st.session_state["aq_site_sel"] = _jump
+            c_sel, c_std = st.columns([3, 2])
+            with c_sel:
+                sel_site = st.selectbox("사이트", ["(신규 등록)"] + _site_names, key="aq_site_sel")
+            with c_std:
+                st.caption("V1 도면 역산 표준 시스템(랙 12대+전 품목 배치)을 사이트로 생성/재설정합니다.")
+                if st.button("📐 표준 시스템(Aqunaris V1) 불러오기", key="aq_std_load"):
+                    try:
+                        _racks_std, _plan_std = aq_std_payload(aq_items)
+                        _found_std = False
+                        for s in aq_sites_all:
+                            if str(s.get("농협명", "")).strip() == AQ_STD_SITE:
+                                s["랙구성JSON"] = json.dumps(_racks_std, ensure_ascii=False)
+                                s["배치JSON"] = json.dumps(_plan_std, ensure_ascii=False)
+                                s["상태"] = "표준"; _found_std = True
+                        if not _found_std:
+                            aq_sites_all.append({"농협ID": "S000", "농협명": AQ_STD_SITE, "지역": "-",
+                                                 "상태": "표준", "설치일": "2023-03",
+                                                 "랙구성JSON": json.dumps(_racks_std, ensure_ascii=False),
+                                                 "배치JSON": json.dumps(_plan_std, ensure_ascii=False),
+                                                 "견적ID": "", "담당자": "",
+                                                 "비고": "V1 도면 역산 표준 시스템 — 검증 기준"})
+                        aq_save_sites(aq_sites_all)
+                        aq_load_sites.clear()
+                        st.session_state["_aq_site_jump"] = AQ_STD_SITE
+                        st.success("표준 시스템 생성/갱신 완료"); time.sleep(0.5); st.rerun()
+                    except Exception as e:
+                        st.error(f"표준 불러오기 실패: {e}")
 
             if sel_site == "(신규 등록)":
                 with st.form("aq_site_add_form", clear_on_submit=True):
@@ -5135,6 +5242,11 @@ elif mode == "🏪 아쿠나리스":
                         "깊이mm": st.column_config.NumberColumn(format="%d"),
                         "단수": st.column_config.NumberColumn(format="%d"),
                     })
+                # [V44] 슬롯·층수 힌트 (상자 치수 기반)
+                _dims_hint = aq_box_dims_map(aq_boxes)
+                if _dims_hint:
+                    _hint = " · ".join(f"{n} {AQ_STD_INNER // wh[0]}칸" for n, wh in sorted(_dims_hint.items()))
+                    st.caption(f"표준 랙(W900, 내측 862mm) 단당 칸수: {_hint} — 층수 = 단높이 ÷ 상자높이 (예: 단높이 292 → 431-1호(112) 2층, 3호(116) 2층)")
 
                 st.markdown("##### 🧩 진열 계획 — 품목별 상자·방향·수량 (기본값 프리필, 자유 조정)")
                 # [V43] 배치 방향: 세로=표준(상자 폭이 전면 → 단 폭당 최다 배치, 단 깊이 ≥ 상자 깊이 필요)
@@ -5168,7 +5280,7 @@ elif mode == "🏪 아쿠나리스":
                         try: _unit_i = int(float(_p.get("price_nh_loc") or 0))
                         except Exception: _unit_i = 0
                         _rows_plan.append({
-                            "품목코드": _code, "품목명": r.get("품목명_AQ", ""), "규격": r.get("규격_AQ", ""),
+                            "품목코드": _code, "품목명": str(r.get("품목명_AQ", "") or ""), "규격": str(r.get("규격_AQ", "") or ""),
                             "수용정보": _cap_txt, "상자": _box_def, "방향": _ori_def, "수량": _qty_def, "지역농협가": _unit_i,
                         })
                     _box_opts = sorted(set(aq_box_names) | {rp["상자"] for rp in _rows_plan if rp["상자"]})
@@ -5214,6 +5326,50 @@ elif mode == "🏪 아쿠나리스":
                         key=f"aq_site_csv_{sel_site}")
                 else:
                     st.info("진열분류를 선택하면 품목별 계획 표가 나타납니다.")
+
+                # ── [V44] 표준 배치 검증 — 랙 단높이 × 상자 치수 × 실배치(V1 위치)로 단별 용량 판정 ──
+                with st.expander("📏 배치 검증 (V1 표준 위치 기준 — 층수 모델)", expanded=(sel_site == AQ_STD_SITE)):
+                    _dims_v = aq_box_dims_map(aq_boxes)
+                    _rack_h_map, _inner_by_sec = {}, {}
+                    for _, _rr in df_racks_ed.iterrows():
+                        _nm2 = str(_rr.get("명칭") or "")
+                        if "섹션" not in _nm2: continue
+                        _digits = "".join(ch for ch in _nm2 if ch.isdigit())
+                        if not _digits: continue
+                        _sec2 = _digits.zfill(2)
+                        try:
+                            _hs = [int(float(x)) for x in str(_rr.get("단높이mm(콤마구분)") or "").split(",") if str(x).strip()]
+                        except Exception:
+                            _hs = []
+                        if _hs: _rack_h_map[_sec2] = _hs
+                        try:
+                            _wv = int(float(_rr.get("폭mm") or 0))
+                            if _wv > 0: _inner_by_sec[_sec2] = _wv - 38
+                        except Exception:
+                            pass
+                    if not _dims_v:
+                        st.info("상자 치수가 없습니다. '📦 상자·수용량' 탭에서 폭·높이를 등록하세요.")
+                    elif not _rack_h_map:
+                        st.info("랙 구성에 '섹션NN' 명칭의 랙이 없습니다. 📐 표준 시스템 불러오기를 누르면 자동 구성됩니다.")
+                    else:
+                        _pi_live = dict(_plan_items) if isinstance(_plan_items, dict) else {}
+                        if edited_plan is not None:
+                            for _, _row in edited_plan.iterrows():
+                                _pi_live[str(_row["품목코드"])] = {"box": str(_row["상자"] or "").strip()}
+                        _vr = aq_capacity_rows(aq_items, _pi_live, _dims_v, _rack_h_map, inner_by_sec=_inner_by_sec)
+                        _n_ok = sum(1 for v in _vr if v["판정"].startswith("✓"))
+                        _n_unk = sum(v["미지정"] for v in _vr)
+                        cv1, cv2, cv3 = st.columns(3)
+                        cv1.metric("검증 단(선반)", f"{len(_vr)}")
+                        cv2.metric("적합", f"{_n_ok} / {len(_vr)}")
+                        cv3.metric("상자 미지정 품목", f"{_n_unk}")
+                        if _n_ok == len(_vr) and _vr:
+                            st.success("✅ 전 단 적합 — 표준 시스템과 동일한 배치가 재현됩니다. (Σ상자폭÷층수 ≤ 내측폭)")
+                        elif _vr:
+                            st.warning("⚠ 초과 단이 있습니다. 상자 변경(가로/작은 상자) 또는 단높이 조정을 검토하세요.")
+                        _only_bad = st.checkbox("초과 단만 보기", value=False, key=f"aq_v_bad_{sel_site}")
+                        _vshow = [v for v in _vr if not _only_bad or v["판정"].startswith("⚠")]
+                        st.dataframe(pd.DataFrame(_vshow), hide_index=True, height=300)
 
                 if st.button("💾 사이트 저장 (랙 구성 + 진열 계획)", type="primary", key=f"aq_site_save_{sel_site}"):
                     try:

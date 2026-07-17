@@ -810,6 +810,39 @@ def recalc_keep_margin(prod: dict, new_buy: int) -> dict:
         out[f] = snap_band_price(raw)
     return out
 
+# ==========================================
+# [V41] 아쿠나리스(농협 관수코너) — 시트 로드 (읽기 전용)
+#  - 단가 정본은 Products. AQ_Items는 진열 속성만 담는다(단가 컬럼 없음).
+#  - 저장 기능은 없음(Phase B에서 배치 저장 도입 시 §2-2 clear+update 패턴 적용 예정).
+# ==========================================
+@st.cache_data(ttl=600)
+def aq_load_items():
+    """AQ_Items 시트 → list[dict]. 품목코드 zfill(5)·섹션 zfill(2) 정규화."""
+    if not gc: return []
+    try:
+        recs = gc.open(SHEET_NAME).worksheet("AQ_Items").get_all_records()
+    except Exception:
+        return []
+    out = []
+    for r in recs:
+        code = str(r.get("품목코드", "")).strip()
+        if not code: continue
+        r["품목코드"] = code.zfill(5)
+        sec = str(r.get("섹션", "")).strip()
+        r["섹션"] = sec.zfill(2) if sec else ""
+        out.append(r)
+    return out
+
+@st.cache_data(ttl=600)
+def aq_load_sites():
+    """AQ_Sites 시트 → list[dict] (농협명 있는 행만)."""
+    if not gc: return []
+    try:
+        recs = gc.open(SHEET_NAME).worksheet("AQ_Sites").get_all_records()
+    except Exception:
+        return []
+    return [r for r in recs if str(r.get("농협명", "")).strip()]
+
 def sync_products_jp_to_sheet(kr_products: list, exchange_rate: float):
     """한국 Products → Products_JP 자동 동기화. 기존 JP 단가 비율 유지."""
     if not gc:
@@ -4100,7 +4133,7 @@ with st.sidebar:
     st.divider()
 
     if st.session_state.app_lang == "KR":
-        mode = st.radio("모드", ["견적 작성", "관리자 모드", "🇯🇵 일본 수출 분석"], key="main_sidebar_mode")
+        mode = st.radio("모드", ["견적 작성", "🏪 아쿠나리스", "관리자 모드", "🇯🇵 일본 수출 분석"], key="main_sidebar_mode")  # [V41] 아쿠나리스 추가
     else:
         mode = st.radio("モード", ["見積作成", "管理者モード"], key="main_sidebar_mode")
 
@@ -4746,6 +4779,152 @@ if mode == "관리자 모드" or mode == "管理者モード":
                     st.success("비밀번호가 성공적으로 변경되었습니다!")
                 except Exception as e:
                     st.error(f"비밀번호 저장 실패: {e}")
+
+elif mode == "🏪 아쿠나리스":
+    # ==========================================
+    # [V41] 아쿠나리스(농협 관수코너) 모드 — Phase A 골격
+    #  현황 / 진열 품목 브라우저 / 진열 공급 간이 견적. 전부 읽기 전용(시트 쓰기 없음).
+    # ==========================================
+    st.header("🏪 아쿠나리스 — 농협 관수코너")
+    st.caption("지역농협 자재센터 진열·관리 시스템 (Aqunaris®) · 단가 정본 = Products 시트 · 진열 속성 = AQ_Items 시트")
+
+    aq_items = aq_load_items()
+    if not aq_items:
+        st.warning("AQ_Items 시트를 읽지 못했습니다. Looperget_DB에 AQ_Items 시트가 있는지 확인하세요.")
+        if st.button("🔄 다시 시도", key="aq_retry"):
+            aq_load_items.clear(); aq_load_sites.clear(); st.rerun()
+    else:
+        prod_by_code = {str(p.get("code", "")).zfill(5): p for p in st.session_state.db.get("products", [])}
+        aq_groups = sorted({(r.get("진열분류") or "(미지정)") for r in aq_items})
+
+        if st.button("🔄 아쿠나리스 데이터 새로고침", key="aq_refresh"):
+            aq_load_items.clear(); aq_load_sites.clear(); st.rerun()
+
+        tab_stat, tab_items, tab_quote = st.tabs(["📊 현황", "🗄️ 진열 품목", "🧮 진열 공급 견적(간이)"])
+
+        # ── 현황 ─────────────────────────────────────────
+        with tab_stat:
+            st.markdown("##### 🏢 설치 농협 (AQ_Sites)")
+            aq_sites = aq_load_sites()
+            if aq_sites:
+                df_sites = pd.DataFrame(aq_sites)
+                cols_show = [c for c in ["농협ID", "농협명", "지역", "상태", "설치일", "비고"] if c in df_sites.columns]
+                st.dataframe(df_sites[cols_show], hide_index=True)
+            else:
+                st.info("등록된 농협이 없습니다. (AQ_Sites 시트)")
+
+            st.markdown("##### 📦 진열 품목 DB 요약 (AQ_Items)")
+            n_loc = sum(1 for r in aq_items if r.get("섹션"))
+            n_88 = sum(1 for r in aq_items if str(r.get("표준바코드", "")).strip())
+            n_link = sum(1 for r in aq_items if r["품목코드"] in prod_by_code)
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("품목 수", f"{len(aq_items)}")
+            m2.metric("위치 지정", f"{n_loc}")
+            m3.metric("88바코드 보유", f"{n_88}")
+            m4.metric("Products 연결", f"{n_link}")
+            if n_link < len(aq_items):
+                miss = [r["품목코드"] for r in aq_items if r["품목코드"] not in prod_by_code]
+                st.warning(f"Products에 없는 코드 {len(miss)}건: {', '.join(miss[:10])}{' 외' if len(miss) > 10 else ''}")
+
+            cnt_g = {}
+            for r in aq_items:
+                g = r.get("진열분류") or "(미지정)"
+                cnt_g[g] = cnt_g.get(g, 0) + 1
+            cnt_b = {}
+            for r in aq_items:
+                b = str(r.get("상자종류", "")).strip() or "(미지정)"
+                cnt_b[b] = cnt_b.get(b, 0) + 1
+            c_g, c_b = st.columns(2)
+            with c_g:
+                st.caption("진열분류별 품목수")
+                st.dataframe(pd.DataFrame(sorted(cnt_g.items(), key=lambda x: -x[1]), columns=["진열분류", "품목수"]), hide_index=True)
+            with c_b:
+                st.caption("상자종류별 품목수")
+                st.dataframe(pd.DataFrame(sorted(cnt_b.items(), key=lambda x: -x[1]), columns=["상자종류", "품목수"]), hide_index=True)
+
+        # ── 진열 품목 브라우저 ────────────────────────────
+        with tab_items:
+            c_f1, c_f2 = st.columns([2, 3])
+            with c_f1:
+                aq_g_sel = st.selectbox("진열분류", ["전체"] + aq_groups, key="aq_grp_sel")
+            with c_f2:
+                aq_kw = st.text_input("검색 (코드/품목명/규격)", key="aq_kw")
+            rows_view = []
+            for r in aq_items:
+                if aq_g_sel != "전체" and (r.get("진열분류") or "(미지정)") != aq_g_sel:
+                    continue
+                hay = f"{r['품목코드']} {r.get('품목명_AQ', '')} {r.get('규격_AQ', '')}".lower()
+                if aq_kw and aq_kw.strip() and aq_kw.strip().lower() not in hay:
+                    continue
+                p = prod_by_code.get(r["품목코드"], {})
+                loc = "-".join(str(x) for x in [r.get("섹션", ""), r.get("단", ""), r.get("열", "")] if str(x).strip())
+                rows_view.append({
+                    "품목코드": r["품목코드"], "품목명": r.get("품목명_AQ", ""), "규격": r.get("규격_AQ", ""),
+                    "진열분류": r.get("진열분류", ""), "위치(섹션-단-열)": loc,
+                    "상자": r.get("상자종류", ""), "상자당수량": r.get("상자당수량", ""),
+                    "스티커": r.get("스티커", ""), "지역농협가": p.get("price_nh_loc", ""),
+                    "소비자가": p.get("price_cons", ""), "계통등록": r.get("계통등록", ""), "상태": r.get("상태", ""),
+                })
+            st.caption(f"표시 {len(rows_view)}개 품목 (매입가는 표시하지 않음)")
+            st.dataframe(pd.DataFrame(rows_view), hide_index=True, height=480)
+
+        # ── 진열 공급 간이 견적 ───────────────────────────
+        with tab_quote:
+            st.caption("선택한 진열분류의 부속상자를 '상자당수량(최소 채움)'으로 채우는 초도 공급 견적 미리보기. 단가 = Products 지역농협가. 계통2(5%) 수수료는 부속 합계 기준 참고 표시.")
+            aq_q_groups = st.multiselect("진열분류 선택", aq_groups, key="aq_q_groups")
+            with st.expander("📦 상자(하드웨어) 단가 — 기본값은 2023년 구매가, 필요 시 수정", expanded=False):
+                cb1, cb2, cb3, cb4 = st.columns(4)
+                aq_box_prices = {
+                    "3호": cb1.number_input("3호", value=2500, step=100, key="aq_bx_3"),
+                    "6호": cb2.number_input("6호", value=4800, step=100, key="aq_bx_6"),
+                    "431-1호": cb3.number_input("431-1호", value=6000, step=100, key="aq_bx_431"),
+                    "432호": cb4.number_input("432호", value=6600, step=100, key="aq_bx_432"),
+                }
+                aq_inc_box = st.checkbox("상자 하드웨어 포함", value=True, key="aq_inc_box")
+            if not aq_q_groups:
+                st.info("진열분류를 1개 이상 선택하면 견적이 계산됩니다.")
+            else:
+                det_rows, skipped = [], []
+                parts_sum = 0.0
+                box_cnt = {}
+                for r in aq_items:
+                    if (r.get("진열분류") or "(미지정)") not in aq_q_groups:
+                        continue
+                    p = prod_by_code.get(r["품목코드"])
+                    try: q_fill = int(float(str(r.get("상자당수량") or 0)))
+                    except Exception: q_fill = 0
+                    try: unit = float(p.get("price_nh_loc") or 0) if p else 0.0
+                    except Exception: unit = 0.0
+                    if q_fill <= 0 or unit <= 0:
+                        skipped.append(r["품목코드"]); continue
+                    amt = unit * q_fill
+                    parts_sum += amt
+                    bx = str(r.get("상자종류", "")).strip()
+                    if bx: box_cnt[bx] = box_cnt.get(bx, 0) + 1
+                    det_rows.append({
+                        "품목코드": r["품목코드"], "품목명": r.get("품목명_AQ", ""), "규격": r.get("규격_AQ", ""),
+                        "상자": bx, "수량": q_fill, "지역농협가": int(unit), "금액": int(amt),
+                    })
+                box_sum = sum(aq_box_prices.get(b, 0) * n for b, n in box_cnt.items()) if aq_inc_box else 0
+                fee2 = parts_sum * 0.05
+                q1, q2, q3, q4 = st.columns(4)
+                q1.metric("부속 합계", f"{parts_sum:,.0f}원")
+                q2.metric("상자 하드웨어", f"{box_sum:,.0f}원")
+                q3.metric("공급 합계", f"{parts_sum + box_sum:,.0f}원")
+                q4.metric("계통2 수수료(참고)", f"-{fee2:,.0f}원")
+                if box_cnt:
+                    st.caption("상자 구성: " + ", ".join(f"{b}×{n}" for b, n in sorted(box_cnt.items())))
+                if skipped:
+                    st.warning(f"단가/수량 미비로 제외 {len(skipped)}건: {', '.join(skipped[:10])}{' 외' if len(skipped) > 10 else ''}")
+                if det_rows:
+                    df_det = pd.DataFrame(det_rows)
+                    st.dataframe(df_det, hide_index=True, height=420)
+                    st.download_button(
+                        "⬇️ 간이 견적 CSV 다운로드",
+                        df_det.to_csv(index=False).encode("utf-8-sig"),
+                        file_name="aqunaris_진열공급_간이견적.csv", mime="text/csv",
+                        key="aq_csv_dl",
+                    )
 
 elif mode == "🇯🇵 일본 수출 분석":
     st.header("🇯🇵 일본 수출 이익 분석 (HQ Profit Analysis)")

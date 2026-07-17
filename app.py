@@ -811,20 +811,52 @@ def recalc_keep_margin(prod: dict, new_buy: int) -> dict:
     return out
 
 # ==========================================
-# [V41] 아쿠나리스(농협 관수코너) — 시트 로드 (읽기 전용)
+# [V41] 아쿠나리스(농협 관수코너) — 시트 로드
 #  - 단가 정본은 Products. AQ_Items는 진열 속성만 담는다(단가 컬럼 없음).
-#  - 저장 기능은 없음(Phase B에서 배치 저장 도입 시 §2-2 clear+update 패턴 적용 예정).
+#  [V46] 읽기쿼터 보호: 4개 시트를 일괄 1회 로드(open_by_key — 이름검색 제거) + 429 친화 안내.
+#        구글 무료 한도 = 분당 읽기 60회/사용자(서비스계정 공유) — 개별 open×4가 세션시작 읽기와
+#        겹치며 429 유발(2026-07-18 배포 실증) → 열기 1회+읽기 4회로 축소.
 # ==========================================
-@st.cache_data(ttl=600)
-def aq_load_items():
-    """AQ_Items 시트 → list[dict]. 품목코드 zfill(5)·섹션 zfill(2) 정규화."""
-    if not gc: return []
+AQ_SHEET_ID = "1oKtEJ47qOyrNS1JrIQT5dIuXs8MiiXkDeDsRNQdymFM"   # Looperget_DB (tools/gs.py와 동일 문서)
+
+@st.cache_resource(ttl=600, show_spinner=False)
+def _aq_sh():
+    """아쿠나리스용 스프레드시트 핸들(캐시). ID 직접 열기 — 이름검색(Drive API) 생략."""
     try:
-        recs = gc.open(SHEET_NAME).worksheet("AQ_Items").get_all_records()
+        return gc.open_by_key(AQ_SHEET_ID)
     except Exception:
-        return []
+        return gc.open(SHEET_NAME)
+
+@st.cache_data(ttl=600, show_spinner="아쿠나리스 데이터 로드 중…")
+def aq_load_all():
+    """AQ 4개 시트 일괄 로드. 반환 (dict|None, 오류문자열)."""
+    if not gc: return None, "구글 서비스 미연결"
+    try:
+        sh = _aq_sh()
+        data = {}
+        for ws_name in ("AQ_Items", "AQ_Sites", "AQ_Boxes", "AQ_ItemBox"):
+            try:
+                data[ws_name] = sh.worksheet(ws_name).get_all_records()
+            except gspread.exceptions.WorksheetNotFound:
+                data[ws_name] = []
+        return data, ""
+    except Exception as e:
+        return None, str(e)
+
+def aq_err_str(e):
+    """[V46] 오류를 사용자 친화 문구로 (429 쿼터 안내 포함)."""
+    s = str(e)
+    if "429" in s or "Quota exceeded" in s or "RATE_LIMIT" in s:
+        return "구글 시트 분당 요청 한도 초과 — 약 1분 후 다시 시도해주세요. (데이터는 안전합니다)"
+    return s
+
+def aq_load_items():
+    """AQ_Items → list[dict]. 품목코드 zfill(5)·섹션 zfill(2) 정규화."""
+    data, err = aq_load_all()
+    st.session_state["_aq_read_err"] = err
+    if not data: return []
     out = []
-    for r in recs:
+    for r in data["AQ_Items"]:
         code = str(r.get("품목코드", "")).strip()
         if not code: continue
         r["품목코드"] = code.zfill(5)
@@ -833,39 +865,27 @@ def aq_load_items():
         out.append(r)
     return out
 
-@st.cache_data(ttl=600)
 def aq_load_sites():
-    """AQ_Sites 시트 → list[dict] (농협명 있는 행만)."""
-    if not gc: return []
-    try:
-        recs = gc.open(SHEET_NAME).worksheet("AQ_Sites").get_all_records()
-    except Exception:
-        return []
-    return [r for r in recs if str(r.get("농협명", "")).strip()]
+    """AQ_Sites → list[dict] (농협명 있는 행만)."""
+    data, err = aq_load_all()
+    if not data: return []
+    return [r for r in data["AQ_Sites"] if str(r.get("농협명", "")).strip()]
 
 # [V42] 유연 상자 모델 — 품목↔상자 매핑은 고정이 아니라 축적 데이터.
 #  AQ_Boxes = 상자 마스터(농협별 새 상자 추가 가능) / AQ_ItemBox = 품목×상자 수용량 기록(계속 축적).
 #  AQ_Items의 기본상자/기본수량은 폴백 기본값일 뿐이다.
-@st.cache_data(ttl=600)
 def aq_load_boxes():
-    """AQ_Boxes 시트 → list[dict] (상자종류 있는 행만)."""
-    if not gc: return []
-    try:
-        recs = gc.open(SHEET_NAME).worksheet("AQ_Boxes").get_all_records()
-    except Exception:
-        return []
-    return [r for r in recs if str(r.get("상자종류", "")).strip()]
+    """AQ_Boxes → list[dict] (상자종류 있는 행만)."""
+    data, err = aq_load_all()
+    if not data: return []
+    return [r for r in data["AQ_Boxes"] if str(r.get("상자종류", "")).strip()]
 
-@st.cache_data(ttl=600)
 def aq_load_itembox():
-    """AQ_ItemBox 시트 → list[dict]. 품목코드 zfill(5)."""
-    if not gc: return []
-    try:
-        recs = gc.open(SHEET_NAME).worksheet("AQ_ItemBox").get_all_records()
-    except Exception:
-        return []
+    """AQ_ItemBox → list[dict]. 품목코드 zfill(5)."""
+    data, err = aq_load_all()
+    if not data: return []
     out = []
-    for r in recs:
+    for r in data["AQ_ItemBox"]:
         code = str(r.get("품목코드", "")).strip()
         if not code or not str(r.get("상자종류", "")).strip(): continue
         r["품목코드"] = code.zfill(5)
@@ -885,13 +905,12 @@ def aq_capacity_map(itembox_recs):
 def aq_append_row(ws_name, row_vals):
     """축적형 시트(AQ_ItemBox·AQ_Boxes·AQ_Sites 신규행)에 1행 추가.
     ※ 추가 전용 로그 시트라 append_row가 안전(§2-2 clear+update는 기존 전체재기록 시트용)."""
-    gc.open(SHEET_NAME).worksheet(ws_name).append_row(
+    _aq_sh().worksheet(ws_name).append_row(
         [str(v) for v in row_vals], value_input_option='RAW')
 
 def aq_save_sites(sites_rows):
     """AQ_Sites 전체 재기록 (§2-2 clear+update 패턴). 헤더는 시트 현재 헤더 유지."""
-    sh = gc.open(SHEET_NAME)
-    ws = sh.worksheet("AQ_Sites")
+    ws = _aq_sh().worksheet("AQ_Sites")
     cur = ws.get_all_values()
     hdrs = cur[0] if cur and any(cur[0]) else \
         ["농협ID", "농협명", "지역", "상태", "설치일", "랙구성JSON", "배치JSON", "견적ID", "담당자", "비고"]
@@ -5033,9 +5052,13 @@ elif mode == "🏪 아쿠나리스":
 
     aq_items = aq_load_items()
     if not aq_items:
-        st.warning("AQ_Items 시트를 읽지 못했습니다. Looperget_DB에 AQ_Items 시트가 있는지 확인하세요.")
+        _rerr = st.session_state.get("_aq_read_err", "")
+        if "429" in _rerr or "Quota" in _rerr:
+            st.warning("⏳ 구글 시트 분당 읽기 한도(무료 60회/분)를 잠시 초과했습니다. **약 1분 후 [다시 시도]**를 눌러주세요. 데이터는 안전하며, 다른 화면 사용에는 지장 없습니다.")
+        else:
+            st.warning("AQ_Items 시트를 읽지 못했습니다. Looperget_DB에 AQ_Items 시트가 있는지 확인하세요." + (f" (오류: {_rerr[:120]})" if _rerr else ""))
         if st.button("🔄 다시 시도", key="aq_retry"):
-            aq_load_items.clear(); aq_load_sites.clear(); st.rerun()
+            aq_load_all.clear(); st.rerun()
     else:
         prod_by_code = {str(p.get("code", "")).zfill(5): p for p in st.session_state.db.get("products", [])}
         aq_groups = sorted({(r.get("진열분류") or "(미지정)") for r in aq_items})
@@ -5051,7 +5074,7 @@ elif mode == "🏪 아쿠나리스":
         aq_caps = aq_capacity_map(aq_itembox)
 
         if st.button("🔄 아쿠나리스 데이터 새로고침", key="aq_refresh"):
-            aq_load_items.clear(); aq_load_sites.clear(); aq_load_boxes.clear(); aq_load_itembox.clear(); st.rerun()
+            aq_load_all.clear(); st.rerun()
 
         tab_stat, tab_items, tab_quote, tab_box, tab_site = st.tabs(
             ["📊 현황", "🗄️ 진열 품목", "🧮 진열 공급 견적(간이)", "📦 상자·수용량", "🏗️ 사이트 설계"])
@@ -5220,10 +5243,10 @@ elif mode == "🏪 아쿠나리스":
                                 aq_append_row("AQ_Boxes", [_nm, nb_w or "", nb_d or "", nb_h or "",
                                                            nb_price or "", "신규",
                                                            datetime.datetime.now().strftime("%Y-%m-%d"), nb_memo])
-                                aq_load_boxes.clear()
+                                aq_load_all.clear()
                                 st.success(f"'{_nm}' 등록 완료"); time.sleep(0.5); st.rerun()
                             except Exception as e:
-                                st.error(f"등록 실패: {e}")
+                                st.error(f"등록 실패: {aq_err_str(e)}")
 
             st.divider()
             st.markdown("##### 📝 수용량 기록 추가 — 품목이 이 상자에 몇 개 담기는가")
@@ -5249,10 +5272,10 @@ elif mode == "🏪 아쿠나리스":
                             _code = cap_item_lbl.split("|")[0].strip()
                             aq_append_row("AQ_ItemBox", [_code, cap_box, int(cap_qty), cap_basis, cap_src,
                                                          datetime.datetime.now().strftime("%Y-%m-%d"), cap_memo])
-                            aq_load_itembox.clear()
+                            aq_load_all.clear()
                             st.success(f"{_code} × {cap_box} = {int(cap_qty)}개 기록 완료"); time.sleep(0.5); st.rerun()
                         except Exception as e:
-                            st.error(f"기록 실패: {e}")
+                            st.error(f"기록 실패: {aq_err_str(e)}")
 
             c_v1, c_v2 = st.columns(2)
             with c_v1:
@@ -5305,11 +5328,11 @@ elif mode == "🏪 아쿠나리스":
                                                  "견적ID": "", "담당자": "",
                                                  "비고": "V1 도면 역산 표준 시스템 — 검증 기준"})
                         aq_save_sites(aq_sites_all)
-                        aq_load_sites.clear()
+                        aq_load_all.clear()
                         st.session_state["_aq_site_jump"] = AQ_STD_SITE
                         st.success("표준 시스템 생성/갱신 완료"); time.sleep(0.5); st.rerun()
                     except Exception as e:
-                        st.error(f"표준 불러오기 실패: {e}")
+                        st.error(f"표준 불러오기 실패: {aq_err_str(e)}")
 
             if sel_site == "(신규 등록)":
                 with st.form("aq_site_add_form", clear_on_submit=True):
@@ -5328,10 +5351,10 @@ elif mode == "🏪 아쿠나리스":
                             try:
                                 _sid = f"S{len(aq_sites_all) + 1:03d}"
                                 aq_append_row("AQ_Sites", [_sid, _nm, s_region, "제안", "", "", "", "", s_mgr, s_memo])
-                                aq_load_sites.clear()
+                                aq_load_all.clear()
                                 st.success(f"'{_nm}' 등록 완료"); time.sleep(0.5); st.rerun()
                             except Exception as e:
-                                st.error(f"등록 실패: {e}")
+                                st.error(f"등록 실패: {aq_err_str(e)}")
             else:
                 _site = next(s for s in aq_sites_all if str(s.get("농협명", "")).strip() == sel_site)
                 st.caption(f"상태: {_site.get('상태', '')} · 지역: {_site.get('지역', '')} · 설치일: {_site.get('설치일', '')}")
@@ -5626,10 +5649,10 @@ elif mode == "🏪 아쿠나리스":
                                 s["랙구성JSON"] = json.dumps(_racks_out, ensure_ascii=False)
                                 s["배치JSON"] = json.dumps(_new_plan, ensure_ascii=False)
                         aq_save_sites(aq_sites_all)
-                        aq_load_sites.clear()
+                        aq_load_all.clear()
                         st.success("저장 완료 (AQ_Sites 시트)"); time.sleep(0.5); st.rerun()
                     except Exception as e:
-                        st.error(f"저장 실패: {e}")
+                        st.error(f"저장 실패: {aq_err_str(e)}")
 
 elif mode == "🇯🇵 일본 수출 분석":
     st.header("🇯🇵 일본 수출 이익 분석 (HQ Profit Analysis)")

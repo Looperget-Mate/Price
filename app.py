@@ -850,6 +850,25 @@ def aq_err_str(e):
         return "구글 시트 분당 요청 한도 초과 — 약 1분 후 다시 시도해주세요. (데이터는 안전합니다)"
     return s
 
+# ── [V48] 계정·권한 — Users 시트 기반. 시트가 없거나 공용 비밀번호 로그인이면 기존 동작 100% 보존 ──
+@st.cache_data(ttl=300, show_spinner=False)
+def load_users():
+    """Users 시트 → list[dict] (아이디 있는 행만). 시트 없음/실패 시 []."""
+    if not gc: return []
+    try:
+        return [u for u in _aq_sh().worksheet("Users").get_all_records()
+                if str(u.get("아이디", "")).strip()]
+    except Exception:
+        return []
+
+def aq_can(perm, strict=False):
+    """권한 검사. 공용(비아이디) 로그인 세션: strict=False→허용(기존 동작), strict=True→차단(민감 기능 전용).
+    권한 토큰: master/quote/aqunaris/aq_profit/admin/jp (Users 시트 '권한' 쉼표 구분)."""
+    perms = st.session_state.get("user_perms")
+    if perms is None:
+        return not strict
+    return ("master" in perms) or (perm in perms)
+
 def aq_load_items():
     """AQ_Items → list[dict]. 품목코드 zfill(5)·섹션 zfill(2) 정규화."""
     data, err = aq_load_all()
@@ -907,6 +926,24 @@ def aq_append_row(ws_name, row_vals):
     ※ 추가 전용 로그 시트라 append_row가 안전(§2-2 clear+update는 기존 전체재기록 시트용)."""
     _aq_sh().worksheet(ws_name).append_row(
         [str(v) for v in row_vals], value_input_option='RAW')
+
+def aq_update_item_cell(code, col_name, value):
+    """[V48] AQ_Items에서 품목코드 행을 찾아 1셀 갱신 (컬럼 없으면 헤더에 추가). 이미지ISO 등록에 사용."""
+    ws = _aq_sh().worksheet("AQ_Items")
+    vals = ws.get_all_values()
+    hdr = vals[0]
+    if col_name not in hdr:
+        if ws.col_count <= len(hdr):
+            ws.add_cols(1)
+        ws.update_cell(1, len(hdr) + 1, col_name)
+        hdr.append(col_name)
+    ci = hdr.index(col_name) + 1
+    code = str(code).strip().zfill(5)
+    for i, row in enumerate(vals[1:], start=2):
+        if row and str(row[0]).strip().zfill(5) == code:
+            ws.update_cell(i, ci, str(value))
+            return True
+    return False
 
 def aq_save_sites(sites_rows):
     """AQ_Sites 전체 재기록 (§2-2 clear+update 패턴). 헤더는 시트 현재 헤더 유지."""
@@ -4179,13 +4216,29 @@ if not st.session_state.app_authenticated:
     col1, col2, col3 = st.columns([1, 1, 1])
     with col2:
         with st.form("login_form", border=True):
+            login_id = st.text_input("아이디 (계정 로그인 시 — 비우면 공용 비밀번호)", key="app_login_id")
             pwd = st.text_input("프로그램 접속 비밀번호", type="password", key="app_pwd")
             # [V27] 폼: 비밀번호 입력 후 Enter 또는 '접속' 클릭 둘 다 제출
+            # [V48] 아이디 입력 시 Users 시트 계정 인증(기능 권한 부여) · 비우면 기존 공용 비번 그대로
             if st.form_submit_button("접속", use_container_width=True, type="primary"):
                 app_pwd_db = str(st.session_state.db.get("config", {}).get("app_pwd", "1234"))
-                if pwd == app_pwd_db:
+                _uid = (login_id or "").strip()
+                _urec = None
+                if _uid:
+                    _urec = next((u for u in load_users()
+                                  if str(u.get("아이디", "")).strip() == _uid
+                                  and str(u.get("비밀번호", "")) == pwd), None)
+                if _urec is not None:
                     st.session_state.app_authenticated = True
                     st.session_state.failed_attempts = 0
+                    st.session_state.user_id = _uid
+                    st.session_state.user_perms = [p.strip() for p in str(_urec.get("권한", "")).split(",") if p.strip()]
+                    st.rerun()
+                elif (not _uid) and pwd == app_pwd_db:
+                    st.session_state.app_authenticated = True
+                    st.session_state.failed_attempts = 0
+                    st.session_state.user_id = ""
+                    st.session_state.user_perms = None   # 공용 로그인 = 권한 제한 없음(기존 동작)
                     st.rerun()
                 else:
                     st.session_state.failed_attempts += 1
@@ -4424,7 +4477,13 @@ with st.sidebar:
     st.divider()
 
     if st.session_state.app_lang == "KR":
-        mode = st.radio("모드", ["견적 작성", "🏪 아쿠나리스", "관리자 모드", "🇯🇵 일본 수출 분석"], key="main_sidebar_mode")  # [V41] 아쿠나리스 추가
+        # [V48] 권한 필터: 계정 로그인 시 권한 있는 모드만 노출 (공용 로그인 = 전체, 기존 동작)
+        _mode_opts = [m for m, p in [("견적 작성", "quote"), ("🏪 아쿠나리스", "aqunaris"),
+                                     ("관리자 모드", "admin"), ("🇯🇵 일본 수출 분석", "jp")] if aq_can(p)]
+        if not _mode_opts: _mode_opts = ["견적 작성"]
+        if st.session_state.get("main_sidebar_mode") not in _mode_opts:
+            st.session_state["main_sidebar_mode"] = _mode_opts[0]
+        mode = st.radio("모드", _mode_opts, key="main_sidebar_mode")  # [V41] 아쿠나리스 추가
     else:
         mode = st.radio("モード", ["見積作成", "管理者モード"], key="main_sidebar_mode")
 
@@ -5177,6 +5236,59 @@ elif mode == "🏪 아쿠나리스":
             st.caption(f"표시 {len(rows_view)}개 품목 (매입가 미표시 · 기본상자/기본수량은 폴백 기본값, 실제 배치는 사이트별 조정 · 수용기록=축적된 상자별 수용량 데이터 수)")
             st.dataframe(pd.DataFrame(rows_view), hide_index=True, height=480)
 
+            # ── [V48] 품목 이미지 2종 체계 — 빌더용(기존 유지)과 등각(ISO: 현장 시연·가이드북·스티커용) ──
+            with st.expander("🖼️ 품목 이미지 관리 — 등각(ISO) 등록·미리보기", expanded=False):
+                st.caption("빌더용 이미지(2D 배치용)는 기존 관리자 모드에서 그대로 관리합니다. 여기서는 현장 시연·가이드북·스티커 자동생성용 **등각(isometric) 이미지**를 품목별로 추가 등록합니다. (드라이브 파일명 `코드_iso` — 기존 이미지 해석과 충돌 없음)")
+                _iso_opts = [f"{r['품목코드']} | {r.get('품목명_AQ', '')} {r.get('규격_AQ', '')}".strip() for r in aq_items]
+                _iso_sel = st.selectbox("품목 선택", _iso_opts, key="aq_iso_item")
+                _iso_code = _iso_sel.split("|")[0].strip()
+                _iso_rec = next((r for r in aq_items if r["품목코드"] == _iso_code), {})
+                ci1, ci2 = st.columns(2)
+                with ci1:
+                    st.markdown("**등각(ISO) 이미지 — 시연·인쇄물용**")
+                    _iso_id = str(_iso_rec.get("이미지ISO", "") or "").strip()
+                    if _iso_id:
+                        try:
+                            _img_iso = download_image_by_id(_iso_id)
+                            if _img_iso is not None:
+                                st.image(_img_iso, width=260)
+                            else:
+                                st.info("이미지 로드 실패 — 드라이브 파일 확인")
+                        except Exception as _e9:
+                            st.info(f"이미지 로드 실패: {aq_err_str(_e9)}")
+                    else:
+                        st.info("등각 이미지 미등록")
+                with ci2:
+                    st.markdown("**빌더용(기존) 이미지 — 2D 배치용**")
+                    _pb = prod_by_code.get(_iso_code, {})
+                    _bld_id = str(_pb.get("image", "") or "")
+                    if len(_bld_id) > 10:
+                        try:
+                            _img_b = download_image_by_id(_bld_id)
+                            if _img_b is not None:
+                                st.image(_img_b, width=260)
+                            else:
+                                st.caption("등록됨 (미리보기 실패)")
+                        except Exception:
+                            st.caption("등록됨 (미리보기 실패)")
+                    else:
+                        st.caption("Products 이미지데이터 기준 미등록 (드라이브 파일명 매칭분은 별도)")
+                _up = st.file_uploader("등각 이미지 업로드 (JPG/PNG)", type=["jpg", "jpeg", "png"], key="aq_iso_up")
+                if _up is not None and st.button("⬆️ 등각 이미지 등록", key="aq_iso_save", type="primary"):
+                    try:
+                        _ext = "png" if str(_up.type).endswith("png") else "jpg"
+                        _fid = upload_bytes_to_drive(_up.getvalue(), f"{_iso_code}_iso.{_ext}",
+                                                     mimetype=_up.type or "image/jpeg")
+                        if not _fid:
+                            st.error("드라이브 업로드 실패 — 잠시 후 재시도")
+                        else:
+                            aq_update_item_cell(_iso_code, "이미지ISO", _fid)
+                            aq_load_all.clear()
+                            st.success(f"{_iso_code} 등각 이미지 등록 완료")
+                            time.sleep(0.5); st.rerun()
+                    except Exception as _e8:
+                        st.error(f"등록 실패: {aq_err_str(_e8)}")
+
         # ── 진열 공급 간이 견적 ───────────────────────────
         with tab_quote:
             st.caption("선택한 진열분류를 '기본상자·기본수량(폴백 기본값)'으로 채우는 초도 공급 견적 미리보기. 단가 = Products 지역농협가, 계통2(5%) 수수료는 참고 표시. 사이트별 상자·수량 조정은 🏗️ 사이트 설계 탭에서.")
@@ -5434,6 +5546,7 @@ elif mode == "🏪 아쿠나리스":
                             _box_def = str(_ov.get("box") or r.get("기본상자") or "")
                             _ori_def = str(_ov.get("ori") or "세로")            # [V43] 방향 기본=세로(표준)
                             if _ori_def not in ("세로", "가로"): _ori_def = "세로"
+                            _use_def = (_ov.get("use", True) is not False)      # [V48] 공급 체크(기본 포함)
                             try:
                                 _qty_def = int(_ov.get("qty")) if _ov.get("qty") is not None \
                                     else int(float(str(r.get("기본수량") or 0)))
@@ -5443,6 +5556,7 @@ elif mode == "🏪 아쿠나리스":
                             try: _unit_i = int(float(_p.get("price_nh_loc") or 0))
                             except Exception: _unit_i = 0
                             _rows_plan.append({
+                                "공급": _use_def,
                                 "품목코드": _code, "품목명": str(r.get("품목명_AQ", "") or ""), "규격": str(r.get("규격_AQ", "") or ""),
                                 "수용정보": _cap_txt, "상자": _box_def, "방향": _ori_def, "수량": _qty_def, "지역농협가": _unit_i,
                             })
@@ -5451,14 +5565,26 @@ elif mode == "🏪 아쿠나리스":
                             pd.DataFrame(_rows_plan), hide_index=True, height=420, key=f"aq_plan_ed_{sel_site}",
                             disabled=["품목코드", "품목명", "규격", "수용정보", "지역농협가"],
                             column_config={
+                                "공급": st.column_config.CheckboxColumn("공급", help="체크 해제 = 이 농협에는 공급/배치 제외"),
                                 "상자": st.column_config.SelectboxColumn("상자", options=[""] + _box_opts),
                                 "방향": st.column_config.SelectboxColumn(
                                     "방향", options=["세로", "가로"],
                                     help="세로=표준(상자 폭이 전면, 최대 배치) · 가로=깊이 얕은 단용(상자 깊이가 전면)"),
                                 "수량": st.column_config.NumberColumn(format="%d", min_value=0),
                             })
+                        _n_excl = int((~edited_plan["공급"].astype(bool)).sum()) if "공급" in edited_plan.columns else 0
+                        if _n_excl:
+                            st.caption(f"🚫 공급 제외 {_n_excl}개 품목 (배치·견적에서 빠집니다)")
                 else:
                     st.info("진열분류를 선택하면 품목별 계획 표가 나타납니다.")
+
+                # [V48] 품목별 공급 여부 (편집표 우선 → 저장값 → 기본 포함)
+                def _aq_use(code):
+                    if edited_plan is not None and "공급" in edited_plan.columns:
+                        _m = edited_plan.loc[edited_plan["품목코드"] == code, "공급"]
+                        if len(_m): return bool(_m.iloc[0])
+                    _o = _plan_items.get(code, {})
+                    return (_o.get("use", True) is not False) if isinstance(_o, dict) else True
 
                 # ── [V45] 단(선반) 중심 배치 설계 — 자동배치 + 실척 시각화 + 수동 조정 ──
                 st.markdown("##### 3️⃣ 배치 — ⚡ 자동배치 후 전체 그림으로 확인")
@@ -5506,6 +5632,7 @@ elif mode == "🏪 아쿠나리스":
                                         _b0 = str((_plan_items.get(r["품목코드"], {}) or {}).get("box") or r.get("기본상자") or "")
                                         return (-_dims_p.get(_b0, (0, 0))[0], r["품목코드"])
                                     for r in sorted(_gi, key=_bw_key):
+                                        if not _aq_use(r["품목코드"]): continue   # [V48] 공급 제외 반영
                                         _b0 = str((_plan_items.get(r["품목코드"], {}) or {}).get("box") or r.get("기본상자") or "")
                                         _seq.append((r["품목코드"], g, _b0))
                                 _asg_new, _unp = aq_auto_place(_rk_list, _seq, _dims_p, group_order=_pg)
@@ -5523,6 +5650,7 @@ elif mode == "🏪 아쿠나리스":
                             for g in _pg:
                                 for r in aq_items:
                                     if (r.get("진열분류") or "(미지정)") != g: continue
+                                    if not _aq_use(r["품목코드"]): continue   # [V48] 공급 제외 반영
                                     _c4 = r["품목코드"]
                                     _b4 = str((_plan_items.get(_c4, {}) or {}).get("box") or r.get("기본상자") or "")
                                     _rk4, _sh4 = _asg_cur.get(_c4, ("", 0))
@@ -5535,7 +5663,9 @@ elif mode == "🏪 아쿠나리스":
                                 disabled=["품목코드", "품목명", "분류", "상자"],
                                 column_config={
                                     "랙": st.column_config.SelectboxColumn("랙", options=[""] + _rk_names),
-                                    "단": st.column_config.NumberColumn("단", min_value=0, step=1, help="0=미배치 · 1=최하단"),
+                                    "단": st.column_config.SelectboxColumn(   # [V48] 드롭다운 선택
+                                        "단", options=list(range(0, (max(len(rk["단높이"]) for rk in _rk_list) if _rk_list else 8) + 1)),
+                                        help="0=미배치 · 1=최하단"),
                                 })
                         _seq_by_shelf = {}
                         _asg_live = {}
@@ -5577,6 +5707,7 @@ elif mode == "🏪 아쿠나리스":
                 if plan_groups and (edited_plan is not None):
                     _parts2, _bcnt2, _skip2 = 0.0, {}, []
                     for _, _row in edited_plan.iterrows():
+                        if not _aq_use(str(_row["품목코드"])): continue   # [V48] 공급 제외
                         try: _q = int(_row["수량"] or 0)
                         except Exception: _q = 0
                         try: _u = int(_row["지역농협가"] or 0)
@@ -5605,6 +5736,31 @@ elif mode == "🏪 아쿠나리스":
                         edited_plan.to_csv(index=False).encode("utf-8-sig"),
                         file_name=f"aqunaris_{sel_site}_진열계획.csv", mime="text/csv",
                         key=f"aq_site_csv_{sel_site}")
+
+                    # [V48] 회사 이익 — 권한 계정(master/aq_profit) 전용. 현장 시연 화면(공용 로그인)에는 절대 미노출.
+                    if aq_can("aq_profit", strict=True):
+                        with st.expander("💰 회사 이익 확인 (권한 계정 전용)", expanded=False):
+                            _buy_sum, _n_nobuy = 0.0, 0
+                            for _, _row in edited_plan.iterrows():
+                                if not _aq_use(str(_row["품목코드"])): continue
+                                try: _q9 = int(_row["수량"] or 0)
+                                except Exception: _q9 = 0
+                                if _q9 <= 0: continue
+                                _p9 = prod_by_code.get(str(_row["품목코드"]), {})
+                                try: _b9 = float(_p9.get("price_buy") or 0)
+                                except Exception: _b9 = 0.0
+                                if _b9 <= 0:
+                                    _n_nobuy += 1; continue
+                                _buy_sum += _b9 * _q9
+                            _rev9 = _parts2
+                            _profit9 = _rev9 - _buy_sum
+                            _net9 = _rev9 * 0.95 - _buy_sum
+                            pm1, pm2, pm3, pm4 = st.columns(4)
+                            pm1.metric("매입 합계", f"{_buy_sum:,.0f}원")
+                            pm2.metric("이익(수수료 전)", f"{_profit9:,.0f}원 ({(_profit9 / _rev9 * 100 if _rev9 else 0):.1f}%)")
+                            pm3.metric("계통2 반영 순이익", f"{_net9:,.0f}원")
+                            pm4.metric("매입가 미등록", f"{_n_nobuy}건")
+                            st.caption("이익 = 부속 합계(지역농협가) − 매입 합계 · 계통2 반영 = 매출×95% − 매입 (상자·설치·운송비 별도)")
 
                 # ── [V44] 표준 배치 검증 — 랙 단높이 × 상자 치수 × 실배치(V1 위치)로 단별 용량 판정 ──
                 with st.expander("📏 표준 배치 검증 (V1 섹션 위치 기준 — 표준화 참고 전용)", expanded=(sel_site == AQ_STD_SITE)):
@@ -5672,8 +5828,9 @@ elif mode == "🏪 아쿠나리스":
                                 except Exception: _q = 0
                                 _bx3 = str(_row["상자"] or "").strip()
                                 _ori3 = str(_row.get("방향") or "세로").strip() or "세로"   # [V43]
-                                if _q > 0 or _bx3:
-                                    _items_out[str(_row["품목코드"])] = {"box": _bx3, "qty": _q, "ori": _ori3}
+                                _use3 = bool(_row.get("공급", True))                       # [V48]
+                                if _q > 0 or _bx3 or (not _use3):
+                                    _items_out[str(_row["품목코드"])] = {"box": _bx3, "qty": _q, "ori": _ori3, "use": _use3}
                         _new_plan = {"groups": plan_groups, "items": _items_out,
                                      "updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M")}
                         # [V45] 단 중심 배정 저장 (있을 때만)

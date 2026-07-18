@@ -1066,25 +1066,24 @@ def aq_auto_place(rack_list, items_seq, box_dims, group_order=None):
             unplaced.append(code)
     return assign, unplaced
 
-def aq_rack_svg(rack_name, inner, shelf_hs, shelf_seqs, frame_t=19, scale=0.22):
-    """랙 정면 SVG 렌더 (실척). shelf_seqs={단번호:[(코드,분류,상자,폭,높이)]}. 단 아래 색상테이프 밴드 포함."""
+def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=19, scale=0.22, show_dims=True):
+    """(x0,y0) 기준으로 랙 1대의 SVG 요소들을 out 리스트에 추가. 반환: (폭px, 높이px)."""
     W = inner + frame_t * 2
     H = sum(shelf_hs) + frame_t
     pw, ph = W * scale, H * scale
-    pad = 16
-    svg = [f'<svg width="{pw + pad*2:.0f}" height="{ph + pad*2 + 14:.0f}" xmlns="http://www.w3.org/2000/svg">']
-    svg.append(f'<rect x="{pad}" y="{pad}" width="{pw:.1f}" height="{ph:.1f}" fill="#FAFAF7" stroke="#191414" stroke-width="2"/>')
-    svg.append(f'<text x="{pad}" y="{pad - 4}" font-size="11" fill="#8C8681">{rack_name} (내측 {inner}mm)</text>')
+    out.append(f'<rect x="{x0:.1f}" y="{y0:.1f}" width="{pw:.1f}" height="{ph:.1f}" fill="#FAFAF7" stroke="#191414" stroke-width="1.6"/>')
+    out.append(f'<text x="{x0:.1f}" y="{y0 - 4:.1f}" font-size="11" fill="#8C8681">{rack_name}</text>')
     y_real = 0
     for si, sh in enumerate(shelf_hs, 1):
         y_real += sh
-        y_px = pad + ph - y_real * scale
-        svg.append(f'<line x1="{pad}" y1="{y_px:.1f}" x2="{pad + pw:.1f}" y2="{y_px:.1f}" stroke="#191414" stroke-width="2"/>')
-        svg.append(f'<text x="{pad + pw + 3:.1f}" y="{y_px + 10:.1f}" font-size="9" fill="#8C8681">단{si} {sh}</text>')
-        seq = shelf_seqs.get(si, [])
+        y_px = y0 + ph - y_real * scale
+        out.append(f'<line x1="{x0:.1f}" y1="{y_px:.1f}" x2="{x0 + pw:.1f}" y2="{y_px:.1f}" stroke="#191414" stroke-width="1.6"/>')
+        if show_dims:
+            out.append(f'<text x="{x0 + 2:.1f}" y="{y_px + 9:.1f}" font-size="7" fill="#B9B3AD">{si}·{sh}</text>')
+        seq = shelf_seqs.get((rack_name, si)) or shelf_seqs.get(si) or []
         if not seq: continue
         rows, fitted, rej = aq_pack_shelf_rows(seq, inner, sh)
-        base = pad + ph - (y_real - sh) * scale
+        base = y0 + ph - (y_real - sh) * scale
         ry = 0
         tape = []
         for row in rows:
@@ -1093,17 +1092,47 @@ def aq_rack_svg(rack_name, inner, shelf_hs, shelf_seqs, frame_t=19, scale=0.22):
             for it in row:
                 bw, bh = it[3], it[4]
                 col = AQ_GROUP_COLORS.get(it[1], "#9AA0A6")
-                bx_x = pad + frame_t * scale + x * scale
-                bx_y = base - (ry + bh) * scale
-                svg.append(f'<rect x="{bx_x:.1f}" y="{bx_y:.1f}" width="{bw*scale:.1f}" height="{bh*scale:.1f}" fill="{col}" fill-opacity="0.72" stroke="#191414" stroke-width="0.7"/>')
+                out.append(f'<rect x="{x0 + frame_t*scale + x*scale:.1f}" y="{base - (ry + bh)*scale:.1f}" '
+                           f'width="{bw*scale:.1f}" height="{bh*scale:.1f}" fill="{col}" fill-opacity="0.72" stroke="#191414" stroke-width="0.6"/>')
                 if ry == 0:
                     tape.append((x, x + bw, col))
                 x += bw
             ry += rh
         for tx0, tx1, col in tape:   # 색상 자석테이프(단 전면 하단 밴드)
-            svg.append(f'<rect x="{pad + frame_t*scale + tx0*scale:.1f}" y="{base - 3:.1f}" width="{(tx1-tx0)*scale:.1f}" height="4" fill="{col}"/>')
-    svg.append('</svg>')
-    return "".join(svg)
+            out.append(f'<rect x="{x0 + frame_t*scale + tx0*scale:.1f}" y="{base - 3:.1f}" width="{(tx1-tx0)*scale:.1f}" height="3.4" fill="{col}"/>')
+    return pw, ph
+
+def aq_rack_svg(rack_name, inner, shelf_hs, shelf_seqs, frame_t=19, scale=0.22):
+    """랙 1대 정면 SVG (실척)."""
+    pad = 16
+    out = []
+    pw, ph = _aq_rack_parts(out, pad, pad, rack_name, inner, shelf_hs, shelf_seqs, frame_t, scale)
+    return (f'<svg width="{pw + pad*2:.0f}" height="{ph + pad*2 + 14:.0f}" xmlns="http://www.w3.org/2000/svg">'
+            + "".join(out) + '</svg>')
+
+def aq_racks_svg_all(rack_list, seq_by_shelf, per_row=6, scale=None):
+    """[V47] 전체 배치 뷰 — V1 도면처럼 랙들을 줄당 per_row대씩 나란히 렌더.
+    rack_list=[{명칭,내측폭,단높이}], seq_by_shelf={(랙명,단):[...]}."""
+    if not rack_list: return ""
+    if scale is None:
+        n = len(rack_list)
+        scale = 0.22 if n <= 2 else (0.16 if n <= 4 else 0.105)
+    pad, gap_x, gap_y = 16, 12, 26
+    rows = [rack_list[i:i + per_row] for i in range(0, len(rack_list), per_row)]
+    out, y = [], pad + 4
+    total_w = 0
+    for row in rows:
+        x = pad
+        row_h = 0
+        for rk in row:
+            pw, ph = _aq_rack_parts(out, x, y + 10, rk["명칭"], rk["내측폭"], rk["단높이"], seq_by_shelf,
+                                    scale=scale, show_dims=(scale >= 0.15))
+            x += pw + gap_x
+            row_h = max(row_h, ph)
+        total_w = max(total_w, x)
+        y += row_h + gap_y
+    return (f'<svg width="{total_w + pad:.0f}" height="{y + pad:.0f}" xmlns="http://www.w3.org/2000/svg">'
+            + "".join(out) + '</svg>')
 
 def sync_products_jp_to_sheet(kr_products: list, exchange_rate: float):
     """한국 Products → Products_JP 자동 동기화. 기존 JP 단가 비율 유지."""
@@ -5359,7 +5388,7 @@ elif mode == "🏪 아쿠나리스":
                 _site = next(s for s in aq_sites_all if str(s.get("농협명", "")).strip() == sel_site)
                 st.caption(f"상태: {_site.get('상태', '')} · 지역: {_site.get('지역', '')} · 설치일: {_site.get('설치일', '')}")
 
-                st.markdown("##### 🗼 랙 구성 (농협 현장 실측 입력 — 행 추가/삭제 가능)")
+                st.markdown("##### 1️⃣ 공간(랙) 구성 — 현장 실측 입력 (행 추가/삭제 가능)")
                 # [V43] 깊이 규칙: 랙 공통 깊이는 '깊이mm', 단별로 다르면 '단깊이mm'에 콤마 목록(단1=최하단부터).
                 st.caption("깊이mm = 랙 공통 깊이 · 단별로 다르면 **단깊이mm(콤마구분)**에 단1(최하단)부터 입력 (예: 450,450,450,300,300). 깊이가 얕은 단은 진열 계획에서 상자를 **가로** 방향으로 배치할 수 있습니다.")
                 try: _racks_cur = json.loads(str(_site.get("랙구성JSON") or "[]"))
@@ -5384,10 +5413,7 @@ elif mode == "🏪 아쿠나리스":
                     _hint = " · ".join(f"{n} {AQ_STD_INNER // wh[0]}칸" for n, wh in sorted(_dims_hint.items()))
                     st.caption(f"표준 랙(W900, 내측 862mm) 단당 칸수: {_hint} — 층수 = 단높이 ÷ 상자높이 (예: 단높이 292 → 431-1호(112) 2층, 3호(116) 2층)")
 
-                st.markdown("##### 🧩 진열 계획 — 품목별 상자·방향·수량 (기본값 프리필, 자유 조정)")
-                # [V43] 배치 방향: 세로=표준(상자 폭이 전면 → 단 폭당 최다 배치, 단 깊이 ≥ 상자 깊이 필요)
-                #        가로=깊이 얕은 단용(상자 깊이가 전면, 단 깊이 ≥ 상자 폭만 필요)
-                st.caption("방향 기준: **세로=표준**(상자 폭이 전면 → 최대한 많이 배치) · **가로**=단 깊이가 상자 깊이보다 얕을 때만(상자 깊이가 전면을 차지해 배치 수는 줄어듦).")
+                st.markdown("##### 2️⃣ 진열할 부속군 선택")
                 try: _plan_cur = json.loads(str(_site.get("배치JSON") or "{}"))
                 except Exception: _plan_cur = {}
                 if not isinstance(_plan_cur, dict): _plan_cur = {}
@@ -5397,39 +5423,158 @@ elif mode == "🏪 아쿠나리스":
 
                 edited_plan = None
                 if plan_groups:
-                    _rows_plan = []
-                    for r in aq_items:
-                        if (r.get("진열분류") or "(미지정)") not in plan_groups: continue
-                        _code = r["품목코드"]
-                        _ov = _plan_items.get(_code, {}) if isinstance(_plan_items.get(_code, {}), dict) else {}
-                        _caps_i = aq_caps.get(_code, {})
-                        _cap_txt = " · ".join(f"{b}:{q}({s})" for b, (q, s) in _caps_i.items())
-                        _box_def = str(_ov.get("box") or r.get("기본상자") or "")
-                        _ori_def = str(_ov.get("ori") or "세로")            # [V43] 방향 기본=세로(표준)
-                        if _ori_def not in ("세로", "가로"): _ori_def = "세로"
+                    with st.expander("✏️ 상자·방향·수량 조정 (기본값 자동 적용 — 필요할 때만)", expanded=False):
+                        _rows_plan = []
+                        for r in aq_items:
+                            if (r.get("진열분류") or "(미지정)") not in plan_groups: continue
+                            _code = r["품목코드"]
+                            _ov = _plan_items.get(_code, {}) if isinstance(_plan_items.get(_code, {}), dict) else {}
+                            _caps_i = aq_caps.get(_code, {})
+                            _cap_txt = " · ".join(f"{b}:{q}({s})" for b, (q, s) in _caps_i.items())
+                            _box_def = str(_ov.get("box") or r.get("기본상자") or "")
+                            _ori_def = str(_ov.get("ori") or "세로")            # [V43] 방향 기본=세로(표준)
+                            if _ori_def not in ("세로", "가로"): _ori_def = "세로"
+                            try:
+                                _qty_def = int(_ov.get("qty")) if _ov.get("qty") is not None \
+                                    else int(float(str(r.get("기본수량") or 0)))
+                            except Exception:
+                                _qty_def = 0
+                            _p = prod_by_code.get(_code, {})
+                            try: _unit_i = int(float(_p.get("price_nh_loc") or 0))
+                            except Exception: _unit_i = 0
+                            _rows_plan.append({
+                                "품목코드": _code, "품목명": str(r.get("품목명_AQ", "") or ""), "규격": str(r.get("규격_AQ", "") or ""),
+                                "수용정보": _cap_txt, "상자": _box_def, "방향": _ori_def, "수량": _qty_def, "지역농협가": _unit_i,
+                            })
+                        _box_opts = sorted(set(aq_box_names) | {rp["상자"] for rp in _rows_plan if rp["상자"]})
+                        edited_plan = st.data_editor(
+                            pd.DataFrame(_rows_plan), hide_index=True, height=420, key=f"aq_plan_ed_{sel_site}",
+                            disabled=["품목코드", "품목명", "규격", "수용정보", "지역농협가"],
+                            column_config={
+                                "상자": st.column_config.SelectboxColumn("상자", options=[""] + _box_opts),
+                                "방향": st.column_config.SelectboxColumn(
+                                    "방향", options=["세로", "가로"],
+                                    help="세로=표준(상자 폭이 전면, 최대 배치) · 가로=깊이 얕은 단용(상자 깊이가 전면)"),
+                                "수량": st.column_config.NumberColumn(format="%d", min_value=0),
+                            })
+                else:
+                    st.info("진열분류를 선택하면 품목별 계획 표가 나타납니다.")
+
+                # ── [V45] 단(선반) 중심 배치 설계 — 자동배치 + 실척 시각화 + 수동 조정 ──
+                st.markdown("##### 3️⃣ 배치 — ⚡ 자동배치 후 전체 그림으로 확인")
+                if True:   # [V47] expander→상시 표시(내부 들여쓰기 보존)
+                    st.caption("배치의 단위는 **단(선반)**입니다. 용도군(진열분류)별로 단에 군집 배치하고, 단 아래 **색상 자석테이프**로 영역을 표시합니다(색=분류별 지정색). 섹션(세로 열) 개념은 표준화 참고 전용입니다.")
+                    _rk_list = []
+                    for _, _rr in df_racks_ed.iterrows():
+                        _nm3 = str(_rr.get("명칭") or "").strip()
+                        if not _nm3: continue
+                        try: _wv3 = int(float(_rr.get("폭mm") or 0))
+                        except Exception: _wv3 = 0
                         try:
-                            _qty_def = int(_ov.get("qty")) if _ov.get("qty") is not None \
-                                else int(float(str(r.get("기본수량") or 0)))
-                        except Exception:
-                            _qty_def = 0
-                        _p = prod_by_code.get(_code, {})
-                        try: _unit_i = int(float(_p.get("price_nh_loc") or 0))
-                        except Exception: _unit_i = 0
-                        _rows_plan.append({
-                            "품목코드": _code, "품목명": str(r.get("품목명_AQ", "") or ""), "규격": str(r.get("규격_AQ", "") or ""),
-                            "수용정보": _cap_txt, "상자": _box_def, "방향": _ori_def, "수량": _qty_def, "지역농협가": _unit_i,
-                        })
-                    _box_opts = sorted(set(aq_box_names) | {rp["상자"] for rp in _rows_plan if rp["상자"]})
-                    edited_plan = st.data_editor(
-                        pd.DataFrame(_rows_plan), hide_index=True, height=420, key=f"aq_plan_ed_{sel_site}",
-                        disabled=["품목코드", "품목명", "규격", "수용정보", "지역농협가"],
-                        column_config={
-                            "상자": st.column_config.SelectboxColumn("상자", options=[""] + _box_opts),
-                            "방향": st.column_config.SelectboxColumn(
-                                "방향", options=["세로", "가로"],
-                                help="세로=표준(상자 폭이 전면, 최대 배치) · 가로=깊이 얕은 단용(상자 깊이가 전면)"),
-                            "수량": st.column_config.NumberColumn(format="%d", min_value=0),
-                        })
+                            _hs3 = [int(float(x)) for x in str(_rr.get("단높이mm(콤마구분)") or "").split(",") if str(x).strip()]
+                        except Exception: _hs3 = []
+                        if _wv3 > 0 and _hs3:
+                            _rk_list.append({"명칭": _nm3, "내측폭": _wv3 - 38, "단높이": _hs3})
+                    _dims_p = aq_box_dims_map(aq_boxes)
+                    if not _rk_list:
+                        st.info("랙 구성에 폭mm·단높이가 입력된 랙이 필요합니다. (📐 표준 시스템 불러오기로 예시 구성 가능)")
+                    elif not _dims_p:
+                        st.info("상자 치수가 필요합니다 — 📦 상자·수용량 탭에서 폭·높이를 등록하세요.")
+                    else:
+                        _pg = plan_groups if plan_groups else aq_groups
+                        _asg_key = f"aq_asg_{sel_site}"
+                        _ver_key = f"aq_asg_ver_{sel_site}"
+                        if _ver_key not in st.session_state: st.session_state[_ver_key] = 0
+                        if _asg_key not in st.session_state:
+                            _saved_asg = _plan_cur.get("assign", {}) if isinstance(_plan_cur, dict) else {}
+                            st.session_state[_asg_key] = ({str(k): (str(v.get("rack", "")), int(v.get("shelf", 0)))
+                                                           for k, v in _saved_asg.items() if isinstance(v, dict)}
+                                                          if isinstance(_saved_asg, dict) else {})
+                        ca1, ca0, ca2 = st.columns([2, 1, 3])
+                        with ca0:
+                            if st.button("🗑 배치 초기화", key=f"aq_clear_{sel_site}"):
+                                st.session_state[_asg_key] = {}
+                                st.session_state[_ver_key] += 1
+                                st.session_state[f"aq_unp_{sel_site}"] = []
+                                st.rerun()
+                        with ca1:
+                            if st.button("⚡ 자동배치 (단 중심 군집)", key=f"aq_auto_{sel_site}"):
+                                _seq = []
+                                for g in _pg:
+                                    _gi = [r for r in aq_items if (r.get("진열분류") or "(미지정)") == g]
+                                    def _bw_key(r):
+                                        _b0 = str((_plan_items.get(r["품목코드"], {}) or {}).get("box") or r.get("기본상자") or "")
+                                        return (-_dims_p.get(_b0, (0, 0))[0], r["품목코드"])
+                                    for r in sorted(_gi, key=_bw_key):
+                                        _b0 = str((_plan_items.get(r["품목코드"], {}) or {}).get("box") or r.get("기본상자") or "")
+                                        _seq.append((r["품목코드"], g, _b0))
+                                _asg_new, _unp = aq_auto_place(_rk_list, _seq, _dims_p, group_order=_pg)
+                                st.session_state[_asg_key] = _asg_new
+                                st.session_state[_ver_key] += 1
+                                st.session_state[f"aq_unp_{sel_site}"] = _unp
+                                st.rerun()
+                        with ca2:
+                            _unp_l = st.session_state.get(f"aq_unp_{sel_site}", [])
+                            if _unp_l:
+                                st.warning(f"미배치 {len(_unp_l)}건(상자 미지정·공간 부족): {', '.join(_unp_l[:8])}{' 외' if len(_unp_l) > 8 else ''}")
+                        with st.expander("✏️ 세부 조정 — 품목별 랙·단 이동 (자동배치 결과 수정)", expanded=False):
+                            _asg_cur = st.session_state.get(_asg_key, {})
+                            _rows_asg = []
+                            for g in _pg:
+                                for r in aq_items:
+                                    if (r.get("진열분류") or "(미지정)") != g: continue
+                                    _c4 = r["품목코드"]
+                                    _b4 = str((_plan_items.get(_c4, {}) or {}).get("box") or r.get("기본상자") or "")
+                                    _rk4, _sh4 = _asg_cur.get(_c4, ("", 0))
+                                    _rows_asg.append({"품목코드": _c4, "품목명": str(r.get("품목명_AQ", "") or ""), "분류": g,
+                                                      "상자": _b4, "랙": _rk4, "단": int(_sh4 or 0)})
+                            _rk_names = [rk["명칭"] for rk in _rk_list]
+                            df_asg = st.data_editor(
+                                pd.DataFrame(_rows_asg), hide_index=True, height=300,
+                                key=f"aq_asg_ed_{sel_site}_{st.session_state[_ver_key]}",
+                                disabled=["품목코드", "품목명", "분류", "상자"],
+                                column_config={
+                                    "랙": st.column_config.SelectboxColumn("랙", options=[""] + _rk_names),
+                                    "단": st.column_config.NumberColumn("단", min_value=0, step=1, help="0=미배치 · 1=최하단"),
+                                })
+                        _seq_by_shelf = {}
+                        _asg_live = {}
+                        for _, _row4 in df_asg.iterrows():
+                            _rk5 = str(_row4["랙"] or "").strip()
+                            try: _sh5 = int(_row4["단"] or 0)
+                            except Exception: _sh5 = 0
+                            if not _rk5 or _sh5 <= 0: continue
+                            _asg_live[str(_row4["품목코드"])] = (_rk5, _sh5)
+                            _b5 = str(_row4["상자"] or "")
+                            _wh5 = _dims_p.get(_b5)
+                            if not _wh5: continue
+                            _seq_by_shelf.setdefault((_rk5, _sh5), []).append(
+                                (str(_row4["품목코드"]), str(_row4["분류"]), _b5, _wh5[0], _wh5[1]))
+                        st.session_state[_asg_key] = _asg_live   # 편집 상태 동기화(저장 시 사용)
+                        for _k7 in _seq_by_shelf:                 # 정준 정렬 — 편집 순서와 무관하게 동일 패킹
+                            _seq_by_shelf[_k7] = aq_canon_seq(_seq_by_shelf[_k7], _pg)
+                        _view_rks = st.multiselect("표시할 랙 (기본 전체 — V1 도면처럼 나란히)", _rk_names, default=_rk_names, key=f"aq_rk_view_{sel_site}")
+                        _rk_show = [rk for rk in _rk_list if rk["명칭"] in (_view_rks or _rk_names)]
+                        st.markdown(aq_racks_svg_all(_rk_show, _seq_by_shelf), unsafe_allow_html=True)
+                        _leg = " ".join(
+                            f'<span style="display:inline-block;width:10px;height:10px;background:{AQ_GROUP_COLORS.get(g, "#9AA0A6")};margin-right:4px;"></span>'
+                            f'<span style="font-size:12px;margin-right:10px;">{g}</span>' for g in _pg)
+                        st.markdown(_leg, unsafe_allow_html=True)
+                        _over = []
+                        for (rk6, sh6), seq6 in sorted(_seq_by_shelf.items()):
+                            _rko = next((x for x in _rk_list if x["명칭"] == rk6), None)
+                            if not _rko or sh6 > len(_rko["단높이"]):
+                                _over.append(f"{rk6} 단{sh6}: 단 번호 범위 초과"); continue
+                            _r6, _f6, _j6 = aq_pack_shelf_rows(seq6, _rko["내측폭"], _rko["단높이"][sh6 - 1])
+                            if _j6:
+                                _over.append(f"{rk6} 단{sh6}: {len(_j6)}건 안 들어감({', '.join(x[0] for x in _j6[:4])})")
+                        if _over:
+                            st.warning("⚠ " + " / ".join(_over[:6]))
+                        elif _seq_by_shelf:
+                            st.success("✅ 배치된 모든 단이 실척 패킹 기준 적합합니다.")
+
+                st.markdown("##### 4️⃣ 견적 확인 · 저장")
+                if plan_groups and (edited_plan is not None):
                     _parts2, _bcnt2, _skip2 = 0.0, {}, []
                     for _, _row in edited_plan.iterrows():
                         try: _q = int(_row["수량"] or 0)
@@ -5460,114 +5605,6 @@ elif mode == "🏪 아쿠나리스":
                         edited_plan.to_csv(index=False).encode("utf-8-sig"),
                         file_name=f"aqunaris_{sel_site}_진열계획.csv", mime="text/csv",
                         key=f"aq_site_csv_{sel_site}")
-                else:
-                    st.info("진열분류를 선택하면 품목별 계획 표가 나타납니다.")
-
-                # ── [V45] 단(선반) 중심 배치 설계 — 자동배치 + 실척 시각화 + 수동 조정 ──
-                with st.expander("🖼️ 단 중심 배치 설계 (자동배치 · 시각화 · 수동 조정)", expanded=False):
-                    st.caption("배치의 단위는 **단(선반)**입니다. 용도군(진열분류)별로 단에 군집 배치하고, 단 아래 **색상 자석테이프**로 영역을 표시합니다(색=분류별 지정색). 섹션(세로 열) 개념은 표준화 참고 전용입니다.")
-                    _rk_list = []
-                    for _, _rr in df_racks_ed.iterrows():
-                        _nm3 = str(_rr.get("명칭") or "").strip()
-                        if not _nm3: continue
-                        try: _wv3 = int(float(_rr.get("폭mm") or 0))
-                        except Exception: _wv3 = 0
-                        try:
-                            _hs3 = [int(float(x)) for x in str(_rr.get("단높이mm(콤마구분)") or "").split(",") if str(x).strip()]
-                        except Exception: _hs3 = []
-                        if _wv3 > 0 and _hs3:
-                            _rk_list.append({"명칭": _nm3, "내측폭": _wv3 - 38, "단높이": _hs3})
-                    _dims_p = aq_box_dims_map(aq_boxes)
-                    if not _rk_list:
-                        st.info("랙 구성에 폭mm·단높이가 입력된 랙이 필요합니다. (📐 표준 시스템 불러오기로 예시 구성 가능)")
-                    elif not _dims_p:
-                        st.info("상자 치수가 필요합니다 — 📦 상자·수용량 탭에서 폭·높이를 등록하세요.")
-                    else:
-                        _pg = plan_groups if plan_groups else aq_groups
-                        _asg_key = f"aq_asg_{sel_site}"
-                        _ver_key = f"aq_asg_ver_{sel_site}"
-                        if _ver_key not in st.session_state: st.session_state[_ver_key] = 0
-                        if _asg_key not in st.session_state:
-                            _saved_asg = _plan_cur.get("assign", {}) if isinstance(_plan_cur, dict) else {}
-                            st.session_state[_asg_key] = ({str(k): (str(v.get("rack", "")), int(v.get("shelf", 0)))
-                                                           for k, v in _saved_asg.items() if isinstance(v, dict)}
-                                                          if isinstance(_saved_asg, dict) else {})
-                        ca1, ca2 = st.columns([2, 3])
-                        with ca1:
-                            if st.button("⚡ 자동배치 (단 중심 군집)", key=f"aq_auto_{sel_site}"):
-                                _seq = []
-                                for g in _pg:
-                                    _gi = [r for r in aq_items if (r.get("진열분류") or "(미지정)") == g]
-                                    def _bw_key(r):
-                                        _b0 = str((_plan_items.get(r["품목코드"], {}) or {}).get("box") or r.get("기본상자") or "")
-                                        return (-_dims_p.get(_b0, (0, 0))[0], r["품목코드"])
-                                    for r in sorted(_gi, key=_bw_key):
-                                        _b0 = str((_plan_items.get(r["품목코드"], {}) or {}).get("box") or r.get("기본상자") or "")
-                                        _seq.append((r["품목코드"], g, _b0))
-                                _asg_new, _unp = aq_auto_place(_rk_list, _seq, _dims_p, group_order=_pg)
-                                st.session_state[_asg_key] = _asg_new
-                                st.session_state[_ver_key] += 1
-                                st.session_state[f"aq_unp_{sel_site}"] = _unp
-                                st.rerun()
-                        with ca2:
-                            _unp_l = st.session_state.get(f"aq_unp_{sel_site}", [])
-                            if _unp_l:
-                                st.warning(f"미배치 {len(_unp_l)}건(상자 미지정·공간 부족): {', '.join(_unp_l[:8])}{' 외' if len(_unp_l) > 8 else ''}")
-                        _asg_cur = st.session_state.get(_asg_key, {})
-                        _rows_asg = []
-                        for g in _pg:
-                            for r in aq_items:
-                                if (r.get("진열분류") or "(미지정)") != g: continue
-                                _c4 = r["품목코드"]
-                                _b4 = str((_plan_items.get(_c4, {}) or {}).get("box") or r.get("기본상자") or "")
-                                _rk4, _sh4 = _asg_cur.get(_c4, ("", 0))
-                                _rows_asg.append({"품목코드": _c4, "품목명": str(r.get("품목명_AQ", "") or ""), "분류": g,
-                                                  "상자": _b4, "랙": _rk4, "단": int(_sh4 or 0)})
-                        _rk_names = [rk["명칭"] for rk in _rk_list]
-                        df_asg = st.data_editor(
-                            pd.DataFrame(_rows_asg), hide_index=True, height=300,
-                            key=f"aq_asg_ed_{sel_site}_{st.session_state[_ver_key]}",
-                            disabled=["품목코드", "품목명", "분류", "상자"],
-                            column_config={
-                                "랙": st.column_config.SelectboxColumn("랙", options=[""] + _rk_names),
-                                "단": st.column_config.NumberColumn("단", min_value=0, step=1, help="0=미배치 · 1=최하단"),
-                            })
-                        _seq_by_shelf = {}
-                        _asg_live = {}
-                        for _, _row4 in df_asg.iterrows():
-                            _rk5 = str(_row4["랙"] or "").strip()
-                            try: _sh5 = int(_row4["단"] or 0)
-                            except Exception: _sh5 = 0
-                            if not _rk5 or _sh5 <= 0: continue
-                            _asg_live[str(_row4["품목코드"])] = (_rk5, _sh5)
-                            _b5 = str(_row4["상자"] or "")
-                            _wh5 = _dims_p.get(_b5)
-                            if not _wh5: continue
-                            _seq_by_shelf.setdefault((_rk5, _sh5), []).append(
-                                (str(_row4["품목코드"]), str(_row4["분류"]), _b5, _wh5[0], _wh5[1]))
-                        st.session_state[_asg_key] = _asg_live   # 편집 상태 동기화(저장 시 사용)
-                        for _k7 in _seq_by_shelf:                 # 정준 정렬 — 편집 순서와 무관하게 동일 패킹
-                            _seq_by_shelf[_k7] = aq_canon_seq(_seq_by_shelf[_k7], _pg)
-                        _sel_rk = st.selectbox("랙 시각화", _rk_names, key=f"aq_rk_view_{sel_site}")
-                        _rk_obj = next(rk for rk in _rk_list if rk["명칭"] == _sel_rk)
-                        _shelf_seqs = {sh: _seq_by_shelf.get((_sel_rk, sh), []) for sh in range(1, len(_rk_obj["단높이"]) + 1)}
-                        st.markdown(aq_rack_svg(_sel_rk, _rk_obj["내측폭"], _rk_obj["단높이"], _shelf_seqs), unsafe_allow_html=True)
-                        _leg = " ".join(
-                            f'<span style="display:inline-block;width:10px;height:10px;background:{AQ_GROUP_COLORS.get(g, "#9AA0A6")};margin-right:4px;"></span>'
-                            f'<span style="font-size:12px;margin-right:10px;">{g}</span>' for g in _pg)
-                        st.markdown(_leg, unsafe_allow_html=True)
-                        _over = []
-                        for (rk6, sh6), seq6 in sorted(_seq_by_shelf.items()):
-                            _rko = next((x for x in _rk_list if x["명칭"] == rk6), None)
-                            if not _rko or sh6 > len(_rko["단높이"]):
-                                _over.append(f"{rk6} 단{sh6}: 단 번호 범위 초과"); continue
-                            _r6, _f6, _j6 = aq_pack_shelf_rows(seq6, _rko["내측폭"], _rko["단높이"][sh6 - 1])
-                            if _j6:
-                                _over.append(f"{rk6} 단{sh6}: {len(_j6)}건 안 들어감({', '.join(x[0] for x in _j6[:4])})")
-                        if _over:
-                            st.warning("⚠ " + " / ".join(_over[:6]))
-                        elif _seq_by_shelf:
-                            st.success("✅ 배치된 모든 단이 실척 패킹 기준 적합합니다.")
 
                 # ── [V44] 표준 배치 검증 — 랙 단높이 × 상자 치수 × 실배치(V1 위치)로 단별 용량 판정 ──
                 with st.expander("📏 표준 배치 검증 (V1 섹션 위치 기준 — 표준화 참고 전용)", expanded=(sel_site == AQ_STD_SITE)):

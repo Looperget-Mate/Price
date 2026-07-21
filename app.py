@@ -979,6 +979,16 @@ def aq_box_dims_map(boxes):
         if name and w > 0 and h > 0: out[name] = (w, h)
     return out
 
+def aq_box_depth_map(boxes):
+    """[V49] AQ_Boxes → {상자종류: 깊이mm} (깊이 있는 것만) — 탑뷰(줄수) 계산용."""
+    out = {}
+    for b in boxes:
+        name = str(b.get("상자종류", "")).strip()
+        try: d = int(float(str(b.get("깊이mm") or 0)))
+        except Exception: continue
+        if name and d > 0: out[name] = d
+    return out
+
 def aq_capacity_rows(aq_items, plan_items, box_dims, rack_h_by_sec, inner=AQ_STD_INNER, inner_by_sec=None):
     """표준 위치(섹션-단) 기반 단별 용량 검증. plan_items의 상자 오버라이드 반영.
     반환: [{섹션,단,단높이,품목수,사용폭,판정,미지정}]"""
@@ -1032,43 +1042,51 @@ def aq_std_payload(aq_items):
 # ── [V45] 단(선반) 중심 배치 — 섹션 개념은 표준 참고로만, 배치의 단위는 '단' ──
 #  철학(박 대표님): 용도군별로 단 단위 군집 배치 + 단 아래 색상 자석테이프로 영역 표시.
 #  섹션(세로 열) 고정 개념은 유동성을 죽임(신규 추가·변경 불가) → 폐기, 표준화 참고 전용.
+#  [V49] 색상 = V1 실측 확정 팔레트 v1 (2026-07-21, 아쿠나리스_부속군_색상팔레트_v1_확정.md).
+#  ⚠ 군 명칭(키)은 현행 9군 유지 — 10군 재편(노지SP 분리·미니SP→시설관수)은 AQ_Items 재분류와 함께 후속(§3·§4).
 AQ_GROUP_COLORS = {
-    "스마트카플러": "#7B4FBF", "조임식부속": "#E8862D", "나사식부속": "#8B6A46",
-    "퀸밸브": "#2D7DD2", "새들·점적스타트": "#1FA05A", "물호스·연질부속": "#37B5C9",
-    "미니스프링클러·분수부속": "#E5488A", "루퍼젯·공구": "#F4D624",
-    "여과기·스프링클러지주": "#5B6770", "(미지정)": "#9AA0A6",
+    "스마트카플러": "#68258A", "조임식부속": "#938073", "나사식부속": "#231F20",
+    "퀸밸브": "#1A2989", "새들·점적스타트": "#00923A", "물호스·연질부속": "#00A7EA",
+    "미니스프링클러·분수부속": "#EC008C", "루퍼젯·공구": "#F4D624",
+    "여과기·스프링클러지주": "#A1A2A2", "(미지정)": "#9AA0A6",
 }
 
 def aq_canon_seq(seq, group_order=None):
-    """단 패킹의 정준 정렬: (분류 군집순, 높이↓, 폭↓, 코드) — 편집표 순서와 무관하게 동일 결과 보장."""
+    """단 패킹의 정준 정렬: (분류 군집순, 높이↓, 폭↓, 상자, 코드) — 편집표 순서와 무관하게 동일 결과 보장.
+    [V49] 상자명 정렬 추가 — 같은 상자끼리 인접해야 스택(동일상자 적층) 열을 공유한다."""
     gp = {g: i for i, g in enumerate(group_order or [])}
-    return sorted(seq, key=lambda t: (gp.get(t[1], 99), -t[4], -t[3], t[0]))
+    return sorted(seq, key=lambda t: (gp.get(t[1], 99), -t[4], -t[3], t[2], t[0]))
 
-def aq_pack_shelf_rows(box_seq, inner, shelf_h, max_rows=3):
-    """단 내부 행 패킹: box_seq=[(코드,분류,상자,폭,높이)] 순서대로 좌→우, 폭 초과 시 새 층(행).
-    최대 3층(현실 적층 한계, V1 관찰 최대). 반환: (rows, fitted, rejected)."""
-    rows, fitted, rejected = [], [], []
-    cur_w, heights = 0, []
-    cur_row = []
-    def rows_h():
-        return sum(heights) if heights else 0
+def aq_pack_shelf_stacks(box_seq, inner, shelf_h, max_layers=3):
+    """[V49] 단 내부 스택(열) 패킹 — 플라스틱 상자 물리 규칙(박 대표님 지시 2026-07-21):
+      ① 적층은 '같은 상자'끼리만(아래 상자에 윗 상자가 끼워짐 — 다른 상자를 위에 못 올림)
+      ② 적층 높이 ≤ 단높이 (층수 = min(3, 단높이//상자높이), 0층이면 그 단에 못 들어감)
+      ③ 상자는 반드시 바로 아래 상자 위에 — 붕 뜬 배치 구조적으로 불가(열 단위 적층)
+    box_seq=[(코드,분류,상자,폭,높이)] (정준 정렬 가정) — 같은 (분류,상자,치수) 연속 구간이 열을 공유.
+    반환: (cols, fitted, rejected) — cols=[(x오프셋, 폭, [아래→위 items])]."""
+    cols, fitted, rejected = [], [], []
+    x = 0
+    runs = []
     for it in box_seq:
-        w, h = it[3], it[4]
-        if h > shelf_h or w > inner:
-            rejected.append(it); continue
-        if cur_row and cur_w + w <= inner and rows_h() - (heights[-1] if heights else 0) + max(heights[-1], h) <= shelf_h:
-            cur_row.append(it); cur_w += w
-            heights[-1] = max(heights[-1], h)
-        elif not cur_row:
-            cur_row = [it]; cur_w = w; heights.append(h)
-        elif len(heights) < max_rows and rows_h() + h <= shelf_h:
-            rows.append(cur_row)
-            cur_row = [it]; cur_w = w; heights.append(h)
+        key = (it[1], it[2], it[3], it[4])
+        if runs and runs[-1][0] == key:
+            runs[-1][1].append(it)
         else:
-            rejected.append(it); continue
-        fitted.append(it)
-    if cur_row: rows.append(cur_row)
-    return rows, fitted, rejected
+            runs.append((key, [it]))
+    for _key, items in runs:
+        w, h = items[0][3], items[0][4]
+        layers = min(max_layers, int(shelf_h // h)) if h > 0 else 0
+        if layers < 1 or w > inner:
+            rejected.extend(items); continue
+        cur = None
+        for it in items:
+            if cur is None or len(cur[2]) >= layers:
+                if x + w > inner:
+                    rejected.append(it); cur = None; continue
+                cur = (x, w, [])
+                cols.append(cur); x += w
+            cur[2].append(it); fitted.append(it)
+    return cols, fitted, rejected
 
 def aq_auto_place(rack_list, items_seq, box_dims, group_order=None):
     """단 중심 자동배치(군집): 랙 순서·단은 아래→위, 품목은 분류 군집 순서 그대로 채움.
@@ -1091,7 +1109,7 @@ def aq_auto_place(rack_list, items_seq, box_dims, group_order=None):
         while i < len(shelves):
             s = shelves[i]
             trial = aq_canon_seq(s["seq"] + [(code, grp, box, w, h)], group_order)
-            rows, fitted, rej = aq_pack_shelf_rows(trial, s["inner"], s["h"])
+            _cols, fitted, rej = aq_pack_shelf_stacks(trial, s["inner"], s["h"])   # [V49] 스택 패킹
             if not rej:
                 s["seq"] = trial
                 assign[code] = (s["rack"], s["no"])
@@ -1103,13 +1121,28 @@ def aq_auto_place(rack_list, items_seq, box_dims, group_order=None):
             unplaced.append(code)
     return assign, unplaced
 
-def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=19, scale=0.22, show_dims=True):
-    """(x0,y0) 기준으로 랙 1대의 SVG 요소들을 out 리스트에 추가. 반환: (폭px, 높이px)."""
+def _aq_esc(s):
+    """[V49] SVG/HTML 속성용 이스케이프."""
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
+
+def _aq_hover_attrs(it, info):
+    """[V49] 상자 rect의 호버 툴팁 데이터 속성. info={코드:{name,spec,box,cap,...}} 없으면 빈 문자열."""
+    if not info: return ""
+    meta = info.get(it[0])
+    if not meta: return ""
+    return (f' class="aqbox" data-name="{_aq_esc(meta.get("name") or it[0])}"'
+            f' data-spec="{_aq_esc(meta.get("spec") or "")}"'
+            f' data-box="{_aq_esc(meta.get("box") or it[2])}"'
+            f' data-cap="{_aq_esc(meta.get("cap") or "")}"')
+
+def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=19, scale=0.22, show_dims=True, info=None):
+    """(x0,y0) 기준으로 랙 1대의 SVG 요소들을 out 리스트에 추가. 반환: (폭px, 높이px).
+    [V49] 스택 패킹 렌더(동일상자 열 적층) + info 있으면 호버 데이터 속성 + 도형/이미지(자유 배치) 지원."""
     W = inner + frame_t * 2
     H = sum(shelf_hs) + frame_t
     pw, ph = W * scale, H * scale
     out.append(f'<rect x="{x0:.1f}" y="{y0:.1f}" width="{pw:.1f}" height="{ph:.1f}" fill="#FAFAF7" stroke="#191414" stroke-width="1.6"/>')
-    out.append(f'<text x="{x0:.1f}" y="{y0 - 4:.1f}" font-size="11" fill="#8C8681">{rack_name}</text>')
+    out.append(f'<text x="{x0:.1f}" y="{y0 - 4:.1f}" font-size="11" fill="#8C8681">{_aq_esc(rack_name)}</text>')
     y_real = 0
     for si, sh in enumerate(shelf_hs, 1):
         y_real += sh
@@ -1119,37 +1152,43 @@ def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=
             out.append(f'<text x="{x0 + 2:.1f}" y="{y_px + 9:.1f}" font-size="7" fill="#B9B3AD">{si}·{sh}</text>')
         seq = shelf_seqs.get((rack_name, si)) or shelf_seqs.get(si) or []
         if not seq: continue
-        rows, fitted, rej = aq_pack_shelf_rows(seq, inner, sh)
+        cols_p, fitted, rej = aq_pack_shelf_stacks(seq, inner, sh)
         base = y0 + ph - (y_real - sh) * scale
-        ry = 0
         tape = []
-        for row in rows:
-            rh = max(it[4] for it in row)
-            x = 0
-            for it in row:
+        for cx, cw, stack in cols_p:
+            for li, it in enumerate(stack):
                 bw, bh = it[3], it[4]
                 col = AQ_GROUP_COLORS.get(it[1], "#9AA0A6")
-                out.append(f'<rect x="{x0 + frame_t*scale + x*scale:.1f}" y="{base - (ry + bh)*scale:.1f}" '
-                           f'width="{bw*scale:.1f}" height="{bh*scale:.1f}" fill="{col}" fill-opacity="0.72" stroke="#191414" stroke-width="0.6"/>')
-                if ry == 0:
-                    tape.append((x, x + bw, col))
-                x += bw
-            ry += rh
+                bx = x0 + frame_t * scale + cx * scale
+                by = base - (li + 1) * bh * scale
+                attrs = _aq_hover_attrs(it, info)
+                meta = (info or {}).get(it[0]) or {}
+                shape = meta.get("shape") or ""
+                if shape == "원":
+                    out.append(f'<ellipse cx="{bx + bw*scale/2:.1f}" cy="{by + bh*scale/2:.1f}" rx="{bw*scale/2:.1f}" ry="{bh*scale/2:.1f}" '
+                               f'fill="{col}" fill-opacity="0.72" stroke="#191414" stroke-width="0.6"{attrs}/>')
+                elif shape == "이미지" and meta.get("img"):
+                    out.append(f'<image x="{bx:.1f}" y="{by:.1f}" width="{bw*scale:.1f}" height="{bh*scale:.1f}" '
+                               f'href="{meta["img"]}" preserveAspectRatio="xMidYMid meet"{attrs}/>')
+                else:
+                    out.append(f'<rect x="{bx:.1f}" y="{by:.1f}" '
+                               f'width="{bw*scale:.1f}" height="{bh*scale:.1f}" fill="{col}" fill-opacity="0.72" stroke="#191414" stroke-width="0.6"{attrs}/>')
+            tape.append((cx, cx + cw, AQ_GROUP_COLORS.get(stack[0][1], "#9AA0A6")))
         for tx0, tx1, col in tape:   # 색상 자석테이프(단 전면 하단 밴드)
             out.append(f'<rect x="{x0 + frame_t*scale + tx0*scale:.1f}" y="{base - 3:.1f}" width="{(tx1-tx0)*scale:.1f}" height="3.4" fill="{col}"/>')
     return pw, ph
 
-def aq_rack_svg(rack_name, inner, shelf_hs, shelf_seqs, frame_t=19, scale=0.22):
+def aq_rack_svg(rack_name, inner, shelf_hs, shelf_seqs, frame_t=19, scale=0.22, info=None):
     """랙 1대 정면 SVG (실척)."""
     pad = 16
     out = []
-    pw, ph = _aq_rack_parts(out, pad, pad, rack_name, inner, shelf_hs, shelf_seqs, frame_t, scale)
+    pw, ph = _aq_rack_parts(out, pad, pad, rack_name, inner, shelf_hs, shelf_seqs, frame_t, scale, info=info)
     return (f'<svg width="{pw + pad*2:.0f}" height="{ph + pad*2 + 14:.0f}" xmlns="http://www.w3.org/2000/svg">'
             + "".join(out) + '</svg>')
 
-def aq_racks_svg_all(rack_list, seq_by_shelf, per_row=6, scale=None):
+def aq_racks_svg_all(rack_list, seq_by_shelf, per_row=6, scale=None, info=None):
     """[V47] 전체 배치 뷰 — V1 도면처럼 랙들을 줄당 per_row대씩 나란히 렌더.
-    rack_list=[{명칭,내측폭,단높이}], seq_by_shelf={(랙명,단):[...]}."""
+    rack_list=[{명칭,내측폭,단높이}], seq_by_shelf={(랙명,단):[...]}. [V49] info=호버 툴팁 데이터."""
     if not rack_list: return ""
     if scale is None:
         n = len(rack_list)
@@ -1163,13 +1202,117 @@ def aq_racks_svg_all(rack_list, seq_by_shelf, per_row=6, scale=None):
         row_h = 0
         for rk in row:
             pw, ph = _aq_rack_parts(out, x, y + 10, rk["명칭"], rk["내측폭"], rk["단높이"], seq_by_shelf,
-                                    scale=scale, show_dims=(scale >= 0.15))
+                                    scale=scale, show_dims=(scale >= 0.15), info=info)
             x += pw + gap_x
             row_h = max(row_h, ph)
         total_w = max(total_w, x)
         y += row_h + gap_y
     return (f'<svg width="{total_w + pad:.0f}" height="{y + pad:.0f}" xmlns="http://www.w3.org/2000/svg">'
             + "".join(out) + '</svg>')
+
+def aq_shelf_top_svg(rack_name, shelf_no, inner, shelf_h, depth, seq, rows_by_code=None, box_depths=None, info=None, scale=0.5):
+    """[V49] 단 탑뷰 — 위에서 내려다본 배치. 전면 x좌표는 정면 패킹과 동일, 깊이 방향 줄수 표시.
+    depth=단 깊이mm · rows_by_code={코드:줄수} · box_depths={상자:깊이mm}(미등록 상자는 1줄 전체깊이).
+    아래쪽 = 매장 전면(정면도에서 보이는 줄)."""
+    pad = 18
+    cols_p, fitted, rej = aq_pack_shelf_stacks(seq, inner, shelf_h)
+    pw, ph = inner * scale, depth * scale
+    out = [f'<rect x="{pad}" y="{pad}" width="{pw:.1f}" height="{ph:.1f}" fill="#FAFAF7" stroke="#191414" stroke-width="1.6"/>']
+    for cx, cw, stack in cols_p:
+        it = stack[0]
+        code, grp, box = it[0], it[1], it[2]
+        try: d = int(float((box_depths or {}).get(box) or 0))
+        except Exception: d = 0
+        try: n_rows = int((rows_by_code or {}).get(code) or 1)
+        except Exception: n_rows = 1
+        if d <= 0:
+            d, n_rows = depth, 1          # 깊이 미등록 → 1줄 전체 깊이로 표시
+        n_max = max(1, int(depth // d))
+        n_rows = max(1, min(n_rows, n_max))
+        col = AQ_GROUP_COLORS.get(grp, "#9AA0A6")
+        attrs = _aq_hover_attrs(it, info)
+        for j in range(n_rows):
+            y = pad + ph - (j + 1) * d * scale
+            out.append(f'<rect x="{pad + cx*scale:.1f}" y="{y:.1f}" width="{cw*scale:.1f}" height="{d*scale:.1f}" '
+                       f'fill="{col}" fill-opacity="{max(0.25, 0.78 - j*0.18):.2f}" stroke="#191414" stroke-width="0.7"{attrs}/>')
+        if len(stack) > 1:   # 정면 기준 적층 수 표기
+            out.append(f'<text x="{pad + (cx + cw/2)*scale:.1f}" y="{pad + ph - d*scale/2 + 3:.1f}" '
+                       f'font-size="9" text-anchor="middle" fill="#191414">×{len(stack)}층</text>')
+    out.append(f'<text x="{pad}" y="{pad - 5}" font-size="11" fill="#8C8681">'
+               f'{_aq_esc(rack_name)} 단{shelf_no} 탑뷰 — 내측 {inner}×깊이 {depth}mm · 아래쪽=전면</text>')
+    return (f'<svg width="{pw + pad*2:.0f}" height="{ph + pad*2:.0f}" xmlns="http://www.w3.org/2000/svg">'
+            + "".join(out) + '</svg>')
+
+def aq_svg_hover_html(svg):
+    """[V49] SVG를 호버 툴팁(품목명 크게·규격·상자·최대수량)과 함께 iframe HTML로 래핑.
+    반환: (html, 권장 iframe 높이px). components.html로 렌더해야 JS 툴팁이 동작."""
+    h = 400
+    try:
+        _i = svg.index('height="')
+        h = int("".join(ch for ch in svg[_i + 8:_i + 16] if ch.isdigit()) or 400)
+    except Exception:
+        pass
+    html = (
+        '<div style="position:relative;font-family:sans-serif;">' + svg +
+        '<div id="aqtip" style="display:none;position:fixed;z-index:99;pointer-events:none;'
+        'background:#191414;color:#FFFFFF;border:2px solid #F4D624;border-radius:8px;'
+        'padding:10px 14px;max-width:320px;box-shadow:0 4px 14px rgba(0,0,0,.35);">'
+        '<div id="aqtip-name" style="font-size:19px;font-weight:800;color:#F4D624;line-height:1.25;"></div>'
+        '<div id="aqtip-spec" style="font-size:13px;margin-top:3px;"></div>'
+        '<div id="aqtip-cap" style="font-size:13px;margin-top:2px;color:#CFC9C3;"></div>'
+        '</div>'
+        '<script>'
+        'var tip=document.getElementById("aqtip");'
+        'function aqShow(el,ev){'
+        ' document.getElementById("aqtip-name").textContent=el.getAttribute("data-name")||"";'
+        ' document.getElementById("aqtip-spec").textContent=el.getAttribute("data-spec")||"";'
+        ' var b=el.getAttribute("data-box")||"", c=el.getAttribute("data-cap")||"";'
+        ' document.getElementById("aqtip-cap").textContent=(b?("\\uD83D\\uDCE6 "+b):"")+(c?(" \\u00B7 \\ucd5c\\ub300 "+c+"\\uac1c"):"");'
+        ' tip.style.display="block"; aqMove(ev);}'
+        'function aqMove(ev){'
+        ' var x=ev.clientX+14,y=ev.clientY+14;'
+        ' var r=tip.getBoundingClientRect();'
+        ' if(x+r.width>window.innerWidth-8)x=ev.clientX-r.width-10;'
+        ' if(y+r.height>window.innerHeight-8)y=ev.clientY-r.height-10;'
+        ' tip.style.left=x+"px"; tip.style.top=y+"px";}'
+        'document.querySelectorAll(".aqbox").forEach(function(el){'
+        ' el.addEventListener("mouseenter",function(ev){aqShow(el,ev);});'
+        ' el.addEventListener("mousemove",aqMove);'
+        ' el.addEventListener("mouseleave",function(){tip.style.display="none";});'
+        ' el.style.cursor="pointer";});'
+        '</script></div>')
+    return html, h + 10
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def aq_iso_data_uri(file_id, max_px=240):
+    """[V49] 등각(ISO) 이미지 → 흰배경 누끼(테두리 연결 플러드필, V37 방식) → PNG data URI (SVG 삽입용).
+    실패 시 빈 문자열(호출측이 도형으로 폴백)."""
+    img = download_image_by_id(file_id)
+    if img is None: return ""
+    try:
+        from collections import deque
+        img = img.convert("RGBA")
+        img.thumbnail((max_px, max_px))
+        px = img.load(); w, h = img.size
+        thr = 232
+        seen = [[False] * w for _ in range(h)]
+        dq = deque()
+        for x in range(w):
+            dq.append((x, 0)); dq.append((x, h - 1))
+        for y in range(h):
+            dq.append((0, y)); dq.append((w - 1, y))
+        while dq:
+            x, y = dq.popleft()
+            if x < 0 or y < 0 or x >= w or y >= h or seen[y][x]: continue
+            seen[y][x] = True
+            r, g, b, a = px[x, y]
+            if r >= thr and g >= thr and b >= thr:
+                px[x, y] = (r, g, b, 0)
+                dq.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
+        buf = io.BytesIO(); img.save(buf, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return ""
 
 def sync_products_jp_to_sheet(kr_products: list, exchange_rate: float):
     """한국 Products → Products_JP 자동 동기화. 기존 JP 단가 비율 유지."""
@@ -5503,22 +5646,52 @@ elif mode == "🏪 아쿠나리스":
                 st.markdown("##### 1️⃣ 공간(랙) 구성 — 현장 실측 입력 (행 추가/삭제 가능)")
                 # [V43] 깊이 규칙: 랙 공통 깊이는 '깊이mm', 단별로 다르면 '단깊이mm'에 콤마 목록(단1=최하단부터).
                 st.caption("깊이mm = 랙 공통 깊이 · 단별로 다르면 **단깊이mm(콤마구분)**에 단1(최하단)부터 입력 (예: 450,450,450,300,300). 깊이가 얕은 단은 진열 계획에서 상자를 **가로** 방향으로 배치할 수 있습니다.")
+                # [V49] 단높이 검증 규칙: 총높이mm 입력 시 Σ단높이 + 단두께×(단수−1) = 총높이 여야 배치에 반영.
+                st.caption("📐 **총높이mm**를 입력하면 단높이 합을 검증합니다 — Σ단높이 = 총높이 − 단두께×(단높이 개수−1). 예: 총 2000·두께 40·3단 → 단높이 합이 1920('800,800,320' ✓ / '800,700,320' ✗). 불일치 랙은 맞출 때까지 배치에서 제외됩니다.")
                 try: _racks_cur = json.loads(str(_site.get("랙구성JSON") or "[]"))
                 except Exception: _racks_cur = []
-                _rack_cols = ["명칭", "폭mm", "깊이mm", "단수", "단높이mm(콤마구분)", "단깊이mm(콤마구분)", "비고"]
+                _rack_cols = ["명칭", "폭mm", "깊이mm", "총높이mm", "단수", "단두께mm", "단높이mm(콤마구분)", "단깊이mm(콤마구분)", "비고"]
                 _df_racks_in = pd.DataFrame(_racks_cur)
                 for _c in _rack_cols:
                     if _c not in _df_racks_in.columns: _df_racks_in[_c] = ""
                 _df_racks_in = _df_racks_in[_rack_cols]
-                for _c in ["폭mm", "깊이mm", "단수"]:
+                for _c in ["폭mm", "깊이mm", "총높이mm", "단수", "단두께mm"]:
                     _df_racks_in[_c] = pd.to_numeric(_df_racks_in[_c], errors="coerce")
                 df_racks_ed = st.data_editor(
                     _df_racks_in, num_rows="dynamic", hide_index=True, key=f"aq_racks_ed_{sel_site}",
                     column_config={
                         "폭mm": st.column_config.NumberColumn(format="%d"),
                         "깊이mm": st.column_config.NumberColumn(format="%d"),
+                        "총높이mm": st.column_config.NumberColumn(format="%d", help="랙 최하단~최상단 전체 높이 — 입력 시 단높이 합 검증"),
                         "단수": st.column_config.NumberColumn(format="%d"),
+                        "단두께mm": st.column_config.NumberColumn(format="%d", help="선반(단) 판 두께 — 예 40 (빈칸=0)"),
                     })
+                # [V49] 랙 총높이 검증 — 불일치 랙은 배치(_rk_list)에서 제외
+                _rack_errs, _rack_notes, _bad_racks = [], [], set()
+                for _, _rr in df_racks_ed.iterrows():
+                    _nm9 = str(_rr.get("명칭") or "").strip()
+                    if not _nm9: continue
+                    try: _tot9 = int(float(_rr.get("총높이mm") or 0))
+                    except Exception: _tot9 = 0
+                    try: _thk9 = int(float(_rr.get("단두께mm") or 0))
+                    except Exception: _thk9 = 0
+                    try:
+                        _hs9 = [int(float(x)) for x in str(_rr.get("단높이mm(콤마구분)") or "").split(",") if str(x).strip()]
+                    except Exception:
+                        _hs9 = []
+                    if _tot9 > 0 and _hs9:
+                        _eff9 = _tot9 - _thk9 * (len(_hs9) - 1)
+                        if sum(_hs9) != _eff9:
+                            _bad_racks.add(_nm9)
+                            _rack_errs.append(f"**{_nm9}**: 단높이 합 {sum(_hs9)} ≠ {_eff9} (총 {_tot9} − 두께 {_thk9}×{len(_hs9) - 1})")
+                    try: _cnt9 = int(float(_rr.get("단수") or 0))
+                    except Exception: _cnt9 = 0
+                    if _cnt9 and _hs9 and _cnt9 != len(_hs9):
+                        _rack_notes.append(f"{_nm9}: 단수 {_cnt9} ≠ 단높이 {len(_hs9)}개")
+                if _rack_errs:
+                    st.error("📐 단높이 합이 랙 높이와 맞지 않습니다 — 아래 랙은 배치에 반영되지 않습니다.\n- " + "\n- ".join(_rack_errs))
+                if _rack_notes:
+                    st.caption("ℹ️ 단수 확인: " + " · ".join(_rack_notes))
                 # [V44] 슬롯·층수 힌트 (상자 치수 기반)
                 _dims_hint = aq_box_dims_map(aq_boxes)
                 if _dims_hint:
@@ -5586,22 +5759,93 @@ elif mode == "🏪 아쿠나리스":
                     _o = _plan_items.get(code, {})
                     return (_o.get("use", True) is not False) if isinstance(_o, dict) else True
 
+                _aq_by_code = {r["품목코드"]: r for r in aq_items}   # [V49] 코드→AQ_Items 레코드
+
+                # ── [V49] 자유 배치 — 상자에 담기지 않는 품목을 도형/등각(ISO) 이미지로 등록 ──
+                _free_cur = _plan_cur.get("free", {}) if isinstance(_plan_cur.get("free", {}), dict) else {}
+                df_free = None
+                with st.expander("🎨 자유 배치 품목 — 상자 없는 제품 (도형/등각 이미지, 크기 직접 지정)", expanded=False):
+                    st.caption("상자 미지정 품목(전시품·행잉·공구류)을 **폭×높이(mm)** 직접 지정으로 단에 올립니다. "
+                               "형태 = 사각/원/이미지(등각 ISO 등록 품목만). **품명(코드)·수량 매칭 필수** — 수량·크기가 없으면 배치되지 않습니다. "
+                               "랙·단 지정은 아래 3️⃣ 세부 조정 표에서(상자란에 '(자유)'로 표시).")
+                    _rows_free = []
+                    for r in aq_items:
+                        _cf = r["품목코드"]
+                        if not _aq_use(_cf): continue
+                        _boxf = str((_plan_items.get(_cf, {}) or {}).get("box") or r.get("기본상자") or "").strip()
+                        if _boxf: continue   # 상자가 있는 품목은 대상 아님
+                        _fc = _free_cur.get(_cf, {}) if isinstance(_free_cur.get(_cf, {}), dict) else {}
+                        _has_iso = bool(str(r.get("이미지ISO", "") or "").strip())
+                        try: _wdef = int(_fc.get("w") or 0) or int(float(str(r.get("가로") or 0))) or None
+                        except Exception: _wdef = None
+                        try: _hdef = int(_fc.get("h") or 0) or int(float(str(r.get("높이") or 0))) or None
+                        except Exception: _hdef = None
+                        _rows_free.append({
+                            "사용": _cf in _free_cur,
+                            "품목코드": _cf, "품목명": str(r.get("품목명_AQ", "") or ""), "규격": str(r.get("규격_AQ", "") or ""),
+                            "형태": str(_fc.get("shape") or ("이미지" if _has_iso else "사각")),
+                            "폭mm": _wdef, "높이mm": _hdef,
+                            "수량": int(_fc.get("qty") or 0),
+                            "ISO": "✓" if _has_iso else "",
+                        })
+                    if _rows_free:
+                        df_free = st.data_editor(
+                            pd.DataFrame(_rows_free), hide_index=True, height=280, key=f"aq_free_ed_{sel_site}",
+                            disabled=["품목코드", "품목명", "규격", "ISO"],
+                            column_config={
+                                "사용": st.column_config.CheckboxColumn("사용", help="체크 = 자유 배치 대상으로 등록"),
+                                "형태": st.column_config.SelectboxColumn("형태", options=["사각", "원", "이미지"],
+                                                                       help="이미지 = 등각(ISO) 이미지 누끼 표시 (ISO ✓ 품목만)"),
+                                "폭mm": st.column_config.NumberColumn(format="%d", min_value=0, help="진열 시 차지하는 전면 폭"),
+                                "높이mm": st.column_config.NumberColumn(format="%d", min_value=0),
+                                "수량": st.column_config.NumberColumn(format="%d", min_value=0, help="이 자리에 진열하는 수량 (필수)"),
+                            })
+                    else:
+                        st.info("상자 미지정 품목이 없습니다 — 모든 품목에 상자가 지정되어 있습니다.")
+                _free_live, _free_bad = {}, []
+                if df_free is not None:
+                    for _, _rf in df_free.iterrows():
+                        if not bool(_rf.get("사용")): continue
+                        try: _wf = int(_rf.get("폭mm") or 0)
+                        except Exception: _wf = 0
+                        try: _hf = int(_rf.get("높이mm") or 0)
+                        except Exception: _hf = 0
+                        try: _qf = int(_rf.get("수량") or 0)
+                        except Exception: _qf = 0
+                        if _wf <= 0 or _hf <= 0 or _qf <= 0:
+                            _free_bad.append(str(_rf["품목코드"])); continue   # 품명·수량 매칭 강제
+                        _shf = str(_rf.get("형태") or "사각")
+                        if _shf == "이미지" and not str(_rf.get("ISO") or ""):
+                            _shf = "사각"   # ISO 미등록 품목의 이미지 선택 → 사각 폴백
+                        _free_live[str(_rf["품목코드"])] = {"shape": _shf, "w": _wf, "h": _hf, "qty": _qf}
+                if _free_bad:
+                    st.warning(f"🎨 자유 배치 제외 {len(_free_bad)}건 — 폭·높이·수량이 모두 입력되어야 배치됩니다: {', '.join(_free_bad[:6])}{' 외' if len(_free_bad) > 6 else ''}")
+
                 # ── [V45] 단(선반) 중심 배치 설계 — 자동배치 + 실척 시각화 + 수동 조정 ──
                 st.markdown("##### 3️⃣ 배치 — ⚡ 자동배치 후 전체 그림으로 확인")
+                df_asg = None   # [V49] 세부 조정 표 핸들 (랙·치수 없으면 None 유지 — 저장 시 가드)
                 if True:   # [V47] expander→상시 표시(내부 들여쓰기 보존)
                     st.caption("배치의 단위는 **단(선반)**입니다. 용도군(진열분류)별로 단에 군집 배치하고, 단 아래 **색상 자석테이프**로 영역을 표시합니다(색=분류별 지정색). 섹션(세로 열) 개념은 표준화 참고 전용입니다.")
                     _rk_list = []
                     for _, _rr in df_racks_ed.iterrows():
                         _nm3 = str(_rr.get("명칭") or "").strip()
                         if not _nm3: continue
+                        if _nm3 in _bad_racks: continue   # [V49] 단높이 합 검증 실패 랙 제외
                         try: _wv3 = int(float(_rr.get("폭mm") or 0))
                         except Exception: _wv3 = 0
                         try:
                             _hs3 = [int(float(x)) for x in str(_rr.get("단높이mm(콤마구분)") or "").split(",") if str(x).strip()]
                         except Exception: _hs3 = []
+                        try:                                # [V49] 탑뷰용 깊이 정보
+                            _ds3 = [int(float(x)) for x in str(_rr.get("단깊이mm(콤마구분)") or "").split(",") if str(x).strip()]
+                        except Exception: _ds3 = []
+                        try: _dp3 = int(float(_rr.get("깊이mm") or 0))
+                        except Exception: _dp3 = 0
                         if _wv3 > 0 and _hs3:
-                            _rk_list.append({"명칭": _nm3, "내측폭": _wv3 - 38, "단높이": _hs3})
+                            _rk_list.append({"명칭": _nm3, "내측폭": _wv3 - 38, "단높이": _hs3,
+                                             "단깊이": _ds3, "깊이": _dp3 or 450})
                     _dims_p = aq_box_dims_map(aq_boxes)
+                    _dims_p.update({f"자유:{c}": (fc["w"], fc["h"]) for c, fc in _free_live.items()})   # [V49] 자유 배치 치수
                     if not _rk_list:
                         st.info("랙 구성에 폭mm·단높이가 입력된 랙이 필요합니다. (📐 표준 시스템 불러오기로 예시 구성 가능)")
                     elif not _dims_p:
@@ -5613,7 +5857,8 @@ elif mode == "🏪 아쿠나리스":
                         if _ver_key not in st.session_state: st.session_state[_ver_key] = 0
                         if _asg_key not in st.session_state:
                             _saved_asg = _plan_cur.get("assign", {}) if isinstance(_plan_cur, dict) else {}
-                            st.session_state[_asg_key] = ({str(k): (str(v.get("rack", "")), int(v.get("shelf", 0)))
+                            st.session_state[_asg_key] = ({str(k): (str(v.get("rack", "")), int(v.get("shelf", 0)),
+                                                                    int(v.get("rows", 1) or 1))   # [V49] 줄수(깊이)
                                                            for k, v in _saved_asg.items() if isinstance(v, dict)}
                                                           if isinstance(_saved_asg, dict) else {})
                         ca1, ca0, ca2 = st.columns([2, 1, 3])
@@ -5628,15 +5873,21 @@ elif mode == "🏪 아쿠나리스":
                                 _seq = []
                                 for g in _pg:
                                     _gi = [r for r in aq_items if (r.get("진열분류") or "(미지정)") == g]
-                                    def _bw_key(r):
+                                    def _eff_box(r):   # [V49] 유효 상자 — 없으면 자유 배치 치수 사용
                                         _b0 = str((_plan_items.get(r["품목코드"], {}) or {}).get("box") or r.get("기본상자") or "")
-                                        return (-_dims_p.get(_b0, (0, 0))[0], r["품목코드"])
+                                        if not _b0 and r["품목코드"] in _free_live:
+                                            _b0 = "자유:" + r["품목코드"]
+                                        return _b0
+                                    def _bw_key(r):
+                                        return (-_dims_p.get(_eff_box(r), (0, 0))[0], r["품목코드"])
                                     for r in sorted(_gi, key=_bw_key):
                                         if not _aq_use(r["품목코드"]): continue   # [V48] 공급 제외 반영
-                                        _b0 = str((_plan_items.get(r["품목코드"], {}) or {}).get("box") or r.get("기본상자") or "")
-                                        _seq.append((r["품목코드"], g, _b0))
+                                        _seq.append((r["품목코드"], g, _eff_box(r)))
                                 _asg_new, _unp = aq_auto_place(_rk_list, _seq, _dims_p, group_order=_pg)
-                                st.session_state[_asg_key] = _asg_new
+                                _asg_old9 = st.session_state.get(_asg_key, {})   # [V49] 기존 줄수 보존
+                                st.session_state[_asg_key] = {
+                                    c: (rk, sh, (_asg_old9.get(c, ("", 0, 1))[2] if len(_asg_old9.get(c, ("", 0, 1))) > 2 else 1))
+                                    for c, (rk, sh) in _asg_new.items()}
                                 st.session_state[_ver_key] += 1
                                 st.session_state[f"aq_unp_{sel_site}"] = _unp
                                 st.rerun()
@@ -5644,7 +5895,7 @@ elif mode == "🏪 아쿠나리스":
                             _unp_l = st.session_state.get(f"aq_unp_{sel_site}", [])
                             if _unp_l:
                                 st.warning(f"미배치 {len(_unp_l)}건(상자 미지정·공간 부족): {', '.join(_unp_l[:8])}{' 외' if len(_unp_l) > 8 else ''}")
-                        with st.expander("✏️ 세부 조정 — 품목별 랙·단 이동 (자동배치 결과 수정)", expanded=False):
+                        with st.expander("✏️ 세부 조정 — 품목별 랙·단·상자·줄 (자동배치 결과 수정)", expanded=False):
                             _asg_cur = st.session_state.get(_asg_key, {})
                             _rows_asg = []
                             for g in _pg:
@@ -5652,20 +5903,35 @@ elif mode == "🏪 아쿠나리스":
                                     if (r.get("진열분류") or "(미지정)") != g: continue
                                     if not _aq_use(r["품목코드"]): continue   # [V48] 공급 제외 반영
                                     _c4 = r["품목코드"]
-                                    _b4 = str((_plan_items.get(_c4, {}) or {}).get("box") or r.get("기본상자") or "")
-                                    _rk4, _sh4 = _asg_cur.get(_c4, ("", 0))
+                                    _b4 = ""
+                                    if edited_plan is not None:               # [V49] 진열 계획 편집값 우선
+                                        _mb4 = edited_plan.loc[edited_plan["품목코드"] == _c4, "상자"]
+                                        if len(_mb4): _b4 = str(_mb4.iloc[0] or "").strip()
+                                    if not _b4:
+                                        _b4 = str((_plan_items.get(_c4, {}) or {}).get("box") or r.get("기본상자") or "")
+                                    if not _b4 and _c4 in _free_live: _b4 = "(자유)"   # [V49] 자유 배치 표시
+                                    _a4 = _asg_cur.get(_c4, ("", 0, 1))
+                                    _rk4, _sh4 = _a4[0], _a4[1]
+                                    _rw4 = _a4[2] if len(_a4) > 2 else 1
                                     _rows_asg.append({"품목코드": _c4, "품목명": str(r.get("품목명_AQ", "") or ""), "분류": g,
-                                                      "상자": _b4, "랙": _rk4, "단": int(_sh4 or 0)})
+                                                      "상자": _b4, "랙": _rk4, "단": int(_sh4 or 0), "줄": int(_rw4 or 1)})
                             _rk_names = [rk["명칭"] for rk in _rk_list]
+                            _box_opts4 = sorted(set(aq_box_names) | {rp["상자"] for rp in _rows_asg if rp["상자"] and rp["상자"] != "(자유)"})
                             df_asg = st.data_editor(
                                 pd.DataFrame(_rows_asg), hide_index=True, height=300,
                                 key=f"aq_asg_ed_{sel_site}_{st.session_state[_ver_key]}",
-                                disabled=["품목코드", "품목명", "분류", "상자"],
+                                disabled=["품목코드", "품목명", "분류"],
                                 column_config={
+                                    "상자": st.column_config.SelectboxColumn(   # [V49] 농협별 상자 변경
+                                        "상자", options=[""] + _box_opts4 + ["(자유)"],
+                                        help="농협 상황에 따라 상자 변경 가능 — 변경 즉시 배치 그림·저장에 반영"),
                                     "랙": st.column_config.SelectboxColumn("랙", options=[""] + _rk_names),
                                     "단": st.column_config.SelectboxColumn(   # [V48] 드롭다운 선택
                                         "단", options=list(range(0, (max(len(rk["단높이"]) for rk in _rk_list) if _rk_list else 8) + 1)),
                                         help="0=미배치 · 1=최하단"),
+                                    "줄": st.column_config.SelectboxColumn(   # [V49] 깊이 방향 줄수
+                                        "줄", options=[1, 2, 3, 4],
+                                        help="깊이 방향 줄수 — 탑뷰에 반영 (예: 루퍼젯 팩은 1단 2줄 가능)"),
                                 })
                         _seq_by_shelf = {}
                         _asg_live = {}
@@ -5674,18 +5940,56 @@ elif mode == "🏪 아쿠나리스":
                             try: _sh5 = int(_row4["단"] or 0)
                             except Exception: _sh5 = 0
                             if not _rk5 or _sh5 <= 0: continue
-                            _asg_live[str(_row4["품목코드"])] = (_rk5, _sh5)
-                            _b5 = str(_row4["상자"] or "")
+                            _c5 = str(_row4["품목코드"])
+                            try: _rw5 = max(1, int(_row4.get("줄") or 1))   # [V49] 줄수(깊이)
+                            except Exception: _rw5 = 1
+                            _asg_live[_c5] = (_rk5, _sh5, _rw5)
+                            _b5 = str(_row4["상자"] or "").strip()
+                            if _b5 == "(자유)":                             # [V49] 자유 배치 품목
+                                _fc5 = _free_live.get(_c5)
+                                if not _fc5: continue
+                                _seq_by_shelf.setdefault((_rk5, _sh5), []).append(
+                                    (_c5, str(_row4["분류"]), "자유:" + _c5, _fc5["w"], _fc5["h"]))
+                                continue
                             _wh5 = _dims_p.get(_b5)
                             if not _wh5: continue
                             _seq_by_shelf.setdefault((_rk5, _sh5), []).append(
-                                (str(_row4["품목코드"]), str(_row4["분류"]), _b5, _wh5[0], _wh5[1]))
+                                (_c5, str(_row4["분류"]), _b5, _wh5[0], _wh5[1]))
                         st.session_state[_asg_key] = _asg_live   # 편집 상태 동기화(저장 시 사용)
                         for _k7 in _seq_by_shelf:                 # 정준 정렬 — 편집 순서와 무관하게 동일 패킹
                             _seq_by_shelf[_k7] = aq_canon_seq(_seq_by_shelf[_k7], _pg)
+                        # [V49] 호버 툴팁 정보(품목명·규격·상자·최대수량) + 자유 배치 도형/이미지
+                        _info_map = {}
+                        for _seqs9 in _seq_by_shelf.values():
+                            for _t9 in _seqs9:
+                                _c9 = _t9[0]
+                                if _c9 in _info_map: continue
+                                _r9 = _aq_by_code.get(_c9, {})
+                                _m9 = {"name": str(_r9.get("품목명_AQ", "") or _c9),
+                                       "spec": str(_r9.get("규격_AQ", "") or "")}
+                                _fc9 = _free_live.get(_c9)
+                                if _fc9 and _t9[2].startswith("자유:"):
+                                    _m9["box"] = "자유 배치"
+                                    _m9["cap"] = str(_fc9.get("qty") or "")
+                                    _m9["shape"] = _fc9.get("shape") or "사각"
+                                    if _m9["shape"] == "이미지":
+                                        _iso9 = str(_r9.get("이미지ISO", "") or "").strip()
+                                        _uri9 = aq_iso_data_uri(_iso9) if _iso9 else ""
+                                        if _uri9: _m9["img"] = _uri9
+                                        else: _m9["shape"] = "사각"
+                                else:
+                                    _m9["box"] = _t9[2]
+                                    try: _m9["cap"] = str(aq_caps.get(_c9, {}).get(_t9[2], ("", ""))[0] or "")
+                                    except Exception: _m9["cap"] = ""
+                                _info_map[_c9] = _m9
                         _view_rks = st.multiselect("표시할 랙 (기본 전체 — V1 도면처럼 나란히)", _rk_names, default=_rk_names, key=f"aq_rk_view_{sel_site}")
                         _rk_show = [rk for rk in _rk_list if rk["명칭"] in (_view_rks or _rk_names)]
-                        st.markdown(aq_racks_svg_all(_rk_show, _seq_by_shelf), unsafe_allow_html=True)
+                        import streamlit.components.v1 as _components9   # [V49] 호버 툴팁은 iframe에서만 동작
+                        _svg_all9 = aq_racks_svg_all(_rk_show, _seq_by_shelf, info=_info_map)
+                        if _svg_all9:
+                            _html9, _hpx9 = aq_svg_hover_html(_svg_all9)
+                            _components9.html(_html9, height=min(_hpx9, 940), scrolling=True)
+                            st.caption("🖱️ 상자에 마우스를 올리면 **품목명(크게)·규격·상자·최대수량**이 표시됩니다.")
                         _leg = " ".join(
                             f'<span style="display:inline-block;width:10px;height:10px;background:{AQ_GROUP_COLORS.get(g, "#9AA0A6")};margin-right:4px;"></span>'
                             f'<span style="font-size:12px;margin-right:10px;">{g}</span>' for g in _pg)
@@ -5695,13 +5999,38 @@ elif mode == "🏪 아쿠나리스":
                             _rko = next((x for x in _rk_list if x["명칭"] == rk6), None)
                             if not _rko or sh6 > len(_rko["단높이"]):
                                 _over.append(f"{rk6} 단{sh6}: 단 번호 범위 초과"); continue
-                            _r6, _f6, _j6 = aq_pack_shelf_rows(seq6, _rko["내측폭"], _rko["단높이"][sh6 - 1])
+                            _r6, _f6, _j6 = aq_pack_shelf_stacks(seq6, _rko["내측폭"], _rko["단높이"][sh6 - 1])   # [V49]
                             if _j6:
                                 _over.append(f"{rk6} 단{sh6}: {len(_j6)}건 안 들어감({', '.join(x[0] for x in _j6[:4])})")
                         if _over:
-                            st.warning("⚠ " + " / ".join(_over[:6]))
+                            st.warning("⚠ 단 높이·폭 초과 — 단높이 조정 또는 상자 변경 필요: " + " / ".join(_over[:6]))
                         elif _seq_by_shelf:
-                            st.success("✅ 배치된 모든 단이 실척 패킹 기준 적합합니다.")
+                            st.success("✅ 배치된 모든 단이 실척 패킹 기준 적합합니다. (동일 상자만 적층 · 적층 높이 ≤ 단높이)")
+
+                        # ── [V49] 탑뷰 — 단 위에서 내려다보기 (깊이 방향 줄 배치) ──
+                        with st.expander("🔝 탑뷰 — 단 위에서 내려다보기 (깊이 방향 줄 배치)", expanded=False):
+                            if not _seq_by_shelf:
+                                st.info("배치된 단이 없습니다 — ⚡ 자동배치 또는 세부 조정에서 랙·단을 지정하세요.")
+                            else:
+                                _bdep9 = aq_box_depth_map(aq_boxes)
+                                _tv_keys = sorted(_seq_by_shelf.keys())
+                                _tv_sel = st.selectbox("단 선택", _tv_keys,
+                                                       format_func=lambda k: f"{k[0]} · 단{k[1]}", key=f"aq_tv_{sel_site}")
+                                _rk_tv = next((x for x in _rk_list if x["명칭"] == _tv_sel[0]), None)
+                                if _rk_tv and 0 < _tv_sel[1] <= len(_rk_tv["단높이"]):
+                                    _dlist9 = _rk_tv.get("단깊이") or []
+                                    _dp9 = _dlist9[_tv_sel[1] - 1] if 0 < _tv_sel[1] <= len(_dlist9) else _rk_tv.get("깊이", 450)
+                                    _rows_map9 = {c: (t[2] if len(t) > 2 else 1) for c, t in _asg_live.items()}
+                                    _svg_tv = aq_shelf_top_svg(_tv_sel[0], _tv_sel[1], _rk_tv["내측폭"],
+                                                               _rk_tv["단높이"][_tv_sel[1] - 1], _dp9,
+                                                               _seq_by_shelf[_tv_sel], rows_by_code=_rows_map9,
+                                                               box_depths=_bdep9, info=_info_map)
+                                    _html_tv, _h_tv = aq_svg_hover_html(_svg_tv)
+                                    _components9.html(_html_tv, height=min(_h_tv, 500), scrolling=True)
+                                    st.caption("정면도는 맨 앞줄만 보입니다 — 깊이 방향 **줄수**는 세부 조정 표의 '줄' 컬럼으로 지정 "
+                                               "(예: 루퍼젯 팩 255×95 → 깊이 450 단에 2줄 이상). 상자 깊이 미등록 시 1줄 전체 깊이로 표시.")
+                                else:
+                                    st.info("선택한 단 정보를 찾을 수 없습니다.")
 
                 st.markdown("##### 4️⃣ 견적 확인 · 저장")
                 if plan_groups and (edited_plan is not None):
@@ -5815,7 +6144,7 @@ elif mode == "🏪 아쿠나리스":
                                 _v = _rr.get(_c)
                                 _d[_c] = "" if (_v is None or (isinstance(_v, float) and pd.isna(_v))) else _v
                             if not any(str(_v).strip() for _v in _d.values()): continue
-                            for _c in ["폭mm", "깊이mm", "단수"]:
+                            for _c in ["폭mm", "깊이mm", "총높이mm", "단수", "단두께mm"]:   # [V49] 신규 컬럼 포함
                                 try: _d[_c] = int(float(_d[_c])) if str(_d[_c]).strip() else ""
                                 except Exception: _d[_c] = str(_d[_c])
                             for _c in ["명칭", "단높이mm(콤마구분)", "단깊이mm(콤마구분)", "비고"]:
@@ -5831,13 +6160,32 @@ elif mode == "🏪 아쿠나리스":
                                 _use3 = bool(_row.get("공급", True))                       # [V48]
                                 if _q > 0 or _bx3 or (not _use3):
                                     _items_out[str(_row["품목코드"])] = {"box": _bx3, "qty": _q, "ori": _ori3, "use": _use3}
+                        # [V49] 세부 조정 표의 상자 변경 반영 (진열 계획 편집표에 없던 오버라이드 포함)
+                        if df_asg is not None:
+                            for _, _row8 in df_asg.iterrows():
+                                _c8 = str(_row8["품목코드"]); _b8 = str(_row8["상자"] or "").strip()
+                                if _b8 == "(자유)": _b8 = ""
+                                if _c8 in _items_out:
+                                    if _b8 != str(_items_out[_c8].get("box", "")).strip():
+                                        _items_out[_c8]["box"] = _b8
+                                else:
+                                    _o8 = _plan_items.get(_c8, {}) if isinstance(_plan_items.get(_c8, {}), dict) else {}
+                                    _def8 = str(_o8.get("box") or (_aq_by_code.get(_c8, {}) or {}).get("기본상자") or "").strip()
+                                    if _b8 != _def8:
+                                        try: _q8 = int(_o8.get("qty") or 0)
+                                        except Exception: _q8 = 0
+                                        _items_out[_c8] = {"box": _b8, "qty": _q8, "ori": str(_o8.get("ori") or "세로"),
+                                                           "use": (_o8.get("use", True) is not False)}
                         _new_plan = {"groups": plan_groups, "items": _items_out,
                                      "updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M")}
-                        # [V45] 단 중심 배정 저장 (있을 때만)
+                        # [V49] 자유 배치 저장 (편집표가 없던 리런에서는 기존값 보존)
+                        _new_plan["free"] = _free_live if df_free is not None else _free_cur
+                        # [V45] 단 중심 배정 저장 (있을 때만) — [V49] 줄수(rows) 포함
                         _asg_sv = st.session_state.get(f"aq_asg_{sel_site}", {})
                         if _asg_sv:
-                            _new_plan["assign"] = {c: {"rack": rk, "shelf": sh}
-                                                   for c, (rk, sh) in _asg_sv.items() if rk and sh}
+                            _new_plan["assign"] = {c: {"rack": t[0], "shelf": t[1],
+                                                       "rows": (t[2] if len(t) > 2 else 1)}
+                                                   for c, t in _asg_sv.items() if t and t[0] and t[1]}
                         for s in aq_sites_all:
                             if str(s.get("농협명", "")).strip() == sel_site:
                                 s["랙구성JSON"] = json.dumps(_racks_out, ensure_ascii=False)

@@ -1203,6 +1203,10 @@ def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=
         out.append(f'<line x1="{x0:.1f}" y1="{y_px:.1f}" x2="{x0 + pw:.1f}" y2="{y_px:.1f}" stroke="#191414" stroke-width="1.6"/>')
         if show_dims:
             out.append(f'<text x="{x0 + 2:.1f}" y="{y_px + 9:.1f}" font-size="7" fill="#B9B3AD">{si}·{sh}</text>')
+        # [V51] 드래그 드롭존(투명) — 빈 단도 드롭 대상이 되도록 항상 추가
+        out.append(f'<rect class="aqshelf" data-rack="{_aq_esc(rack_name)}" data-shelf="{si}" '
+                   f'x="{x0 + frame_t*scale:.1f}" y="{y_px:.1f}" width="{inner*scale:.1f}" height="{sh*scale:.1f}" '
+                   f'fill="none" stroke="none"/>')
         seq = shelf_seqs.get((rack_name, si)) or shelf_seqs.get(si) or []
         if not seq: continue
         cols_p, fitted, rej = aq_pack_shelf_stacks(seq, inner, sh)
@@ -1215,6 +1219,8 @@ def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=
                 bx = x0 + frame_t * scale + cx * scale
                 by = base - (li + 1) * bh * scale
                 attrs = _aq_hover_attrs(it, info)
+                if attrs:   # [V51] 드래그·더블클릭용 위치 데이터
+                    attrs += f' data-code="{_aq_esc(it[0])}" data-rack="{_aq_esc(rack_name)}" data-shelf="{si}"'
                 meta = (info or {}).get(it[0]) or {}
                 shape = meta.get("shape") or ""
                 if shape == "원":
@@ -1296,17 +1302,103 @@ def aq_shelf_top_svg(rack_name, shelf_no, inner, shelf_h, depth, seq, rows_by_co
     return (f'<svg width="{pw + pad*2:.0f}" height="{ph + pad*2:.0f}" xmlns="http://www.w3.org/2000/svg">'
             + "".join(out) + '</svg>')
 
-def aq_svg_hover_html(svg):
+def aq_svg_hover_html(svg, interactive=False, nonce=""):
     """[V49] SVG를 호버 툴팁(품목명 크게·규격·상자·최대수량)과 함께 iframe HTML로 래핑.
-    반환: (html, 권장 iframe 높이px). components.html로 렌더해야 JS 툴팁이 동작."""
+    반환: (html, 권장 iframe 높이px). components.html로 렌더해야 JS 툴팁이 동작.
+    [V51] interactive=True → 드래그 이동(같은 품목 묶음)·더블클릭 복제/삭제·전체화면/줌 툴바.
+    조작은 부모 localStorage 'AQ_OPS'({nonce,ts,ops})에 기록 → 파이썬 브리지가 적용."""
     h = 400
     try:
         _i = svg.index('height="')
         h = int("".join(ch for ch in svg[_i + 8:_i + 16] if ch.isdigit()) or 400)
     except Exception:
         pass
+    _btn = ('margin-left:4px;padding:3px 9px;border:1px solid #B9B3AD;background:#FFFFFF;'
+            'border-radius:6px;cursor:pointer;font-size:12px;')
+    tools = ''
+    js_int = ''
+    if interactive:
+        tools = (
+            '<div style="position:absolute;top:4px;right:8px;z-index:60;font-family:sans-serif;">'
+            '<span id="aqst" style="font-size:11px;color:#8C8681;margin-right:8px;"></span>'
+            f'<button onclick="aqZoom(1.25)" style="{_btn}">＋</button>'
+            f'<button onclick="aqZoom(0.8)" style="{_btn}">－</button>'
+            f'<button onclick="aqZreset()" style="{_btn}">1:1</button>'
+            f'<button onclick="aqFull()" style="{_btn}">⛶ 전체화면</button></div>')
+        js_int = """
+<script>
+var AQN="__NONCE__", aqOps=[], aqZ=1, aqDrag=null, aqMenu=null;
+var aqBoxes=[].slice.call(document.querySelectorAll('.aqbox[data-code]'));
+var aqZones=[].slice.call(document.querySelectorAll('.aqshelf'));
+function aqZoom(f){aqZ=Math.max(0.3,Math.min(4,aqZ*f));document.getElementById('aqzoom').style.transform='scale('+aqZ+')';}
+function aqZreset(){aqZ=1;document.getElementById('aqzoom').style.transform='';}
+function aqFull(){var w=document.getElementById('aqwrap');
+ if(document.fullscreenElement){document.exitFullscreen();return;}
+ if(w.requestFullscreen){w.requestFullscreen().catch(function(){aqNewTab();});}else{aqNewTab();}}
+function aqNewTab(){var t=window.open('','_blank');if(!t)return;
+ t.document.write('<html><head><title>Aqunaris 배치</title></head><body style="background:#fff;">'
+ +document.getElementById('aqzoom').innerHTML+'</body></html>');t.document.close();}
+function aqGrp(el){return aqBoxes.filter(function(b){return b.dataset.code===el.dataset.code
+ &&b.dataset.rack===el.dataset.rack&&b.dataset.shelf===el.dataset.shelf;});}
+function aqPush(op){aqOps.push(op);
+ try{window.parent.localStorage.setItem('AQ_OPS',JSON.stringify({nonce:AQN,ts:Date.now(),ops:aqOps}));}catch(e){}
+ var s=document.getElementById('aqst');if(s)s.textContent='조작 '+aqOps.length+'건 — 자동 반영 중…';
+ clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,350);}
+function aqApply(){try{var bs=window.parent.document.querySelectorAll('button');
+ for(var i=0;i<bs.length;i++){if((bs[i].innerText||'').indexOf('배치 조작 반영')>-1){bs[i].click();return;}}}catch(e){}}
+function aqZoneAt(x,y){for(var i=0;i<aqZones.length;i++){var r=aqZones[i].getBoundingClientRect();
+ if(x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom)return aqZones[i];}return null;}
+aqBoxes.forEach(function(el){
+ el.addEventListener('mousedown',function(ev){if(ev.button!==0)return;
+  aqDrag={els:aqGrp(el),el:el,sx:ev.clientX,sy:ev.clientY,moved:false};ev.preventDefault();});
+ el.addEventListener('dblclick',function(ev){aqMenuShow(el,ev);ev.preventDefault();});
+});
+document.addEventListener('mousemove',function(ev){if(!aqDrag)return;
+ var dx=(ev.clientX-aqDrag.sx)/aqZ,dy=(ev.clientY-aqDrag.sy)/aqZ;
+ if(Math.abs(dx)+Math.abs(dy)>3)aqDrag.moved=true;
+ aqDrag.els.forEach(function(b){b.setAttribute('transform','translate('+dx+','+dy+')');});
+ if(typeof tip!=='undefined')tip.style.display='none';
+ var z=aqZoneAt(ev.clientX,ev.clientY);
+ aqZones.forEach(function(r){var on=(r===z);
+  r.setAttribute('stroke',on?'#F4D624':'none');r.setAttribute('stroke-width',on?'3':'0');
+  r.setAttribute('fill',on?'#F4D624':'none');r.setAttribute('fill-opacity',on?'0.12':'0');});
+});
+document.addEventListener('mouseup',function(ev){if(!aqDrag)return;
+ var d=aqDrag;aqDrag=null;
+ aqZones.forEach(function(r){r.setAttribute('stroke','none');r.setAttribute('fill','none');});
+ if(!d.moved){d.els.forEach(function(b){b.removeAttribute('transform');});return;}
+ var z=aqZoneAt(ev.clientX,ev.clientY);
+ if(z&&(z.dataset.rack!==d.el.dataset.rack||z.dataset.shelf!==d.el.dataset.shelf)){
+  aqPush({t:'move',code:d.el.dataset.code,rack:d.el.dataset.rack,shelf:parseInt(d.el.dataset.shelf),
+          track:z.dataset.rack,tshelf:parseInt(z.dataset.shelf)});
+ }else{d.els.forEach(function(b){b.removeAttribute('transform');});}
+});
+function aqMenuShow(el,ev){aqMenuHide();
+ var m=document.createElement('div');aqMenu=m;
+ m.style.cssText='position:fixed;z-index:120;background:#191414;border:2px solid #F4D624;'
+  +'border-radius:8px;padding:8px;font-family:sans-serif;left:'+(ev.clientX+6)+'px;top:'+(ev.clientY+6)+'px;';
+ var nm=el.getAttribute('data-name')||el.dataset.code;
+ var t=document.createElement('div');
+ t.style.cssText='color:#F4D624;font-weight:700;font-size:12px;margin-bottom:6px;';
+ t.textContent=nm; m.appendChild(t);
+ var b1=document.createElement('button');b1.textContent='⧉ 복제(+1상자)';
+ var b2=document.createElement('button');b2.textContent='🗑 삭제(−1상자)';
+ var b3=document.createElement('button');b3.textContent='✕';
+ [b1,b2,b3].forEach(function(b){b.style.cssText='margin-right:6px;padding:4px 8px;border:1px solid #F4D624;'
+  +'background:#191414;color:#FFFFFF;border-radius:6px;cursor:pointer;font-size:12px;';m.appendChild(b);});
+ b1.onclick=function(){aqPush({t:'dup',code:el.dataset.code,rack:el.dataset.rack,
+  shelf:parseInt(el.dataset.shelf)});aqMenuHide();};
+ b2.onclick=function(){aqPush({t:'del',code:el.dataset.code,rack:el.dataset.rack,
+  shelf:parseInt(el.dataset.shelf)});
+  var g=aqGrp(el);if(g.length>0){g[g.length-1].style.display='none';}aqMenuHide();};
+ b3.onclick=aqMenuHide;
+ document.body.appendChild(m);}
+function aqMenuHide(){if(aqMenu&&aqMenu.parentNode)aqMenu.parentNode.removeChild(aqMenu);aqMenu=null;}
+document.addEventListener('mousedown',function(ev){if(aqMenu&&!aqMenu.contains(ev.target))aqMenuHide();},true);
+</script>""".replace("__NONCE__", str(nonce).replace('"', ''))
     html = (
-        '<div style="position:relative;font-family:sans-serif;">' + svg +
+        '<div id="aqwrap" style="position:relative;font-family:sans-serif;background:#FFFFFF;overflow:auto;">'
+        + tools + '<div id="aqzoom" style="transform-origin:0 0;">' + svg + '</div>' +
         '<div id="aqtip" style="display:none;position:fixed;z-index:99;pointer-events:none;'
         'background:#191414;color:#FFFFFF;border:2px solid #F4D624;border-radius:8px;'
         'padding:10px 14px;max-width:320px;box-shadow:0 4px 14px rgba(0,0,0,.35);">'
@@ -1333,7 +1425,7 @@ def aq_svg_hover_html(svg):
         ' el.addEventListener("mousemove",aqMove);'
         ' el.addEventListener("mouseleave",function(){tip.style.display="none";});'
         ' el.style.cursor="pointer";});'
-        '</script></div>')
+        '</script>' + js_int + '</div>')
     return html, h + 10
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -6047,9 +6139,56 @@ elif mode == "🏪 아쿠나리스":
                         if _asg_key not in st.session_state:
                             _saved_asg = _plan_cur.get("assign", {}) if isinstance(_plan_cur, dict) else {}
                             st.session_state[_asg_key] = ({str(k): (str(v.get("rack", "")), int(v.get("shelf", 0)),
-                                                                    int(v.get("rows", 1) or 1))   # [V49] 줄수(깊이)
+                                                                    int(v.get("rows", 1) or 1),   # [V49] 줄수(깊이)
+                                                                    int(v.get("n", 1) or 1))      # [V51] 전면 상자수
                                                            for k, v in _saved_asg.items() if isinstance(v, dict)}
                                                           if isinstance(_saved_asg, dict) else {})
+                        # ── [V51] 가상랙(임시 보관 공간) + 배치 그림 드래그/더블클릭 조작 브리지 ──
+                        AQ_VIRT = "🅥 가상랙"
+                        if "aq_ops_salt" not in st.session_state:   # 세션 고유 논스 — 이전 세션 조작 재적용 방지
+                            st.session_state["aq_ops_salt"] = str(int(time.time() * 1000))
+                        _virt_on = st.checkbox(
+                            "🅥 가상랙 표시 — 꽉 찬 랙의 상자를 잠시 옮겨 둘 임시 공간 (견적·적합판정·자동배치와 무관, 배치는 저장됨)",
+                            value=True, key=f"aq_virt_{sel_site}")
+                        _rk_all = _rk_list + ([{"명칭": AQ_VIRT, "내측폭": 1600, "단높이": [600, 600, 600],
+                                                "단깊이": [], "깊이": 450}] if _virt_on else [])
+                        if _HAS_JS_EVAL:
+                            try:
+                                _ops_raw = streamlit_js_eval(
+                                    js_expressions="window.parent.localStorage.getItem('AQ_OPS')",
+                                    key=f"aq_ops_{sel_site}")
+                            except Exception:
+                                _ops_raw = None
+                            _ops_pl = None
+                            if _ops_raw:
+                                try: _ops_pl = json.loads(_ops_raw)
+                                except Exception: _ops_pl = None
+                            _nonce_cur = f"{st.session_state['aq_ops_salt']}|{sel_site}|{st.session_state[_ver_key]}"
+                            if (isinstance(_ops_pl, dict) and _ops_pl.get("ops")
+                                    and _ops_pl.get("nonce") == _nonce_cur
+                                    and _ops_pl.get("ts") != st.session_state.get(f"aq_ops_done_{sel_site}")):
+                                _asg9 = dict(st.session_state.get(_asg_key, {}))
+                                for _op9 in _ops_pl["ops"]:
+                                    try:
+                                        _c9o = str(_op9.get("code") or "")
+                                        _cur9 = _asg9.get(_c9o)
+                                        _rw9 = (_cur9[2] if _cur9 and len(_cur9) > 2 else 1)
+                                        _n9 = (_cur9[3] if _cur9 and len(_cur9) > 3 else 1)
+                                        if _op9.get("t") == "move" and _op9.get("track"):
+                                            _asg9[_c9o] = (str(_op9["track"]), int(_op9["tshelf"]), _rw9, _n9)
+                                        elif _op9.get("t") == "dup" and _cur9:
+                                            _asg9[_c9o] = (_cur9[0], _cur9[1], _rw9, min(_n9 + 1, 8))
+                                        elif _op9.get("t") == "del" and _cur9:
+                                            if _n9 > 1:
+                                                _asg9[_c9o] = (_cur9[0], _cur9[1], _rw9, _n9 - 1)
+                                            else:
+                                                _asg9.pop(_c9o, None)
+                                    except Exception:
+                                        pass
+                                st.session_state[_asg_key] = _asg9
+                                st.session_state[f"aq_ops_done_{sel_site}"] = _ops_pl.get("ts")
+                                st.session_state[_ver_key] += 1
+                                st.rerun()
                         ca1, ca0, ca2 = st.columns([2, 1, 3])
                         with ca0:
                             if st.button("🗑 배치 초기화", key=f"aq_clear_{sel_site}"):
@@ -6073,9 +6212,12 @@ elif mode == "🏪 아쿠나리스":
                                         if not _aq_use(r["품목코드"]): continue   # [V48] 공급 제외 반영
                                         _seq.append((r["품목코드"], g, _eff_box(r)))
                                 _asg_new, _unp = aq_auto_place(_rk_list, _seq, _dims_p, group_order=_pg)
-                                _asg_old9 = st.session_state.get(_asg_key, {})   # [V49] 기존 줄수 보존
+                                _asg_old9 = st.session_state.get(_asg_key, {})   # [V49] 기존 줄수 — [V51] 상자수도 보존
+                                def _keep9(c, i, d=1):
+                                    _t9k = _asg_old9.get(c) or ()
+                                    return _t9k[i] if len(_t9k) > i else d
                                 st.session_state[_asg_key] = {
-                                    c: (rk, sh, (_asg_old9.get(c, ("", 0, 1))[2] if len(_asg_old9.get(c, ("", 0, 1))) > 2 else 1))
+                                    c: (rk, sh, _keep9(c, 2), _keep9(c, 3))
                                     for c, (rk, sh) in _asg_new.items()}
                                 st.session_state[_ver_key] += 1
                                 st.session_state[f"aq_unp_{sel_site}"] = _unp
@@ -6102,9 +6244,11 @@ elif mode == "🏪 아쿠나리스":
                                     _a4 = _asg_cur.get(_c4, ("", 0, 1))
                                     _rk4, _sh4 = _a4[0], _a4[1]
                                     _rw4 = _a4[2] if len(_a4) > 2 else 1
+                                    _n4 = _a4[3] if len(_a4) > 3 else 1   # [V51] 전면 상자수
                                     _rows_asg.append({"품목코드": _c4, "품목명": str(r.get("품목명_AQ", "") or ""), "분류": g,
-                                                      "상자": _b4, "랙": _rk4, "단": int(_sh4 or 0), "줄": int(_rw4 or 1)})
-                            _rk_names = [rk["명칭"] for rk in _rk_list]
+                                                      "상자": _b4, "랙": _rk4, "단": int(_sh4 or 0), "줄": int(_rw4 or 1),
+                                                      "상자수": int(_n4 or 1)})
+                            _rk_names = [rk["명칭"] for rk in _rk_all]   # [V51] 가상랙 포함
                             _box_opts4 = sorted(set(aq_box_names) | {rp["상자"] for rp in _rows_asg if rp["상자"] and rp["상자"] != "(자유)"})
                             df_asg = st.data_editor(
                                 pd.DataFrame(_rows_asg), hide_index=True, height=300,
@@ -6116,11 +6260,14 @@ elif mode == "🏪 아쿠나리스":
                                         help="농협 상황에 따라 상자 변경 가능 — 변경 즉시 배치 그림·저장에 반영"),
                                     "랙": st.column_config.SelectboxColumn("랙", options=[""] + _rk_names),
                                     "단": st.column_config.SelectboxColumn(   # [V48] 드롭다운 선택
-                                        "단", options=list(range(0, (max(len(rk["단높이"]) for rk in _rk_list) if _rk_list else 8) + 1)),
+                                        "단", options=list(range(0, (max(len(rk["단높이"]) for rk in _rk_all) if _rk_all else 8) + 1)),
                                         help="0=미배치 · 1=최하단"),
                                     "줄": st.column_config.SelectboxColumn(   # [V49] 깊이 방향 줄수
                                         "줄", options=[1, 2, 3, 4],
                                         help="깊이 방향 줄수 — 탑뷰에 반영 (예: 루퍼젯 팩은 1단 2줄 가능)"),
+                                    "상자수": st.column_config.SelectboxColumn(   # [V51] 전면 상자수
+                                        "상자수", options=[1, 2, 3, 4, 5, 6, 7, 8],
+                                        help="정면(전면)에 놓는 상자 수 — 그림 더블클릭 복제/삭제와 연동"),
                                 })
                         _seq_by_shelf = {}
                         _asg_live = {}
@@ -6132,18 +6279,22 @@ elif mode == "🏪 아쿠나리스":
                             _c5 = str(_row4["품목코드"])
                             try: _rw5 = max(1, int(_row4.get("줄") or 1))   # [V49] 줄수(깊이)
                             except Exception: _rw5 = 1
-                            _asg_live[_c5] = (_rk5, _sh5, _rw5)
+                            try: _n5 = max(1, int(_row4.get("상자수") or 1))   # [V51] 전면 상자수
+                            except Exception: _n5 = 1
+                            _asg_live[_c5] = (_rk5, _sh5, _rw5, _n5)
                             _b5 = str(_row4["상자"] or "").strip()
                             if _b5 == "(자유)":                             # [V49] 자유 배치 품목
                                 _fc5 = _free_live.get(_c5)
                                 if not _fc5: continue
-                                _seq_by_shelf.setdefault((_rk5, _sh5), []).append(
-                                    (_c5, str(_row4["분류"]), "자유:" + _c5, _fc5["w"], _fc5["h"]))
+                                for _ in range(_n5):
+                                    _seq_by_shelf.setdefault((_rk5, _sh5), []).append(
+                                        (_c5, str(_row4["분류"]), "자유:" + _c5, _fc5["w"], _fc5["h"]))
                                 continue
                             _wh5 = _dims_p.get(_b5)
                             if not _wh5: continue
-                            _seq_by_shelf.setdefault((_rk5, _sh5), []).append(
-                                (_c5, str(_row4["분류"]), _b5, _wh5[0], _wh5[1]))
+                            for _ in range(_n5):
+                                _seq_by_shelf.setdefault((_rk5, _sh5), []).append(
+                                    (_c5, str(_row4["분류"]), _b5, _wh5[0], _wh5[1]))
                         st.session_state[_asg_key] = _asg_live   # 편집 상태 동기화(저장 시 사용)
                         for _k7 in _seq_by_shelf:                 # 정준 정렬 — 편집 순서와 무관하게 동일 패킹
                             _seq_by_shelf[_k7] = aq_canon_seq(_seq_by_shelf[_k7], _pg)
@@ -6172,19 +6323,31 @@ elif mode == "🏪 아쿠나리스":
                                     except Exception: _m9["cap"] = ""
                                 _info_map[_c9] = _m9
                         _view_rks = st.multiselect("표시할 랙 (기본 전체 — V1 도면처럼 나란히)", _rk_names, default=_rk_names, key=f"aq_rk_view_{sel_site}")
-                        _rk_show = [rk for rk in _rk_list if rk["명칭"] in (_view_rks or _rk_names)]
+                        _rk_show = [rk for rk in _rk_all if rk["명칭"] in (_view_rks or _rk_names)]   # [V51] 가상랙 포함
                         import streamlit.components.v1 as _components9   # [V49] 호버 툴팁은 iframe에서만 동작
                         _svg_all9 = aq_racks_svg_all(_rk_show, _seq_by_shelf, info=_info_map)
                         if _svg_all9:
-                            _html9, _hpx9 = aq_svg_hover_html(_svg_all9)
-                            _components9.html(_html9, height=min(_hpx9, 940), scrolling=True)
-                            st.caption("🖱️ 상자에 마우스를 올리면 **품목명(크게)·규격·상자·최대수량**이 표시됩니다.")
+                            _nonce9 = f"{st.session_state['aq_ops_salt']}|{sel_site}|{st.session_state[_ver_key]}"
+                            _html9, _hpx9 = aq_svg_hover_html(_svg_all9, interactive=True, nonce=_nonce9)   # [V51]
+                            _components9.html(_html9, height=min(_hpx9 + 34, 960), scrolling=True)
+                            _cb1, _cb2 = st.columns([5, 2])
+                            with _cb1:
+                                st.caption("🖱️ 호버=정보 · **드래그=다른 랙/단·가상랙으로 이동**(같은 품목 상자 묶음) · "
+                                           "**더블클릭=복제/삭제** · 우상단 **⛶ 전체화면**·＋/− 줌. "
+                                           "조작은 1~2초 내 자동 반영 — 안 되면 옆의 🔄 버튼을 누르세요.")
+                            with _cb2:
+                                st.button("🔄 배치 조작 반영", key=f"aq_ops_apply_{sel_site}",
+                                          help="그림에서 드래그·더블클릭한 조작을 표와 배치에 반영합니다.")
                         _leg = " ".join(
                             f'<span style="display:inline-block;width:10px;height:10px;background:{AQ_GROUP_COLORS.get(g, "#9AA0A6")};margin-right:4px;"></span>'
                             f'<span style="font-size:12px;margin-right:10px;">{g}</span>' for g in _pg)
                         st.markdown(_leg, unsafe_allow_html=True)
+                        _virt_cnt = sum(1 for _t in _asg_live.values() if _t and _t[0] == AQ_VIRT)   # [V51]
+                        if _virt_cnt:
+                            st.info(f"🅥 가상랙 보관 {_virt_cnt}건 — 실제 랙이 아닙니다. 설치 확정 전에 실제 랙으로 옮기거나 단 0(미배치)으로 정리하세요.")
                         _over = []
                         for (rk6, sh6), seq6 in sorted(_seq_by_shelf.items()):
+                            if rk6 == AQ_VIRT: continue   # [V51] 가상랙은 적합 판정 제외
                             _rko = next((x for x in _rk_list if x["명칭"] == rk6), None)
                             if not _rko or sh6 > len(_rko["단높이"]):
                                 _over.append(f"{rk6} 단{sh6}: 단 번호 범위 초과"); continue
@@ -6205,7 +6368,7 @@ elif mode == "🏪 아쿠나리스":
                                 _tv_keys = sorted(_seq_by_shelf.keys())
                                 _tv_sel = st.selectbox("단 선택", _tv_keys,
                                                        format_func=lambda k: f"{k[0]} · 단{k[1]}", key=f"aq_tv_{sel_site}")
-                                _rk_tv = next((x for x in _rk_list if x["명칭"] == _tv_sel[0]), None)
+                                _rk_tv = next((x for x in _rk_all if x["명칭"] == _tv_sel[0]), None)   # [V51] 가상랙 포함
                                 if _rk_tv and 0 < _tv_sel[1] <= len(_rk_tv["단높이"]):
                                     _dlist9 = _rk_tv.get("단깊이") or []
                                     _dp9 = _dlist9[_tv_sel[1] - 1] if 0 < _tv_sel[1] <= len(_dlist9) else _rk_tv.get("깊이", 450)
@@ -6373,7 +6536,8 @@ elif mode == "🏪 아쿠나리스":
                         _asg_sv = st.session_state.get(f"aq_asg_{sel_site}", {})
                         if _asg_sv:
                             _new_plan["assign"] = {c: {"rack": t[0], "shelf": t[1],
-                                                       "rows": (t[2] if len(t) > 2 else 1)}
+                                                       "rows": (t[2] if len(t) > 2 else 1),
+                                                       "n": (t[3] if len(t) > 3 else 1)}   # [V51] 전면 상자수
                                                    for c, t in _asg_sv.items() if t and t[0] and t[1]}
                         for s in aq_sites_all:
                             if str(s.get("농협명", "")).strip() == sel_site:
@@ -7283,3 +7447,192 @@ else:
                         all_sets_db = {}
                         for cat, val in st.session_state.db.get("sets", {}).items(): all_sets_db.update(val)
                         
+                        for s_item in st.session_state.set_cart:
+                            s_name = s_item['name']
+                            s_qty = s_item['qty']
+                            if s_qty <= 0 or s_name not in all_sets_db: continue
+                            recipe = all_sets_db[s_name].get("recipe", {})
+                            
+                            for p_code_or_name, p_qty_per_set in recipe.items():
+                                p_key = str(p_code_or_name).strip().zfill(5)
+                                if p_key not in pool: p_key = str(p_code_or_name).strip()
+                                req_qty = p_qty_per_set * s_qty
+                                prod_info = next((p for p in st.session_state.db["products"] if str(p.get("code","")).strip().zfill(5) == p_key or p.get("name") == p_key), {})
+                                
+                                expanded_data.append({
+                                    "품목": f"[{s_name}] {prod_info.get('name', p_key)}",
+                                    "규격": prod_info.get("spec", ""),
+                                    "코드": prod_info.get("code", p_key),
+                                    "단위": prod_info.get("unit", "EA"),
+                                    "수량": req_qty,
+                                    "price_1": price_map_1.get(p_key, 0),
+                                    "price_2": price_map_2.get(p_key, 0),
+                                    "image_data": prod_info.get("image", "")
+                                })
+                                if p_key in pool: pool[p_key] -= req_qty
+                                
+                        for p_item in st.session_state.pipe_cart:
+                            p_code = p_item.get('code')
+                            p_len = p_item.get('len', 0)
+                            prod_info = next((p for p in st.session_state.db["products"] if str(p.get("code","")).strip().zfill(5) == p_code), {})
+                            unit_len = prod_info.get("len_per_unit", 4) if prod_info else 4
+                            req_qty = math.ceil(p_len / (unit_len if unit_len > 0 else 4))
+                            p_key = str(p_code).strip().zfill(5)
+                            
+                            expanded_data.append({
+                                "품목": f"[배관] {prod_info.get('name', p_item.get('name'))}",
+                                "규격": prod_info.get("spec", p_item.get("spec", "")),
+                                "코드": p_code,
+                                "단위": prod_info.get("unit", "EA"),
+                                "수량": req_qty,
+                                "price_1": price_map_1.get(p_key, 0),
+                                "price_2": price_map_2.get(p_key, 0),
+                                "image_data": prod_info.get("image", "")
+                            })
+                            if p_key in pool: pool[p_key] -= req_qty
+                            
+                        for item in safe_data:
+                            k = str(item.get("코드", "")).strip().zfill(5)
+                            if k == "00000" or not k: k = str(item.get("품목", "")).strip()
+                            rem_qty = pool.get(k, 0)
+                            if rem_qty > 0:
+                                new_item = item.copy()
+                                new_item["품목"] = f"[추가/별도] {item.get('품목')}"
+                                new_item["수량"] = rem_qty
+                                expanded_data.append(new_item)
+                                pool[k] = 0
+                                
+                        sorted_final_data = expanded_data
+                    elif print_mode == "세트 단위 묶음 (신규)":
+                        comp_pool = {}
+                        comp_price1 = {}
+                        comp_price2 = {}
+                        
+                        for item in safe_data:
+                            match_key = str(item.get("코드", "")).strip().zfill(5)
+                            if not match_key or match_key == "00000":
+                                match_key = str(item.get("품목", "")).strip()
+                            
+                            qty = int(float(item.get("수량", 0)))
+                            comp_pool[match_key] = comp_pool.get(match_key, 0) + qty
+                            comp_price1[match_key] = int(float(item.get("price_1", 0)))
+                            comp_price2[match_key] = int(float(item.get("price_2", 0)))
+
+                        set_items_out = []
+                        all_sets_db = {}
+                        for cat, val in st.session_state.db.get("sets", {}).items(): 
+                            all_sets_db.update(val)
+                            
+                        for s_item in st.session_state.set_cart:
+                            s_name = s_item['name']
+                            s_qty = s_item['qty']
+                            if s_qty <= 0: continue
+                            
+                            s_price1 = 0
+                            s_price2 = 0
+                            s_img = ""
+                            
+                            if s_name in all_sets_db:
+                                recipe = all_sets_db[s_name].get("recipe", {})
+                                s_img = all_sets_db[s_name].get("image", "")
+                                
+                                for p_code_or_name, p_qty_per_set in recipe.items():
+                                    p_key = str(p_code_or_name).strip().zfill(5)
+                                    if p_key not in comp_pool:
+                                        p_key = str(p_code_or_name).strip()
+                                        
+                                    p1 = comp_price1.get(p_key, 0)
+                                    p2 = comp_price2.get(p_key, 0)
+                                    
+                                    s_price1 += (p1 * p_qty_per_set)
+                                    s_price2 += (p2 * p_qty_per_set)
+                                    
+                                    if p_key in comp_pool:
+                                        comp_pool[p_key] -= (p_qty_per_set * s_qty)
+                                        
+                            set_items_out.append({
+                                "품목": s_name,
+                                "규격": "세트",
+                                "코드": s_name, 
+                                "단위": "SET",
+                                "수량": s_qty,
+                                "price_1": s_price1,
+                                "price_2": s_price2,
+                                "image_data": s_img
+                            })
+                            
+                        rem_items_out = []
+                        for item in safe_data:
+                            match_key = str(item.get("코드", "")).strip().zfill(5)
+                            if not match_key or match_key == "00000":
+                                match_key = str(item.get("품목", "")).strip()
+                                
+                            rem_qty = comp_pool.get(match_key, 0)
+                            if rem_qty > 0:
+                                new_item = item.copy()
+                                new_item["수량"] = rem_qty
+                                rem_items_out.append(new_item)
+                                comp_pool[match_key] = 0 # Prevent duplicate addition
+                        
+                        sorted_final_data = sort_items(set_items_out) + sort_items(rem_items_out)
+                    else:
+                        sorted_final_data = individual_sorted_data
+                    
+                    st.session_state.gen_pdf = create_advanced_pdf(sorted_final_data, pdf_excel_services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info, st.session_state.quote_remarks)
+                    st.session_state.gen_excel = create_quote_excel(sorted_final_data, pdf_excel_services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info, st.session_state.quote_remarks)
+                    
+                    st.session_state.gen_comp_pdf = create_composition_pdf(st.session_state.set_cart, st.session_state.pipe_cart, individual_sorted_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
+                    st.session_state.gen_comp_excel = create_composition_excel(st.session_state.set_cart, st.session_state.pipe_cart, individual_sorted_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
+                    
+                    st.session_state.files_ready = True
+                st.rerun()
+
+            if st.session_state.files_ready:
+                st.success("파일 생성이 완료되었습니다! 아래 버튼을 눌러 다운로드하세요.")
+                col_pdf, col_xls = st.columns(2)
+                with col_pdf:
+                    st.download_button("📥 견적서 PDF", st.session_state.gen_pdf, f"quote_{st.session_state.current_quote_name}.pdf", "application/pdf", type="primary", use_container_width=True)
+                with col_xls:
+                    st.download_button("📊 견적서 엑셀", st.session_state.gen_excel, f"quote_{st.session_state.current_quote_name}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                
+                st.write("")
+                st.markdown("##### 📂 자재 구성 명세서 다운로드")
+                c_comp_pdf, c_comp_xls = st.columns(2)
+                with c_comp_pdf:
+                    st.download_button("📥 자재명세 PDF", st.session_state.gen_comp_pdf, f"composition_{st.session_state.current_quote_name}.pdf", "application/pdf", use_container_width=True)
+                with c_comp_xls:
+                    st.download_button("📊 자재명세 엑셀", st.session_state.gen_comp_excel, f"composition_{st.session_state.current_quote_name}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            else:
+                st.info("👆 위 버튼을 눌러 파일을 생성해주세요. (데이터 수정 시 다시 생성해야 합니다)")
+        
+        st.write("")
+        st.markdown("##### 📝 특약사항 및 비고 (수정 가능)")
+        st.session_state.quote_remarks = st.text_area(
+            "특약사항", 
+            value=st.session_state.quote_remarks, 
+            height=100, 
+            label_visibility="collapsed"
+        )
+
+        c1, c2 = st.columns(2)
+        with c1: 
+            if st.button("⬅️ 수정 (이전 단계)"): 
+                st.session_state.quote_step = 2
+                st.session_state.step3_ready = False
+                st.session_state.files_ready = False
+                st.rerun()
+        with c2:
+            if st.button("🔄 처음으로"):
+                st.session_state.quote_step = 1
+                st.session_state.quote_items = {}
+                st.session_state.services = []
+                st.session_state.pipe_cart = []
+                st.session_state.set_cart = []
+                st.session_state.buyer_info = {"manager": "", "phone": "", "addr": "", "serial": "", "recipient": "", "ref": "", "pay_cond": "/", "valid_period": "견적 후 15일 이내"}
+                st.session_state.current_quote_name = ""
+                st.session_state.step3_ready = False
+                st.session_state.files_ready = False
+                st.rerun()
+
+# [V28] 브랜드 푸터 (V27 정의분 활성화)
+render_brand_footer()

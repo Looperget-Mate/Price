@@ -8,3 +8,4 @@ fpdf2
 XlsxWriter
 python-pptx
 streamlit-js-eval==1.0.0
+segno

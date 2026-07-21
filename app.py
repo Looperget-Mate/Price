@@ -954,6 +954,59 @@ def aq_save_sites(sites_rows):
     grid = [hdrs] + [[str(s.get(h, "")) for h in hdrs] for s in sites_rows]
     ws.clear(); ws.update(grid, value_input_option='RAW')
 
+# ── [V50] 등록된 상자·수용량 기록 수정 — 축적 데이터도 고칠 수 있어야 한다(박 대표님 2026-07-21) ──
+def aq_save_ws(ws_name, rows):
+    """[V50] AQ 시트 전체 재기록 (§2-2 clear+update). rows=list[dict] · 헤더는 시트 현재 헤더 유지.
+    ※ 편집 저장 전용 — 축적 로그의 '행 추가'는 기존대로 aq_append_row 사용."""
+    ws = _aq_sh().worksheet(ws_name)
+    cur = ws.get_all_values()
+    hdrs = cur[0] if cur and any(cur[0]) else (list(rows[0].keys()) if rows else [])
+    grid = [hdrs] + [[str(r.get(h, "")) for h in hdrs] for r in rows]
+    ws.clear(); ws.update(grid, value_input_option='RAW')
+    return len(rows)
+
+def aq_rename_box(old, new):
+    """[V50] 상자 이름 변경 — 참조하는 곳 전부에 연쇄 반영.
+    AQ_Boxes(상자종류)·AQ_Items(기본상자)·AQ_ItemBox(상자종류)·AQ_Sites(배치JSON items.box).
+    반환: {대상: 변경건수}"""
+    sh = _aq_sh()
+    cnt = {}
+    for label, ws_name, col in (("상자 마스터", "AQ_Boxes", "상자종류"),
+                                ("품목 기본상자", "AQ_Items", "기본상자"),
+                                ("수용량 기록", "AQ_ItemBox", "상자종류")):
+        try:
+            ws = sh.worksheet(ws_name)
+            vals = ws.get_all_values()
+        except Exception:
+            cnt[label] = 0; continue
+        if not vals or col not in vals[0]:
+            cnt[label] = 0; continue
+        hdr = vals[0]; ci = hdr.index(col)
+        grid, n = [hdr], 0
+        for r in vals[1:]:
+            row = (list(r) + [""] * len(hdr))[:len(hdr)]
+            if row[ci].strip() == old:
+                row[ci] = new; n += 1
+            grid.append(row)
+        if n:
+            ws.clear(); ws.update(grid, value_input_option='RAW')
+        cnt[label] = n
+    n_site, sites = 0, aq_load_sites()
+    for s in sites:
+        try: plan = json.loads(str(s.get("배치JSON") or "{}"))
+        except Exception: continue
+        items = plan.get("items", {}) if isinstance(plan, dict) else {}
+        hit = False
+        if isinstance(items, dict):
+            for v in items.values():
+                if isinstance(v, dict) and str(v.get("box", "")).strip() == old:
+                    v["box"] = new; hit = True; n_site += 1
+        if hit:
+            s["배치JSON"] = json.dumps(plan, ensure_ascii=False)
+    if n_site: aq_save_sites(sites)
+    cnt["사이트 배치"] = n_site
+    return cnt
+
 # ── [V44] 표준 시스템(Aqunaris V1) — 도면 1:7.5 역산 상수 + 재현 검증 엔진 ──
 #  근거: Aqunaris V1.ai 벡터 실측(2026-07-18). 상자 개수 91/54/53/38 = 구매수량과 정확 일치.
 #  검증 모델: 층수 = floor(단높이/상자높이), Σ(상자폭÷층수) ≤ 내측폭 862 → V1 실배치 51/51단 적합.
@@ -5497,13 +5550,49 @@ elif mode == "🏪 아쿠나리스":
             st.caption("품목↔상자 매핑은 고정이 아닙니다. 농협 상황·랙 크기에 따라 상자가 바뀌고 새 상자가 추가됩니다. '어떤 부속이 어떤 상자에 얼마나 담기는지'를 여기서 계속 축적하세요.")
             c_bm, c_add = st.columns([3, 2])
             with c_bm:
-                st.markdown("##### 📦 상자 마스터 (AQ_Boxes)")
+                st.markdown("##### 📦 상자 마스터 (AQ_Boxes) — 표에서 직접 수정")
                 # [V43] 치수는 배치 방향 판정의 기초: 세로(표준)=단 깊이≥상자 깊이 / 가로=단 깊이≥상자 폭
-                st.caption("치수(폭·깊이)를 채우면 배치 판정에 사용됩니다 — **세로**(표준) 배치는 단 깊이 ≥ 상자 깊이, **가로** 배치는 단 깊이 ≥ 상자 폭. (Phase B-2 자동배치의 기초 데이터)")
+                st.caption("치수(폭·깊이)를 채우면 배치 판정에 사용됩니다 — **세로**(표준) 배치는 단 깊이 ≥ 상자 깊이, **가로** 배치는 단 깊이 ≥ 상자 폭. "
+                           "[V50] **셀을 고쳐 '상자 정보 저장'을 누르면 반영**됩니다(치수 실측값 입력·단가 변경 등). 상자 **이름 변경은 아래 '✏️ 상자 이름 변경'**(참조처 연쇄 반영).")
                 if aq_boxes:
-                    df_bx = pd.DataFrame(aq_boxes)
-                    _cols_show = [c for c in ["상자종류", "폭mm", "깊이mm", "높이mm", "단가", "상태", "비고"] if c in df_bx.columns]
-                    st.dataframe(df_bx[_cols_show].astype(str), hide_index=True)
+                    _bx_cols = [c for c in ["상자종류", "폭mm", "깊이mm", "높이mm", "단가", "상태", "비고"]
+                                if any(c in b for b in aq_boxes)]
+                    _df_bx_in = pd.DataFrame([{c: b.get(c, "") for c in _bx_cols} for b in aq_boxes])
+                    for _c in ["폭mm", "깊이mm", "높이mm", "단가"]:
+                        if _c in _df_bx_in.columns:
+                            _df_bx_in[_c] = pd.to_numeric(_df_bx_in[_c], errors="coerce")
+                    df_bx_ed = st.data_editor(
+                        _df_bx_in, hide_index=True, key="aq_box_ed",
+                        disabled=["상자종류"],
+                        column_config={
+                            "상자종류": st.column_config.TextColumn("상자종류", help="이름 변경은 아래 '상자 이름 변경' 사용 — 참조처까지 함께 바꿔야 안전합니다"),
+                            "폭mm": st.column_config.NumberColumn(format="%d", min_value=0),
+                            "깊이mm": st.column_config.NumberColumn(format="%d", min_value=0),
+                            "높이mm": st.column_config.NumberColumn(format="%d", min_value=0),
+                            "단가": st.column_config.NumberColumn(format="%d", min_value=0),
+                        })
+                    if st.button("💾 상자 정보 저장", type="primary", key="aq_box_save"):
+                        try:
+                            _out_bx = []
+                            for _i, _b in enumerate(aq_boxes):
+                                _row = dict(_b)                      # 등록일 등 미표시 컬럼 보존
+                                if _i < len(df_bx_ed):
+                                    _ed = df_bx_ed.iloc[_i]
+                                    for _c in _bx_cols:
+                                        if _c == "상자종류": continue
+                                        _v = _ed.get(_c)
+                                        if _v is None or (isinstance(_v, float) and pd.isna(_v)):
+                                            _row[_c] = ""
+                                        elif _c in ("폭mm", "깊이mm", "높이mm", "단가"):
+                                            _row[_c] = int(_v)
+                                        else:
+                                            _row[_c] = str(_v)
+                                _out_bx.append(_row)
+                            aq_save_ws("AQ_Boxes", _out_bx)
+                            aq_load_all.clear()
+                            st.success(f"상자 {len(_out_bx)}건 저장 완료"); time.sleep(0.5); st.rerun()
+                        except Exception as e:
+                            st.error(f"저장 실패: {aq_err_str(e)}")
                 else:
                     st.info("등록된 상자가 없습니다.")
             with c_add:
@@ -5531,6 +5620,37 @@ elif mode == "🏪 아쿠나리스":
                                 st.success(f"'{_nm}' 등록 완료"); time.sleep(0.5); st.rerun()
                             except Exception as e:
                                 st.error(f"등록 실패: {aq_err_str(e)}")
+
+            # [V50] 상자 이름 변경 — 참조처(품목 기본상자·수용량 기록·사이트 배치)까지 연쇄 반영
+            with st.expander("✏️ 상자 이름 변경 (참조처 연쇄 반영)", expanded=False):
+                st.caption("이름만 바꾸면 품목의 기본상자·수용량 기록·사이트 배치가 옛 이름을 가리켜 배치가 깨집니다. "
+                           "여기서 바꾸면 **AQ_Boxes·AQ_Items(기본상자)·AQ_ItemBox·AQ_Sites(배치JSON)를 한 번에** 고칩니다.")
+                if aq_box_names:
+                    _rn1, _rn2 = st.columns(2)
+                    _rn_old = _rn1.selectbox("현재 이름", aq_box_names, key="aq_box_rn_old")
+                    _rn_new = _rn2.text_input("새 이름", key="aq_box_rn_new")
+                    _n_it = sum(1 for r in aq_items if str(r.get("기본상자", "")).strip() == _rn_old)
+                    _n_ib = sum(1 for r in aq_itembox if str(r.get("상자종류", "")).strip() == _rn_old)
+                    st.caption(f"'{_rn_old}' 참조 현황 — 품목 기본상자 {_n_it}건 · 수용량 기록 {_n_ib}건 (+ 사이트 배치JSON은 실행 시 집계)")
+                    if st.button("이름 변경 실행", key="aq_box_rn_go"):
+                        _nn = (_rn_new or "").strip()
+                        if not _nn:
+                            st.error("새 이름을 입력하세요.")
+                        elif _nn == _rn_old:
+                            st.error("현재 이름과 같습니다.")
+                        elif _nn in aq_box_names:
+                            st.error(f"'{_nn}' 은 이미 있는 상자입니다. (합치려면 수용량 기록의 상자를 개별 변경하세요)")
+                        else:
+                            try:
+                                _res = aq_rename_box(_rn_old, _nn)
+                                aq_load_all.clear()
+                                st.success(f"'{_rn_old}' → '{_nn}' 변경 완료 — "
+                                           + " · ".join(f"{k} {v}건" for k, v in _res.items()))
+                                time.sleep(0.8); st.rerun()
+                            except Exception as e:
+                                st.error(f"이름 변경 실패: {aq_err_str(e)}")
+                else:
+                    st.info("등록된 상자가 없습니다.")
 
             st.divider()
             st.markdown("##### 📝 수용량 기록 추가 — 품목이 이 상자에 몇 개 담기는가")
@@ -5560,6 +5680,75 @@ elif mode == "🏪 아쿠나리스":
                             st.success(f"{_code} × {cap_box} = {int(cap_qty)}개 기록 완료"); time.sleep(0.5); st.rerun()
                         except Exception as e:
                             st.error(f"기록 실패: {aq_err_str(e)}")
+
+            # [V50] 수용량 기록 수정·삭제 — 잘못 기록된 수량·근거·상자를 고칠 수 있어야 한다
+            with st.expander(f"🛠 수용량 기록 수정·삭제 (총 {len(aq_itembox)}건)", expanded=False):
+                st.caption("셀을 고치거나 행을 지운 뒤 **'기록 저장'**을 누르면 반영됩니다. 같은 품목×상자 기록이 여럿이면 **뒤(나중) 기록이 우선** 적용됩니다. "
+                           "품목코드는 잠금(잘못된 매칭 방지) — 품목을 바꾸려면 지우고 위 폼에서 새로 추가하세요. 저장 시 빈 행은 정리됩니다.")
+                _nm_by_code = {r["품목코드"]: str(r.get("품목명_AQ", "") or "") for r in aq_items}
+                _ib_all = []
+                for _i, _r in enumerate(aq_itembox):
+                    _ib_all.append({
+                        "행": _i, "품목코드": _r["품목코드"], "품목명": _nm_by_code.get(_r["품목코드"], ""),
+                        "상자종류": str(_r.get("상자종류", "") or ""),
+                        "수용수량": pd.to_numeric(_r.get("수용수량"), errors="coerce"),
+                        "근거": str(_r.get("근거", "") or ""), "출처": str(_r.get("출처", "") or ""),
+                        "비고": str(_r.get("비고", "") or ""),
+                    })
+                _fb1, _fb2 = st.columns([2, 3])
+                _f_box = _fb1.selectbox("상자 필터", ["(전체)"] + aq_box_names, key="aq_ib_fbox")
+                _f_q = _fb2.text_input("품목 검색 (코드·품명)", key="aq_ib_fq").strip()
+                _ib_view = [r for r in _ib_all
+                            if (_f_box == "(전체)" or r["상자종류"] == _f_box)
+                            and (not _f_q or _f_q in r["품목코드"] or _f_q in r["품목명"])]
+                if not _ib_view:
+                    st.info("조건에 맞는 기록이 없습니다.")
+                else:
+                    _basis_opts = sorted({r["근거"] for r in _ib_all if r["근거"]} | {"실측", "추정", "카탈로그", "표준설치"})
+                    df_ib_ed = st.data_editor(
+                        pd.DataFrame(_ib_view), hide_index=True, height=330, num_rows="dynamic",
+                        key=f"aq_ib_ed_{_f_box}_{_f_q}",
+                        disabled=["행", "품목코드", "품목명"],
+                        column_config={
+                            "행": st.column_config.NumberColumn("행", format="%d", help="원본 행 번호(수정 위치 추적용)"),
+                            "상자종류": st.column_config.SelectboxColumn("상자종류", options=aq_box_names or [""]),
+                            "수용수량": st.column_config.NumberColumn(format="%d", min_value=0),
+                            "근거": st.column_config.SelectboxColumn("근거", options=_basis_opts),
+                        })
+                    if st.button("💾 기록 저장 (수정·삭제 반영)", type="primary", key="aq_ib_save"):
+                        try:
+                            _ed_by_row, _new_rows = {}, []
+                            for _, _er in df_ib_ed.iterrows():
+                                _rn = _er.get("행")
+                                if _rn is None or (isinstance(_rn, float) and pd.isna(_rn)):
+                                    _new_rows.append(_er); continue      # 표에서 추가한 행(코드 없음) → 무시
+                                _ed_by_row[int(_rn)] = _er
+                            _view_rows = {r["행"] for r in _ib_view}
+                            _kept = _view_rows & set(_ed_by_row)
+                            _deleted = _view_rows - _kept
+                            _out_ib = []
+                            for _i, _r in enumerate(aq_itembox):
+                                if _i in _deleted: continue
+                                _row = dict(_r)
+                                if _i in _ed_by_row:
+                                    _er = _ed_by_row[_i]
+                                    _qv = _er.get("수용수량")
+                                    if _qv is None or (isinstance(_qv, float) and pd.isna(_qv)):
+                                        _row["수용수량"] = ""
+                                    else:
+                                        _row["수용수량"] = int(_qv)
+                                    for _c in ("상자종류", "근거", "출처", "비고"):
+                                        _v = _er.get(_c)
+                                        _row[_c] = "" if (_v is None or (isinstance(_v, float) and pd.isna(_v))) else str(_v)
+                                _out_ib.append(_row)
+                            aq_save_ws("AQ_ItemBox", _out_ib)
+                            aq_load_all.clear()
+                            _msg = f"수용량 기록 저장 완료 — {len(_out_ib)}건 유지"
+                            if _deleted: _msg += f" · {len(_deleted)}건 삭제"
+                            if len(_new_rows): _msg += f" · 표에서 추가한 {len(_new_rows)}행은 무시(위 폼으로 추가)"
+                            st.success(_msg); time.sleep(0.8); st.rerun()
+                        except Exception as e:
+                            st.error(f"저장 실패: {aq_err_str(e)}")
 
             c_v1, c_v2 = st.columns(2)
             with c_v1:
@@ -7094,192 +7283,3 @@ else:
                         all_sets_db = {}
                         for cat, val in st.session_state.db.get("sets", {}).items(): all_sets_db.update(val)
                         
-                        for s_item in st.session_state.set_cart:
-                            s_name = s_item['name']
-                            s_qty = s_item['qty']
-                            if s_qty <= 0 or s_name not in all_sets_db: continue
-                            recipe = all_sets_db[s_name].get("recipe", {})
-                            
-                            for p_code_or_name, p_qty_per_set in recipe.items():
-                                p_key = str(p_code_or_name).strip().zfill(5)
-                                if p_key not in pool: p_key = str(p_code_or_name).strip()
-                                req_qty = p_qty_per_set * s_qty
-                                prod_info = next((p for p in st.session_state.db["products"] if str(p.get("code","")).strip().zfill(5) == p_key or p.get("name") == p_key), {})
-                                
-                                expanded_data.append({
-                                    "품목": f"[{s_name}] {prod_info.get('name', p_key)}",
-                                    "규격": prod_info.get("spec", ""),
-                                    "코드": prod_info.get("code", p_key),
-                                    "단위": prod_info.get("unit", "EA"),
-                                    "수량": req_qty,
-                                    "price_1": price_map_1.get(p_key, 0),
-                                    "price_2": price_map_2.get(p_key, 0),
-                                    "image_data": prod_info.get("image", "")
-                                })
-                                if p_key in pool: pool[p_key] -= req_qty
-                                
-                        for p_item in st.session_state.pipe_cart:
-                            p_code = p_item.get('code')
-                            p_len = p_item.get('len', 0)
-                            prod_info = next((p for p in st.session_state.db["products"] if str(p.get("code","")).strip().zfill(5) == p_code), {})
-                            unit_len = prod_info.get("len_per_unit", 4) if prod_info else 4
-                            req_qty = math.ceil(p_len / (unit_len if unit_len > 0 else 4))
-                            p_key = str(p_code).strip().zfill(5)
-                            
-                            expanded_data.append({
-                                "품목": f"[배관] {prod_info.get('name', p_item.get('name'))}",
-                                "규격": prod_info.get("spec", p_item.get("spec", "")),
-                                "코드": p_code,
-                                "단위": prod_info.get("unit", "EA"),
-                                "수량": req_qty,
-                                "price_1": price_map_1.get(p_key, 0),
-                                "price_2": price_map_2.get(p_key, 0),
-                                "image_data": prod_info.get("image", "")
-                            })
-                            if p_key in pool: pool[p_key] -= req_qty
-                            
-                        for item in safe_data:
-                            k = str(item.get("코드", "")).strip().zfill(5)
-                            if k == "00000" or not k: k = str(item.get("품목", "")).strip()
-                            rem_qty = pool.get(k, 0)
-                            if rem_qty > 0:
-                                new_item = item.copy()
-                                new_item["품목"] = f"[추가/별도] {item.get('품목')}"
-                                new_item["수량"] = rem_qty
-                                expanded_data.append(new_item)
-                                pool[k] = 0
-                                
-                        sorted_final_data = expanded_data
-                    elif print_mode == "세트 단위 묶음 (신규)":
-                        comp_pool = {}
-                        comp_price1 = {}
-                        comp_price2 = {}
-                        
-                        for item in safe_data:
-                            match_key = str(item.get("코드", "")).strip().zfill(5)
-                            if not match_key or match_key == "00000":
-                                match_key = str(item.get("품목", "")).strip()
-                            
-                            qty = int(float(item.get("수량", 0)))
-                            comp_pool[match_key] = comp_pool.get(match_key, 0) + qty
-                            comp_price1[match_key] = int(float(item.get("price_1", 0)))
-                            comp_price2[match_key] = int(float(item.get("price_2", 0)))
-
-                        set_items_out = []
-                        all_sets_db = {}
-                        for cat, val in st.session_state.db.get("sets", {}).items(): 
-                            all_sets_db.update(val)
-                            
-                        for s_item in st.session_state.set_cart:
-                            s_name = s_item['name']
-                            s_qty = s_item['qty']
-                            if s_qty <= 0: continue
-                            
-                            s_price1 = 0
-                            s_price2 = 0
-                            s_img = ""
-                            
-                            if s_name in all_sets_db:
-                                recipe = all_sets_db[s_name].get("recipe", {})
-                                s_img = all_sets_db[s_name].get("image", "")
-                                
-                                for p_code_or_name, p_qty_per_set in recipe.items():
-                                    p_key = str(p_code_or_name).strip().zfill(5)
-                                    if p_key not in comp_pool:
-                                        p_key = str(p_code_or_name).strip()
-                                        
-                                    p1 = comp_price1.get(p_key, 0)
-                                    p2 = comp_price2.get(p_key, 0)
-                                    
-                                    s_price1 += (p1 * p_qty_per_set)
-                                    s_price2 += (p2 * p_qty_per_set)
-                                    
-                                    if p_key in comp_pool:
-                                        comp_pool[p_key] -= (p_qty_per_set * s_qty)
-                                        
-                            set_items_out.append({
-                                "품목": s_name,
-                                "규격": "세트",
-                                "코드": s_name, 
-                                "단위": "SET",
-                                "수량": s_qty,
-                                "price_1": s_price1,
-                                "price_2": s_price2,
-                                "image_data": s_img
-                            })
-                            
-                        rem_items_out = []
-                        for item in safe_data:
-                            match_key = str(item.get("코드", "")).strip().zfill(5)
-                            if not match_key or match_key == "00000":
-                                match_key = str(item.get("품목", "")).strip()
-                                
-                            rem_qty = comp_pool.get(match_key, 0)
-                            if rem_qty > 0:
-                                new_item = item.copy()
-                                new_item["수량"] = rem_qty
-                                rem_items_out.append(new_item)
-                                comp_pool[match_key] = 0 # Prevent duplicate addition
-                        
-                        sorted_final_data = sort_items(set_items_out) + sort_items(rem_items_out)
-                    else:
-                        sorted_final_data = individual_sorted_data
-                    
-                    st.session_state.gen_pdf = create_advanced_pdf(sorted_final_data, pdf_excel_services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info, st.session_state.quote_remarks)
-                    st.session_state.gen_excel = create_quote_excel(sorted_final_data, pdf_excel_services, st.session_state.current_quote_name, q_date.strftime("%Y-%m-%d"), fmode, sel, st.session_state.buyer_info, st.session_state.quote_remarks)
-                    
-                    st.session_state.gen_comp_pdf = create_composition_pdf(st.session_state.set_cart, st.session_state.pipe_cart, individual_sorted_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
-                    st.session_state.gen_comp_excel = create_composition_excel(st.session_state.set_cart, st.session_state.pipe_cart, individual_sorted_data, st.session_state.db['products'], st.session_state.db['sets'], st.session_state.current_quote_name)
-                    
-                    st.session_state.files_ready = True
-                st.rerun()
-
-            if st.session_state.files_ready:
-                st.success("파일 생성이 완료되었습니다! 아래 버튼을 눌러 다운로드하세요.")
-                col_pdf, col_xls = st.columns(2)
-                with col_pdf:
-                    st.download_button("📥 견적서 PDF", st.session_state.gen_pdf, f"quote_{st.session_state.current_quote_name}.pdf", "application/pdf", type="primary", use_container_width=True)
-                with col_xls:
-                    st.download_button("📊 견적서 엑셀", st.session_state.gen_excel, f"quote_{st.session_state.current_quote_name}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-                
-                st.write("")
-                st.markdown("##### 📂 자재 구성 명세서 다운로드")
-                c_comp_pdf, c_comp_xls = st.columns(2)
-                with c_comp_pdf:
-                    st.download_button("📥 자재명세 PDF", st.session_state.gen_comp_pdf, f"composition_{st.session_state.current_quote_name}.pdf", "application/pdf", use_container_width=True)
-                with c_comp_xls:
-                    st.download_button("📊 자재명세 엑셀", st.session_state.gen_comp_excel, f"composition_{st.session_state.current_quote_name}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-            else:
-                st.info("👆 위 버튼을 눌러 파일을 생성해주세요. (데이터 수정 시 다시 생성해야 합니다)")
-        
-        st.write("")
-        st.markdown("##### 📝 특약사항 및 비고 (수정 가능)")
-        st.session_state.quote_remarks = st.text_area(
-            "특약사항", 
-            value=st.session_state.quote_remarks, 
-            height=100, 
-            label_visibility="collapsed"
-        )
-
-        c1, c2 = st.columns(2)
-        with c1: 
-            if st.button("⬅️ 수정 (이전 단계)"): 
-                st.session_state.quote_step = 2
-                st.session_state.step3_ready = False
-                st.session_state.files_ready = False
-                st.rerun()
-        with c2:
-            if st.button("🔄 처음으로"):
-                st.session_state.quote_step = 1
-                st.session_state.quote_items = {}
-                st.session_state.services = []
-                st.session_state.pipe_cart = []
-                st.session_state.set_cart = []
-                st.session_state.buyer_info = {"manager": "", "phone": "", "addr": "", "serial": "", "recipient": "", "ref": "", "pay_cond": "/", "valid_period": "견적 후 15일 이내"}
-                st.session_state.current_quote_name = ""
-                st.session_state.step3_ready = False
-                st.session_state.files_ready = False
-                st.rerun()
-
-# [V28] 브랜드 푸터 (V27 정의분 활성화)
-render_brand_footer()

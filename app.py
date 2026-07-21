@@ -1141,22 +1141,57 @@ def aq_pack_shelf_stacks(box_seq, inner, shelf_h, max_layers=3):
             cur[2].append(it); fitted.append(it)
     return cols, fitted, rejected
 
-def aq_auto_place(rack_list, items_seq, box_dims, group_order=None):
+def aq_auto_place(rack_list, items_seq, box_dims, group_order=None, pre=None, center_codes=None):
     """단 중심 자동배치(군집): 랙 순서·단은 아래→위, 품목은 분류 군집 순서 그대로 채움.
     rack_list=[{명칭,내측폭,단높이:[...]}], items_seq=[(코드,분류,상자)] (분류별 연속 정렬).
     패킹은 정준 정렬(aq_canon_seq) 기준 — 편집표 재검증과 동일 결과 보장.
+    [V53] pre={코드:(랙명,단번호)} = 표준 위치 우선 배치(표준 실측 검증 근거로 존중) /
+          center_codes = 루퍼젯 본품 등 → 가운데 랙의 중앙 단부터 우선 배치.
     반환: (assign={코드:(랙명,단번호)}, unplaced=[코드...])"""
-    shelves = []
+    shelves, shelf_by = [], {}
     for rk in rack_list:
         for si, h in enumerate(rk["단높이"], 1):
-            shelves.append({"rack": rk["명칭"], "no": si, "h": h, "inner": rk["내측폭"], "seq": []})
+            s = {"rack": rk["명칭"], "no": si, "h": h, "inner": rk["내측폭"], "seq": []}
+            shelves.append(s); shelf_by[(rk["명칭"], si)] = s
+    pre = pre or {}
+    center_codes = set(center_codes or [])
     assign, unplaced = {}, []
-    cur = 0
+    rest = []
     for code, grp, box in items_seq:
         wh = box_dims.get(box)
         if not wh:
             unplaced.append(code); continue
-        w, h = wh
+        t = (code, grp, box, wh[0], wh[1])
+        tgt = pre.get(code)
+        if tgt and tgt in shelf_by:                          # ① [V53] 표준 위치 우선
+            s = shelf_by[tgt]
+            s["seq"] = aq_canon_seq(s["seq"] + [t], group_order)
+            assign[code] = tgt
+            continue
+        rest.append(t)
+    if center_codes and rack_list:                            # ② [V53] 루퍼젯 본품 → 가운데 랙 중앙 단부터
+        mid_rk = rack_list[len(rack_list) // 2]
+        n_sh = len(mid_rk["단높이"])
+        mid = (n_sh + 1) // 2
+        order_sh = [mid]
+        for d in range(1, n_sh + 1):
+            if mid + d <= n_sh: order_sh.append(mid + d)
+            if mid - d >= 1: order_sh.append(mid - d)
+        still = []
+        for t in rest:
+            if t[0] not in center_codes:
+                still.append(t); continue
+            placed = False
+            for no in order_sh:
+                s = shelf_by[(mid_rk["명칭"], no)]
+                trial = aq_canon_seq(s["seq"] + [t], group_order)
+                if not aq_pack_shelf_stacks(trial, s["inner"], s["h"])[2]:
+                    s["seq"] = trial; assign[t[0]] = (s["rack"], s["no"]); placed = True; break
+            if not placed:
+                still.append(t)
+        rest = still
+    cur = 0                                                   # ③ 나머지 그리디(기존 로직)
+    for code, grp, box, w, h in rest:
         placed = False
         i = cur
         while i < len(shelves):
@@ -1194,7 +1229,10 @@ def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=
     W = inner + frame_t * 2
     H = sum(shelf_hs) + frame_t
     pw, ph = W * scale, H * scale
-    out.append(f'<rect x="{x0:.1f}" y="{y0:.1f}" width="{pw:.1f}" height="{ph:.1f}" fill="#FAFAF7" stroke="#191414" stroke-width="1.6"/>')
+    _virt9 = str(rack_name).startswith("🅥")   # [V53] 가상랙 = 점선 프레임 + 연노랑 배경으로 구분
+    _dash9 = ' stroke-dasharray="7,4"' if _virt9 else ''
+    _fill9 = "#FFFBEB" if _virt9 else "#FAFAF7"
+    out.append(f'<rect x="{x0:.1f}" y="{y0:.1f}" width="{pw:.1f}" height="{ph:.1f}" fill="{_fill9}" stroke="#191414" stroke-width="1.6"{_dash9}/>')
     out.append(f'<text x="{x0:.1f}" y="{y0 - 4:.1f}" font-size="11" fill="#8C8681">{_aq_esc(rack_name)}</text>')
     y_real = 0
     for si, sh in enumerate(shelf_hs, 1):
@@ -1232,6 +1270,12 @@ def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=
                 else:
                     out.append(f'<rect x="{bx:.1f}" y="{by:.1f}" '
                                f'width="{bw*scale:.1f}" height="{bh*scale:.1f}" fill="{col}" fill-opacity="0.72" stroke="#191414" stroke-width="0.6"{attrs}/>')
+                _tag9 = str(meta.get("tag") or "")   # [V53] 루퍼젯 본품 뒷표기(P13B/P20/P25/H20/H25) — 옐로 위 블랙
+                if _tag9:
+                    _fs9 = max(4.5, min(9.0, bw * scale * 0.30))
+                    out.append(f'<text x="{bx + bw*scale/2:.1f}" y="{by + bh*scale/2 + _fs9*0.36:.1f}" '
+                               f'font-size="{_fs9:.1f}" text-anchor="middle" font-weight="bold" '
+                               f'fill="#191414" pointer-events="none">{_aq_esc(_tag9)}</text>')
             tape.append((cx, cx + cw, AQ_GROUP_COLORS.get(stack[0][1], "#9AA0A6")))
         for tx0, tx1, col in tape:   # 색상 자석테이프(단 전면 하단 밴드)
             out.append(f'<rect x="{x0 + frame_t*scale + tx0*scale:.1f}" y="{base - 3:.1f}" width="{(tx1-tx0)*scale:.1f}" height="3.4" fill="{col}"/>')
@@ -1327,7 +1371,7 @@ def aq_svg_hover_html(svg, interactive=False, nonce=""):
             f'<button onclick="aqFull()" style="{_btn}">⛶ 전체화면</button></div>')
         js_int = """
 <script>
-var AQN="__NONCE__", aqOps=[], aqZ=1, aqDrag=null, aqMenu=null;
+var AQN="__NONCE__", aqOps=[], aqZ=1, aqDrag=null, aqMenu=null, aqSeq=0;
 var aqBoxes=[].slice.call(document.querySelectorAll('.aqbox[data-code]'));
 var aqZones=[].slice.call(document.querySelectorAll('.aqshelf'));
 function aqZoom(f){aqZ=Math.max(0.3,Math.min(4,aqZ*f));document.getElementById('aqzoom').style.transform='scale('+aqZ+')';}
@@ -1340,7 +1384,7 @@ function aqNewTab(){var t=window.open('','_blank');if(!t)return;
  +document.getElementById('aqzoom').innerHTML+'</body></html>');t.document.close();}
 function aqGrp(el){return aqBoxes.filter(function(b){return b.dataset.code===el.dataset.code
  &&b.dataset.rack===el.dataset.rack&&b.dataset.shelf===el.dataset.shelf;});}
-function aqPush(op){aqOps.push(op);
+function aqPush(op){op.id=Date.now()+'-'+(++aqSeq);aqOps.push(op);
  try{window.parent.localStorage.setItem('AQ_OPS',JSON.stringify({nonce:AQN,ts:Date.now(),ops:aqOps}));}catch(e){}
  var s=document.getElementById('aqst');if(s)s.textContent='조작 '+aqOps.length+'건 — 자동 반영 중…';
  clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,350);}
@@ -1438,10 +1482,13 @@ _AQ_EAN_R = ["1110010", "1100110", "1101100", "1000010", "1011100",
              "1001110", "1010000", "1000100", "1001000", "1110100"]
 _AQ_EAN_PAR = ["LLLLLL", "LLGLGG", "LLGGLG", "LLGGGL", "LGLLGG",
                "LGGLLG", "LGGGLL", "LGLGLG", "LGLGGL", "LGGLGL"]
-AQ_STICKER_SPEC = {   # 아이라밸 실측 격자(mm) — 80=826(6호) · 98=228(3호) · 160=814(431-1/432호)
-    "80":  {"w": 80.0, "h": 45.0,  "xs": [23.5, 108.5], "y0": 13.5, "rows": 6, "pitch": 45.0},
-    "98":  {"w": 98.8, "h": 33.67, "xs": [5.0, 107.3],  "y0": 13.0, "rows": 8, "pitch": 33.67},
-    "160": {"w": 160.0, "h": 70.0, "xs": [25.0],        "y0": 8.5,  "rows": 4, "pitch": 70.0},
+AQ_STICKER_SPEC = {   # 아이라밸 실측 격자(mm) — [V53] 표기 = 실제 사이즈·라벨 규격코드·적용 부품상자
+    "80":  {"w": 80.0, "h": 45.0,  "xs": [23.5, 108.5], "y0": 13.5, "rows": 6, "pitch": 45.0,
+            "label": "80×45mm · 아이라벨 826 · 6호 상자", "fname": "스티커_80x45_아이라벨826_6호상자"},
+    "98":  {"w": 98.8, "h": 33.67, "xs": [5.0, 107.3],  "y0": 13.0, "rows": 8, "pitch": 33.67,
+            "label": "98.8×33.7mm · 아이라벨 228 · 3호 상자", "fname": "스티커_98x33_아이라벨228_3호상자"},
+    "160": {"w": 160.0, "h": 70.0, "xs": [25.0],        "y0": 8.5,  "rows": 4, "pitch": 70.0,
+            "label": "160×70mm · 아이라벨 814 · 431-1/432호 상자", "fname": "스티커_160x70_아이라벨814_431-432호상자"},
 }
 
 def aq_ean13_bits(code):
@@ -1466,43 +1513,78 @@ def _aq_lum_txt(rgb):
     r, g, b = rgb
     return (25, 20, 20) if (0.299 * r + 0.587 * g + 0.114 * b) > 150 else (255, 255, 255)
 
+AQ_ASSET_DIR = "assets"   # [V53] 리포 동봉 자산 — Pretendard·JetBrains Mono·SJ 로고 (디자인가이드 v1 §3·§4)
+
 class _AqPrintPDF(FPDF):
-    """[V52] 인쇄물 공용 PDF — NanumGothic(앱 표준 폰트) + 카드 프리미티브."""
-    BLACK = (25, 20, 20); DARK = (64, 64, 64); GREY = (191, 191, 191); YEL = (244, 214, 36)
+    """[V52] 인쇄물 공용 PDF — [V53] 디자인가이드 v1: Pretendard 본문 + JetBrains Mono 데이터,
+    자산 없으면 NanumGothic(앱 표준) 폴백. 지면 기조 = 화이트 + 잉크 블랙."""
+    BLACK = (22, 24, 28); DARK = (64, 64, 64); GREY = (191, 191, 191)
+    INK500 = (115, 115, 115); YEL = (244, 214, 36)
 
     def __init__(self):
         super().__init__(orientation="P", unit="mm", format="A4")
         self.set_auto_page_break(False)
         self.set_margins(0, 0, 0)
-        self._hasb = False
-        try:
-            self.add_font("NanumGothic", "", FONT_REGULAR, uni=True)
-            if os.path.exists(FONT_BOLD):
-                self.add_font("NanumGothic", "B", FONT_BOLD, uni=True); self._hasb = True
+        self._fam, self._famx, self._mono, self._hasb = "Helvetica", None, None, False
+        try:   # ① Pretendard (디자인가이드 §4)
+            self.add_font("PT", "", os.path.join(AQ_ASSET_DIR, "Pretendard-Regular.otf"))
+            self.add_font("PT", "B", os.path.join(AQ_ASSET_DIR, "Pretendard-Bold.otf"))
+            self.add_font("PTX", "", os.path.join(AQ_ASSET_DIR, "Pretendard-ExtraBold.otf"))
+            self._fam, self._famx, self._hasb = "PT", "PTX", True
+        except Exception:
+            try:   # ② NanumGothic 폴백 (앱 표준 다운로드 폰트)
+                self.add_font("NanumGothic", "", FONT_REGULAR, uni=True)
+                if os.path.exists(FONT_BOLD):
+                    self.add_font("NanumGothic", "B", FONT_BOLD, uni=True); self._hasb = True
+                self._fam = "NanumGothic"
+            except Exception:
+                pass
+        try:   # 데이터 층(규격·바코드 번호·HEX) = JetBrains Mono
+            self.add_font("JBM", "", os.path.join(AQ_ASSET_DIR, "JetBrainsMono-Regular.ttf"))
+            self.add_font("JBM", "B", os.path.join(AQ_ASSET_DIR, "JetBrainsMono-Bold.ttf"))
+            self._mono = "JBM"
         except Exception:
             pass
 
     def f(self, size, bold=False):
-        try: self.set_font("NanumGothic", "B" if (bold and self._hasb) else "", size)
+        try: self.set_font(self._fam, "B" if (bold and self._hasb) else "", size)
         except Exception: self.set_font("Helvetica", "", size)
 
-    def txt(self, x, y, w, h, s, size, bold=False, color=None, align="L"):
-        self.f(size, bold)
+    def fx(self, size):
+        """워드마크·헤드라인 — Pretendard ExtraBold (없으면 Bold)."""
+        try: self.set_font(self._famx or self._fam, "" if self._famx else ("B" if self._hasb else ""), size)
+        except Exception: self.set_font("Helvetica", "B", size)
+
+    def fmono(self, size, bold=False):
+        try: self.set_font(self._mono or self._fam, "B" if bold else "", size)
+        except Exception: self.f(size, bold)
+
+    def txt(self, x, y, w, h, s, size, bold=False, color=None, align="L", mono=False):
+        (self.fmono if mono else self.f)(size, bold)
         self.set_text_color(*(color or self.BLACK))
         self.set_xy(x, y); self.cell(w, h, str(s), align=align)
 
-    def fit_txt(self, x, y, w, h, s, size, bold=False, color=None, align="L", min_size=5.5):
+    def fit_txt(self, x, y, w, h, s, size, bold=False, color=None, align="L", min_size=5.5, mono=False):
         s = str(s); sz = size
+        _setf = self.fmono if mono else self.f
         while sz > min_size:
-            self.f(sz, bold)
+            _setf(sz, bold)
             if self.get_string_width(s) <= w - 0.6: break
             sz -= 0.5
-        self.f(sz, bold)
+        _setf(sz, bold)
         if self.get_string_width(s) > w - 0.6:
             while s and self.get_string_width(s + "…") > w - 0.6: s = s[:-1]
             s += "…"
         self.set_text_color(*(color or self.BLACK))
         self.set_xy(x, y); self.cell(w, h, s, align=align)
+
+    def sj_logo(self, x, y, w):
+        """SJ 보증 로고(ShinJinChemTech.png) — 자산 없으면 조용히 생략(텍스트 타이핑 금지)."""
+        try:
+            self.image(os.path.join(AQ_ASSET_DIR, "ShinJinChemTech.png"), x=x, y=y, w=w)
+            return True
+        except Exception:
+            return False
 
     def lbox(self, x, y, w, h):
         self.set_draw_color(*self.GREY); self.set_line_width(0.2); self.rect(x, y, w, h, "D")
@@ -1533,7 +1615,7 @@ class _AqPrintPDF(FPDF):
             if b == "1":
                 guard = i < 3 or i >= 92 or 45 <= i < 50
                 self.rect(x + i * mw, y, mw, h + (1.4 if guard else 0), "F")
-        self.txt(x, y + h + 1.6, w, digits_pt * 0.5, code, digits_pt, align="C")
+        self.txt(x, y + h + 1.6, w, digits_pt * 0.5, code, digits_pt, align="C", mono=True)   # [V53] 데이터=모노
         return True
 
     def qr(self, data, x, y, size, label=""):
@@ -1558,6 +1640,21 @@ class _AqPrintPDF(FPDF):
             self.txt(x, y + size * 0.56, size, size * 0.2, "영상 준비중", max(5, size * 0.28), color=self.GREY, align="C")
         if label and ok:
             self.txt(x, y + size + 0.6, size, 2.6, label, 5.5, color=self.DARK, align="C")
+
+def _aq_pil_from_any(v):
+    """[V53] download_image_by_id 반환(base64 data-URI 문자열) → PIL 이미지.
+    (이 문자열을 PIL로 착각해 스티커·가이드북 이미지가 통째로 빠지던 버그의 수정점.)"""
+    if v is None:
+        return None
+    if isinstance(v, str):
+        try:
+            b64 = v.split(",", 1)[1] if "," in v else v
+            img = Image.open(io.BytesIO(base64.b64decode(b64)))
+            img.load()
+            return img
+        except Exception:
+            return None
+    return v
 
 _AQ_PR_GLYPH = {"㎜": "mm", "㎝": "cm", "㎞": "km", "ℓ": "L", "中": "중", "小": "소", "大": "대"}
 
@@ -1586,70 +1683,84 @@ def _aq_pr_item(r):
 def _aq_pr_bc(it, bc_mode):
     return it["bc_std"] if bc_mode == "표준" else (it["bc_local"] or it["bc_std"])
 
+_AQ_STICKER_CAPTION = "Aqunaris · ShinJinChemTech"   # [V53] 보증 캡션 (로고 8mm 미만 지면 — 디자인가이드 §3)
+
 def _aq_sticker_card(pdf, s, x, y, it, rgb, bc, img):
-    """스티커 카드 1장 — 규격별 레이아웃 (색 프레임 + 제품명|규격 / 이미지|QR|바코드 / 설명)."""
+    """스티커 카드 1장 — [V53] 디자인가이드 v1 §5-1: 상단 색 밴드(부속군명 병기) + 얇은 색 테두리,
+    [제품명|규격(모노)] / [이미지|QR(≥15mm)|바코드] / [설명] + 하단 보증 캡션."""
+    tcol = _aq_lum_txt(rgb)
     if s == "160":
-        FT = 2.5
-        pdf.cframe(x, y, 160.0, 70.0, rgb, FT)
-        cx, cw = x + FT + 2.5, 160.0 - 2 * (FT + 2.5)
-        r1y, r1h = y + FT + 2.5, 9.5
+        W, H, FT, BH = 160.0, 70.0, 1.5, 7.0
+        pdf.cframe(x, y, W, H, rgb, FT)
+        pdf.set_fill_color(*rgb); pdf.rect(x, y, W, BH, "F")                     # 상단 색 밴드
+        pdf.fit_txt(x + 4, y + 1.2, W * 0.6, BH - 2.4, it["grp"] or "부속", 11, bold=True, color=tcol)
+        pdf.txt(x + W * 0.55, y + 1.6, W * 0.45 - 4, BH - 3.2, _AQ_STICKER_CAPTION, 7, color=tcol, align="R")
+        cx, cw = x + FT + 3, W - 2 * (FT + 3)
+        r1y, r1h = y + BH + 2, 9
         nw = cw * 0.60
-        pdf.lbox(cx, r1y, nw, r1h); pdf.fit_txt(cx + 2, r1y + 0.8, nw - 4, r1h - 1.6, it["name"], 13, bold=True)
+        pdf.lbox(cx, r1y, nw, r1h); pdf.fit_txt(cx + 2, r1y + 0.7, nw - 4, r1h - 1.4, it["name"], 13, bold=True)
         pdf.lbox(cx + nw + 2, r1y, cw - nw - 2, r1h)
-        pdf.fit_txt(cx + nw + 4, r1y + 0.8, cw - nw - 6, r1h - 1.6, it["spec"], 11, bold=True, color=pdf.DARK)
-        r2y, r2h = r1y + r1h + 2.5, 33
+        pdf.fit_txt(cx + nw + 4, r1y + 0.9, cw - nw - 6, r1h - 1.8, it["spec"], 10, bold=True, color=pdf.DARK, mono=True)
+        r2y, r2h = r1y + r1h + 2, 31
         pdf.lbox(cx, r2y, 40, r2h); pdf.img_fit(img, cx + 1.5, r2y + 1.5, 37, r2h - 3)
-        pdf.qr(it["qr"], cx + 44, r2y + 2, 28, label="영상 보기")
-        bx = cx + 44 + 28 + 6; bw = cx + cw - bx - 2
-        if bc: pdf.ean13(bc, bx, r2y + 5, bw, 18, digits_pt=8)
-        else: pdf.txt(bx, r2y + 13, bw, 5, "바코드 없음", 9, color=(180, 60, 60), align="C")
-        r3y = r2y + r2h + 2; r3h = y + 70.0 - FT - 2.5 - r3y
+        pdf.qr(it["qr"], cx + 44, r2y + 1.5, 27, label="영상 보기")
+        bx = cx + 44 + 27 + 6; bw = cx + cw - bx - 2
+        if bc: pdf.ean13(bc, bx, r2y + 4, bw, 17, digits_pt=8)
+        else: pdf.txt(bx, r2y + 12, bw, 5, "바코드 없음", 9, color=(180, 60, 60), align="C")
+        r3y = r2y + r2h + 1.6; r3h = y + H - FT - 4.2 - r3y
         pdf.lbox(cx, r3y, cw, r3h)
         if it["desc"]:
-            pdf.f(9); pdf.set_text_color(*pdf.BLACK); pdf.set_xy(cx + 2, r3y + 1.2)
-            pdf.multi_cell(cw - 4, 4.1, it["desc"][:130], max_line_height=4.1)
+            pdf.f(8.5); pdf.set_text_color(*pdf.BLACK); pdf.set_xy(cx + 2, r3y + 1)
+            pdf.multi_cell(cw - 4, 3.9, it["desc"][:130], max_line_height=3.9)
+        pdf.txt(cx, y + H - FT - 3.4, cw, 2.6, _AQ_STICKER_CAPTION, 5.5, color=pdf.INK500, align="C")
     elif s == "80":
-        FT = 1.8
-        pdf.cframe(x, y, 80.0, 45.0, rgb, FT)
-        cx, cw = x + FT + 1.5, 80.0 - 2 * (FT + 1.5)
-        r1y, r1h = y + FT + 1.5, 6.2
+        W, H, FT, BH = 80.0, 45.0, 1.0, 4.8
+        pdf.cframe(x, y, W, H, rgb, FT)
+        pdf.set_fill_color(*rgb); pdf.rect(x, y, W, BH, "F")
+        pdf.fit_txt(x + 2.5, y + 0.7, W - 5, BH - 1.4, it["grp"] or "부속", 7.2, bold=True, color=tcol)
+        cx, cw = x + FT + 1.5, W - 2 * (FT + 1.5)
+        r1y, r1h = y + BH + 1.2, 6.0
         nw = cw * 0.60
         pdf.lbox(cx, r1y, nw, r1h); pdf.fit_txt(cx + 1.2, r1y + 0.4, nw - 2.4, r1h - 0.8, it["name"], 8.2, bold=True)
         pdf.lbox(cx + nw + 1.2, r1y, cw - nw - 1.2, r1h)
-        pdf.fit_txt(cx + nw + 2.2, r1y + 0.4, cw - nw - 3.2, r1h - 0.8, it["spec"], 7, bold=True, color=pdf.DARK)
-        r2y, r2h = r1y + r1h + 1.4, 21
-        pdf.lbox(cx, r2y, 19, r2h); pdf.img_fit(img, cx + 0.8, r2y + 0.8, 17.4, r2h - 1.6)
-        pdf.qr(it["qr"], cx + 20.6, r2y + 3, 15)
-        bx = cx + 20.6 + 15 + 2.2; bw = cx + cw - bx - 0.5
-        if bc: pdf.ean13(bc, bx, r2y + 3, bw, 12, digits_pt=5.5)
+        pdf.fit_txt(cx + nw + 2.2, r1y + 0.6, cw - nw - 3.2, r1h - 1.2, it["spec"], 6.8, bold=True, color=pdf.DARK, mono=True)
+        r2y, r2h = r1y + r1h + 1.2, 19.5
+        pdf.lbox(cx, r2y, 18, r2h); pdf.img_fit(img, cx + 0.8, r2y + 0.8, 16.4, r2h - 1.6)
+        pdf.qr(it["qr"], cx + 19.4, r2y + 2, 15)   # §5-1 QR 최소 15mm
+        bx = cx + 19.4 + 15 + 2; bw = cx + cw - bx - 0.5
+        if bc: pdf.ean13(bc, bx, r2y + 2.5, bw, 11.5, digits_pt=5.5)
         else: pdf.txt(bx, r2y + 8, bw, 4, "바코드 없음", 6.5, color=(180, 60, 60), align="C")
-        r3y = r2y + r2h + 1.2; r3h = y + 45.0 - FT - 1.5 - r3y
+        r3y = r2y + r2h + 1.0; r3h = y + H - FT - 3.4 - r3y
         pdf.lbox(cx, r3y, cw, r3h)
         if it["desc"]:
-            pdf.f(6); pdf.set_text_color(*pdf.BLACK); pdf.set_xy(cx + 1.2, r3y + 0.8)
-            pdf.multi_cell(cw - 2.4, 2.8, it["desc"][:90], max_line_height=2.8)
-    else:  # "98" — 저높이 라벨: 설명을 우측 세로칸으로
-        FT = 1.6
-        pdf.cframe(x, y, 98.8, 33.67, rgb, FT)
-        cx, cw = x + FT + 1.3, 98.8 - 2 * (FT + 1.3)
-        r1y, r1h = y + FT + 1.3, 5.6
+            pdf.f(6); pdf.set_text_color(*pdf.BLACK); pdf.set_xy(cx + 1.2, r3y + 0.7)
+            pdf.multi_cell(cw - 2.4, 2.7, it["desc"][:80], max_line_height=2.7)
+        pdf.txt(cx, y + H - FT - 2.8, cw, 2.2, _AQ_STICKER_CAPTION, 4.6, color=pdf.INK500, align="C")
+    else:  # "98" — 저높이 라벨: 설명 우측 세로칸
+        W, H, FT, BH = 98.8, 33.67, 0.9, 4.2
+        pdf.cframe(x, y, W, H, rgb, FT)
+        pdf.set_fill_color(*rgb); pdf.rect(x, y, W, BH, "F")
+        pdf.fit_txt(x + 2.2, y + 0.6, W * 0.55, BH - 1.2, it["grp"] or "부속", 6.6, bold=True, color=tcol)
+        pdf.txt(x + W * 0.5, y + 0.9, W * 0.5 - 2.5, BH - 1.8, _AQ_STICKER_CAPTION, 5, color=tcol, align="R")
+        cx, cw = x + FT + 1.2, W - 2 * (FT + 1.2)
+        r1y, r1h = y + BH + 0.9, 5.2
         nw = cw * 0.56
-        pdf.lbox(cx, r1y, nw, r1h); pdf.fit_txt(cx + 1.2, r1y + 0.35, nw - 2.4, r1h - 0.7, it["name"], 7.8, bold=True)
+        pdf.lbox(cx, r1y, nw, r1h); pdf.fit_txt(cx + 1.2, r1y + 0.3, nw - 2.4, r1h - 0.6, it["name"], 7.8, bold=True)
         pdf.lbox(cx + nw + 1.2, r1y, cw - nw - 1.2, r1h)
-        pdf.fit_txt(cx + nw + 2.2, r1y + 0.35, cw - nw - 3.2, r1h - 0.7, it["spec"], 6.8, bold=True, color=pdf.DARK)
-        r2y = r1y + r1h + 1.2
-        r2h = y + 33.67 - FT - 1.3 - r2y
-        pdf.lbox(cx, r2y, 17, r2h); pdf.img_fit(img, cx + 0.8, r2y + 0.8, 15.4, r2h - 1.6)
-        qs = min(14, r2h - 1)
-        pdf.qr(it["qr"], cx + 18.5, r2y + (r2h - qs) / 2, qs)
-        bx = cx + 18.5 + qs + 2; bw = 27
-        if bc: pdf.ean13(bc, bx, r2y + 2.2, bw, 10.5, digits_pt=5.2)
+        pdf.fit_txt(cx + nw + 2.2, r1y + 0.5, cw - nw - 3.2, r1h - 1.0, it["spec"], 6.6, bold=True, color=pdf.DARK, mono=True)
+        r2y = r1y + r1h + 0.9
+        r2h = y + H - FT - 1.0 - r2y
+        pdf.lbox(cx, r2y, 16.5, r2h); pdf.img_fit(img, cx + 0.8, r2y + 0.8, 14.9, r2h - 1.6)
+        qs = 15.0   # §5-1 QR 최소 15mm
+        pdf.qr(it["qr"], cx + 18, r2y + max(0.5, (r2h - qs) / 2), qs)
+        bx = cx + 18 + qs + 2; bw = 26
+        if bc: pdf.ean13(bc, bx, r2y + 1.8, bw, 10.5, digits_pt=5.2)
         else: pdf.txt(bx, r2y + 6, bw, 4, "바코드 없음", 6.2, color=(180, 60, 60), align="C")
         dx = bx + bw + 2; dw = cx + cw - dx
         pdf.lbox(dx, r2y, dw, r2h)
         if it["desc"]:
-            pdf.f(5.6); pdf.set_text_color(*pdf.BLACK); pdf.set_xy(dx + 1, r2y + 0.8)
-            pdf.multi_cell(dw - 2, 2.6, it["desc"][:110], max_line_height=2.6)
+            pdf.f(5.6); pdf.set_text_color(*pdf.BLACK); pdf.set_xy(dx + 1, r2y + 0.7)
+            pdf.multi_cell(dw - 2, 2.6, it["desc"][:100], max_line_height=2.6)
 
 def aq_sticker_pdf_bytes(recs, size_key, bc_mode, img_of=None):
     """스티커 PDF 생성 → bytes. recs=AQ_Items 레코드 목록, img_of=코드→PIL 이미지(없으면 이미지 생략)."""
@@ -1677,7 +1788,7 @@ def _aq_guide_card(pdf, x, y, it, rgb, bc, bc_note, img):
     nw = cw * 0.58
     pdf.lbox(cx, r1y, nw, r1h); pdf.fit_txt(cx + 1.5, r1y + 0.6, nw - 3, r1h - 1.2, it["name"], 10.5, bold=True)
     pdf.lbox(cx + nw + 1.5, r1y, cw - nw - 1.5, r1h)
-    pdf.fit_txt(cx + nw + 3, r1y + 0.6, cw - nw - 4.5, r1h - 1.2, it["spec"], 9, bold=True, color=pdf.DARK)
+    pdf.fit_txt(cx + nw + 3, r1y + 0.9, cw - nw - 4.5, r1h - 1.8, it["spec"], 8.5, bold=True, color=pdf.DARK, mono=True)   # [V53] 데이터=모노
     r2y, r2h = r1y + r1h + 2, 30
     pdf.lbox(cx, r2y, 25, r2h); pdf.img_fit(img, cx + 1, r2y + 1, 23, r2h - 2)
     qx = cx + 27.5
@@ -1719,26 +1830,50 @@ def aq_guidebook_pdf_bytes(recs, site, bc_mode, img_of=None):
     groups = [g for g in AQ_GROUP_COLORS if any(it["grp"] == g for it in sel)]
     groups += sorted({it["grp"] for it in sel} - set(groups))
     pdf = _AqPrintPDF()
-    # ① 표지
+    _today = datetime.date.today().strftime("%Y-%m-%d")
+
+    def _foot():   # [V53] 푸터 — 페이지번호 + 보증 캡션 + 발행일 (디자인가이드 §5-2)
+        pdf.txt(0, 290.5, 210, 4, f"{pdf.page_no()}   ·   Aqunaris · ShinJinChemTech   ·   {_today}",
+                6.5, color=(168, 168, 168), align="C")
+
+    # ① 표지 — [V53] 화이트 기조 + Aqunaris 워드마크 + 부속군 색 스트립 + SJ 보증 로고 (§5-2, 옐로 전면 폐지)
     pdf.add_page()
-    pdf.set_fill_color(*pdf.YEL); pdf.rect(0, 0, 210, 297, "F")
-    pdf.txt(0, 95, 210, 20, "Aqunaris", 52, bold=True, align="C")
-    pdf.txt(0, 122, 210, 12, "아쿠나리스 관수코너 가이드북", 22, bold=True, align="C")
-    pdf.txt(0, 140, 210, 10, site or "", 16, align="C")
-    pdf.txt(0, 152, 210, 8, f"바코드: {bc_mode}바코드 기준 · {datetime.date.today().strftime('%Y-%m-%d')}", 11, align="C")
-    pdf.txt(0, 270, 210, 8, "신진켐텍 · Looperget", 12, bold=True, align="C")
-    # ② 부속군 색상 색인
+    try: pdf.set_char_spacing(-0.3)   # 워드마크 자간 -2% (§3 잠정 조판)
+    except Exception: pass
+    pdf.fx(54); pdf.set_text_color(*pdf.BLACK)
+    pdf.set_xy(0, 78); pdf.cell(210, 22, "Aqunaris", align="C")
+    try: pdf.set_char_spacing(0)
+    except Exception: pass
+    pdf.txt(0, 106, 210, 12, "아쿠나리스 관수코너 가이드북", 20, bold=True, align="C")
+    pdf.txt(0, 122, 210, 10, site or "", 15, align="C")
+    pdf.txt(0, 134, 210, 7, f"바코드: {bc_mode}바코드 기준", 10, color=pdf.INK500, align="C")
+    _cols_v = [_aq_hexrgb(v) for v in AQ_GROUP_COLORS.values()]   # 부속군 색 스트립 = 아쿠나리스 시그니처
+    if _cols_v:
+        _sx, _sw, _sh = 30, 150.0, 7.0
+        _seg = _sw / len(_cols_v)
+        for _i, _c in enumerate(_cols_v):
+            pdf.set_fill_color(*_c); pdf.rect(_sx + _i * _seg, 156, _seg, _sh, "F")
+        pdf.txt(_sx, 165.5, _sw, 4.5, "부속군 색상 체계 — 진열대 · 상자 스티커 · 가이드북 공통", 8, color=pdf.INK500, align="C")
+    if not pdf.sj_logo(84, 238, 42):   # 보증 = SJ 로고 1개 (두 브랜드 텍스트 병렬 폐지)
+        pdf.txt(0, 244, 210, 6, "Aqunaris · ShinJinChemTech", 10, color=pdf.INK500, align="C")
+    pdf.txt(0, 284, 210, 6, f"{_today} · v1", 9, color=pdf.INK500, align="C", mono=True)
+
+    # ② 부속군 색상 색인 (+HEX 병기 §5-2)
     pdf.add_page()
     pdf.txt(15, 14, 180, 10, "부속군 색상 색인", 18, bold=True)
     pdf.set_draw_color(*pdf.BLACK); pdf.set_line_width(0.5); pdf.line(15, 26, 195, 26)
     yy = 34
     for g in groups:
+        _hex9 = str(AQ_GROUP_COLORS.get(g) or "#9AA0A6").upper()
         pdf.set_fill_color(*_aq_hexrgb(AQ_GROUP_COLORS.get(g))); pdf.rect(15, yy, 14, 9, "F")
-        pdf.txt(33, yy, 110, 9, g or "(미지정)", 13, bold=True)
-        pdf.txt(150, yy, 45, 9, f"{sum(1 for it in sel if it['grp'] == g)}품목", 11, align="R")
+        pdf.txt(33, yy, 95, 9, g or "(미지정)", 13, bold=True)
+        pdf.txt(128, yy + 1.4, 30, 6, _hex9, 7.5, color=pdf.INK500, mono=True)
+        pdf.txt(158, yy, 37, 9, f"{sum(1 for it in sel if it['grp'] == g)}품목", 11, align="R")
         yy += 13
     pdf.txt(15, yy + 6, 180, 6, "카드 테두리·진열대 색상 자석테이프·상자 스티커가 모두 같은 부속군 색을 씁니다.", 9, color=pdf.DARK)
-    # ③ 부속군별 카드 (2열×4행)
+    _foot()
+
+    # ③ 부속군별 카드 (2열×4행) + 섹션 밴드(부속군명 병기)·푸터
     X0, Y0, CW, CH, GX, GY = 12, 22, 88, 62, 10, 4
     for g in groups:
         gi = [it for it in sel if it["grp"] == g]
@@ -1750,6 +1885,7 @@ def aq_guidebook_pdf_bytes(recs, site, bc_mode, img_of=None):
                 pdf.add_page()
                 pdf.set_fill_color(*rgb); pdf.rect(0, 0, 210, 16, "F")
                 pdf.txt(12, 3.5, 170, 9, g or "(미지정)", 15, bold=True, color=_aq_lum_txt(rgb))
+                _foot()
                 k = 0
             x = X0 + (k % 2) * (CW + GX)
             y = Y0 + (k // 2) * (CH + GY)
@@ -1758,6 +1894,13 @@ def aq_guidebook_pdf_bytes(recs, site, bc_mode, img_of=None):
             img = img_of(it["code"]) if img_of else None
             _aq_guide_card(pdf, x, y, it, rgb, bc, note, img)
             k += 1
+
+    # ④ 뒷표지 — SJ 로고 + 문의(도메인만 — 문안은 의장 확정 대기, 가이드 §7-④)
+    pdf.add_page()
+    if not pdf.sj_logo(80, 120, 50):
+        pdf.txt(0, 130, 210, 8, "Aqunaris · ShinJinChemTech", 12, color=pdf.INK500, align="C")
+    pdf.txt(0, 148, 210, 6, "sjct.kr", 11, color=pdf.INK500, align="C", mono=True)
+    pdf.txt(0, 280, 210, 5, f"Aqunaris Guide Book · {_today}", 7, color=(168, 168, 168), align="C")
     return bytes(pdf.output()), len(sel), use_assign
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -5800,13 +5943,21 @@ elif mode == "🏪 아쿠나리스":
             _pr_imgof = None
             if _pr_img_on:
                 _pr_fmap = get_drive_file_map_deep()
-                def _pr_imgof(code, _fm=_pr_fmap):
-                    _p9 = prod_by_code.get(str(code).strip().zfill(5), {}) or {}
+                _pr_by_code = {str(r.get("품목코드", "")).strip().zfill(5): r for r in aq_items}
+                def _pr_imgof(code, _fm=_pr_fmap, _bc=_pr_by_code):
+                    _c9 = str(code).strip().zfill(5)
+                    _iso9 = str((_bc.get(_c9, {}) or {}).get("이미지ISO", "") or "").strip()
+                    if _iso9:                                   # [V53] ①등각(ISO)/등재 이미지 우선
+                        _im9 = _aq_pil_from_any(download_image_by_id(_iso9))
+                        if _im9 is not None: return _im9
+                    _p9 = prod_by_code.get(_c9, {}) or {}       # ②차순위 — 드라이브 코드명/카탈로그 이미지
                     _fid9 = get_best_image_id(code, str(_p9.get("image_data") or _p9.get("image") or ""), _fm)
-                    return download_image_by_id(_fid9) if _fid9 else None
+                    return _aq_pil_from_any(download_image_by_id(_fid9)) if _fid9 else None
 
-            st.markdown("**📦 부품상자 스티커** — 아이라밸 용지: 80=규격 **826**(6호) · 98=**228**(3호) · 160=**814**(431-1/432호)")
-            _pr_sizes = st.multiselect("스티커 규격", ["80", "98", "160"], default=["80", "98", "160"], key="aq_pr_sizes")
+            st.markdown("**📦 부품상자 스티커** — 이미지는 ①등각(ISO, AQ_Items 이미지ISO) ②제품 사진 순으로 적용")
+            _pr_sizes = st.multiselect("스티커 용지 (사이즈 · 아이라벨 규격코드 · 적용 부품상자)",
+                                       ["80", "98", "160"], default=["80", "98", "160"], key="aq_pr_sizes",
+                                       format_func=lambda s: AQ_STICKER_SPEC[s]["label"])
             _pr_codes_raw = st.text_input("품목코드 필터 (쉼표 구분 — 비우면 스티커 대상 전체, 필요한 것만 뽑으면 용지 절약)",
                                           key="aq_pr_codes")
             if st.button("🖨️ 스티커 PDF 생성", key="aq_pr_st_go"):
@@ -5826,8 +5977,8 @@ elif mode == "🏪 아쿠나리스":
                     except Exception as e:
                         st.error(f"스티커 생성 실패: {aq_err_str(e)}")
             for _s9, (_b9, _n9) in (st.session_state.get("aq_pr_st_out") or {}).items():
-                st.download_button(f"⬇️ 스티커{_s9} PDF — {_n9}품목 ({len(_b9) // 1024}KB)", data=_b9,
-                                   file_name=f"스티커{_s9}_{datetime.date.today().strftime('%Y%m%d')}.pdf",
+                st.download_button(f"⬇️ {AQ_STICKER_SPEC[_s9]['label']} — {_n9}품목 ({len(_b9) // 1024}KB)", data=_b9,
+                                   file_name=f"{AQ_STICKER_SPEC[_s9]['fname']}_{datetime.date.today().strftime('%Y%m%d')}.pdf",
                                    mime="application/pdf", key=f"aq_pr_st_dl_{_s9}")
 
             st.markdown("---")
@@ -6342,7 +6493,7 @@ elif mode == "🏪 아쿠나리스":
                         "단두께mm": st.column_config.NumberColumn(format="%d", help="선반(단) 판 두께 — 예 40 (빈칸=0)"),
                     })
                 # [V49] 랙 총높이 검증 — 불일치 랙은 배치(_rk_list)에서 제외
-                _rack_errs, _rack_notes, _bad_racks = [], [], set()
+                _rack_errs, _rack_notes, _bad_racks, _rack_reqs = [], [], set(), []   # [V53] 필요 Σ단높이 안내
                 for _, _rr in df_racks_ed.iterrows():
                     _nm9 = str(_rr.get("명칭") or "").strip()
                     if not _nm9: continue
@@ -6363,6 +6514,13 @@ elif mode == "🏪 아쿠나리스":
                     except Exception: _cnt9 = 0
                     if _cnt9 and _hs9 and _cnt9 != len(_hs9):
                         _rack_notes.append(f"{_nm9}: 단수 {_cnt9} ≠ 단높이 {len(_hs9)}개")
+                    if _tot9 > 0 and (_cnt9 or _hs9):   # [V53] 총높이·단수·단두께 입력 → 필요 Σ단높이 즉시 안내
+                        _n9c = _cnt9 or len(_hs9)
+                        _req9 = _tot9 - _thk9 * max(0, _n9c - 1)
+                        _rack_reqs.append(f"{_nm9}: 필요 Σ단높이 {_req9}mm"
+                                          + (f" (현재 {sum(_hs9)})" if _hs9 else ""))
+                if _rack_reqs:
+                    st.caption("📐 **필요 단높이 합** — 총높이 − 단두께×(단수−1): " + " · ".join(_rack_reqs))
                 if _rack_errs:
                     st.error("📐 단높이 합이 랙 높이와 맞지 않습니다 — 아래 랙은 배치에 반영되지 않습니다.\n- " + "\n- ".join(_rack_errs))
                 if _rack_notes:
@@ -6544,8 +6702,8 @@ elif mode == "🏪 아쿠나리스":
                         _virt_on = st.checkbox(
                             "🅥 가상랙 표시 — 꽉 찬 랙의 상자를 잠시 옮겨 둘 임시 공간 (견적·적합판정·자동배치와 무관, 배치는 저장됨)",
                             value=True, key=f"aq_virt_{sel_site}")
-                        _rk_all = _rk_list + ([{"명칭": AQ_VIRT, "내측폭": 1600, "단높이": [600, 600, 600],
-                                                "단깊이": [], "깊이": 450}] if _virt_on else [])
+                        _rk_all = ([{"명칭": AQ_VIRT, "내측폭": 900, "단높이": [600, 600, 600],
+                                     "단깊이": [], "깊이": 450}] if _virt_on else []) + _rk_list   # [V53] 가상랙 맨 앞 — 스크롤 없이 항상 보이게
                         if _HAS_JS_EVAL:
                             try:
                                 _ops_raw = streamlit_js_eval(
@@ -6557,32 +6715,39 @@ elif mode == "🏪 아쿠나리스":
                             if _ops_raw:
                                 try: _ops_pl = json.loads(_ops_raw)
                                 except Exception: _ops_pl = None
-                            _nonce_cur = f"{st.session_state['aq_ops_salt']}|{sel_site}|{st.session_state[_ver_key]}"
+                            # [V53] 논스에서 버전 제외 + 조작별 고유 id 중복적용 방지 —
+                            #  리런 타이밍에 늦게 도착한 조작도 유실 없이 순서대로 반영된다.
+                            _nonce_cur = f"{st.session_state['aq_ops_salt']}|{sel_site}"
+                            _done_ids = st.session_state.setdefault(f"aq_ops_ids_{sel_site}", set())
                             if (isinstance(_ops_pl, dict) and _ops_pl.get("ops")
-                                    and _ops_pl.get("nonce") == _nonce_cur
-                                    and _ops_pl.get("ts") != st.session_state.get(f"aq_ops_done_{sel_site}")):
-                                _asg9 = dict(st.session_state.get(_asg_key, {}))
-                                for _op9 in _ops_pl["ops"]:
-                                    try:
-                                        _c9o = str(_op9.get("code") or "")
-                                        _cur9 = _asg9.get(_c9o)
-                                        _rw9 = (_cur9[2] if _cur9 and len(_cur9) > 2 else 1)
-                                        _n9 = (_cur9[3] if _cur9 and len(_cur9) > 3 else 1)
-                                        if _op9.get("t") == "move" and _op9.get("track"):
-                                            _asg9[_c9o] = (str(_op9["track"]), int(_op9["tshelf"]), _rw9, _n9)
-                                        elif _op9.get("t") == "dup" and _cur9:
-                                            _asg9[_c9o] = (_cur9[0], _cur9[1], _rw9, min(_n9 + 1, 8))
-                                        elif _op9.get("t") == "del" and _cur9:
-                                            if _n9 > 1:
-                                                _asg9[_c9o] = (_cur9[0], _cur9[1], _rw9, _n9 - 1)
-                                            else:
-                                                _asg9.pop(_c9o, None)
-                                    except Exception:
-                                        pass
-                                st.session_state[_asg_key] = _asg9
-                                st.session_state[f"aq_ops_done_{sel_site}"] = _ops_pl.get("ts")
-                                st.session_state[_ver_key] += 1
-                                st.rerun()
+                                    and _ops_pl.get("nonce") == _nonce_cur):
+                                _new_ops = [o for o in _ops_pl["ops"]
+                                            if isinstance(o, dict) and o.get("id") and o["id"] not in _done_ids]
+                                if _new_ops:
+                                    _asg9 = dict(st.session_state.get(_asg_key, {}))
+                                    for _op9 in _new_ops:
+                                        try:
+                                            _c9o = str(_op9.get("code") or "")
+                                            _cur9 = _asg9.get(_c9o)
+                                            _rw9 = (_cur9[2] if _cur9 and len(_cur9) > 2 else 1)
+                                            _n9 = (_cur9[3] if _cur9 and len(_cur9) > 3 else 1)
+                                            if _op9.get("t") == "move" and _op9.get("track"):
+                                                _asg9[_c9o] = (str(_op9["track"]), int(_op9["tshelf"]), _rw9, _n9)
+                                            elif _op9.get("t") == "dup" and _cur9:
+                                                _asg9[_c9o] = (_cur9[0], _cur9[1], _rw9, min(_n9 + 1, 8))
+                                            elif _op9.get("t") == "del" and _cur9:
+                                                if _n9 > 1:
+                                                    _asg9[_c9o] = (_cur9[0], _cur9[1], _rw9, _n9 - 1)
+                                                else:
+                                                    _asg9.pop(_c9o, None)
+                                        except Exception:
+                                            pass
+                                        _done_ids.add(_op9.get("id"))
+                                    if len(_done_ids) > 400:   # 세션 메모리 상한
+                                        st.session_state[f"aq_ops_ids_{sel_site}"] = set(list(_done_ids)[-200:])
+                                    st.session_state[_asg_key] = _asg9
+                                    st.session_state[_ver_key] += 1
+                                    st.rerun()
                         ca1, ca0, ca2 = st.columns([2, 1, 3])
                         with ca0:
                             if st.button("🗑 배치 초기화", key=f"aq_clear_{sel_site}"):
@@ -6605,7 +6770,24 @@ elif mode == "🏪 아쿠나리스":
                                     for r in sorted(_gi, key=_bw_key):
                                         if not _aq_use(r["품목코드"]): continue   # [V48] 공급 제외 반영
                                         _seq.append((r["품목코드"], g, _eff_box(r)))
-                                _asg_new, _unp = aq_auto_place(_rk_list, _seq, _dims_p, group_order=_pg)
+                                # [V53] ① 표준 위치(섹션·단) 우선 — 랙 명칭이 '섹션NN'(또는 'NN')과 일치하면 그 자리에
+                                _std_pre9 = {}
+                                _rk_by_nm9 = {rk["명칭"]: rk for rk in _rk_list}
+                                for _c9s, _g9s, _b9s in _seq:
+                                    _r9s = _aq_by_code.get(_c9s, {}) or {}
+                                    _sec9 = str(_r9s.get("섹션", "") or "").strip()
+                                    try: _sh9s = int(float(_r9s.get("단") or 0))
+                                    except Exception: _sh9s = 0
+                                    if not _sec9 or _sh9s <= 0: continue
+                                    for _cand9 in (f"섹션{_sec9}", _sec9):
+                                        _rk9s = _rk_by_nm9.get(_cand9)
+                                        if _rk9s and _sh9s <= len(_rk9s["단높이"]):
+                                            _std_pre9[_c9s] = (_cand9, _sh9s); break
+                                # [V53] ② 루퍼젯 본품(루퍼젯팩)은 가운데 랙 중앙 단 우선
+                                _ctr9 = [_c9s for _c9s, _g9s, _b9s in _seq
+                                         if _b9s == "루퍼젯팩" and _c9s not in _std_pre9]
+                                _asg_new, _unp = aq_auto_place(_rk_list, _seq, _dims_p, group_order=_pg,
+                                                               pre=_std_pre9, center_codes=_ctr9)
                                 _asg_old9 = st.session_state.get(_asg_key, {})   # [V49] 기존 줄수 — [V51] 상자수도 보존
                                 def _keep9(c, i, d=1):
                                     _t9k = _asg_old9.get(c) or ()
@@ -6715,13 +6897,16 @@ elif mode == "🏪 아쿠나리스":
                                     _m9["box"] = _t9[2]
                                     try: _m9["cap"] = str(aq_caps.get(_c9, {}).get(_t9[2], ("", ""))[0] or "")
                                     except Exception: _m9["cap"] = ""
+                                    if _t9[2] == "루퍼젯팩":   # [V53] 루퍼젯 본품 — 박스 전면에 뒷표기 노출
+                                        _nm_t9 = str(_r9.get("품목명_AQ", "") or "").split()
+                                        _m9["tag"] = _nm_t9[-1] if _nm_t9 else ""
                                 _info_map[_c9] = _m9
                         _view_rks = st.multiselect("표시할 랙 (기본 전체 — V1 도면처럼 나란히)", _rk_names, default=_rk_names, key=f"aq_rk_view_{sel_site}")
                         _rk_show = [rk for rk in _rk_all if rk["명칭"] in (_view_rks or _rk_names)]   # [V51] 가상랙 포함
                         import streamlit.components.v1 as _components9   # [V49] 호버 툴팁은 iframe에서만 동작
                         _svg_all9 = aq_racks_svg_all(_rk_show, _seq_by_shelf, info=_info_map)
                         if _svg_all9:
-                            _nonce9 = f"{st.session_state['aq_ops_salt']}|{sel_site}|{st.session_state[_ver_key]}"
+                            _nonce9 = f"{st.session_state['aq_ops_salt']}|{sel_site}"   # [V53] ver 제외 — 늦은 조작 유실 방지(op id 중복 차단)
                             _html9, _hpx9 = aq_svg_hover_html(_svg_all9, interactive=True, nonce=_nonce9)   # [V51]
                             _components9.html(_html9, height=min(_hpx9 + 34, 960), scrolling=True)
                             _cb1, _cb2 = st.columns([5, 2])

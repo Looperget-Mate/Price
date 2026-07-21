@@ -1428,6 +1428,338 @@ document.addEventListener('mousedown',function(ev){if(aqMenu&&!aqMenu.contains(e
         '</script>' + js_int + '</div>')
     return html, h + 10
 
+# ══ [V52] 스티커·가이드북 인쇄물 자동 생성 — 색상 중심 디자인 v2 (대표님 스케치 2026-07-21) ══
+# 카드 = 부속군 색 프레임 + [제품명|규격] / [이미지|QR|농협 바코드] / [제품설명]. 섹션/단/열 표기 폐기.
+_AQ_EAN_L = ["0001101", "0011001", "0010011", "0111101", "0100011",
+             "0110001", "0101111", "0111011", "0110111", "0001011"]
+_AQ_EAN_G = ["0100111", "0110011", "0011011", "0100001", "0011101",
+             "0111001", "0000101", "0010001", "0001001", "0010111"]
+_AQ_EAN_R = ["1110010", "1100110", "1101100", "1000010", "1011100",
+             "1001110", "1010000", "1000100", "1001000", "1110100"]
+_AQ_EAN_PAR = ["LLLLLL", "LLGLGG", "LLGGLG", "LLGGGL", "LGLLGG",
+               "LGGLLG", "LGGGLL", "LGLGLG", "LGLGGL", "LGGLGL"]
+AQ_STICKER_SPEC = {   # 아이라밸 실측 격자(mm) — 80=826(6호) · 98=228(3호) · 160=814(431-1/432호)
+    "80":  {"w": 80.0, "h": 45.0,  "xs": [23.5, 108.5], "y0": 13.5, "rows": 6, "pitch": 45.0},
+    "98":  {"w": 98.8, "h": 33.67, "xs": [5.0, 107.3],  "y0": 13.0, "rows": 8, "pitch": 33.67},
+    "160": {"w": 160.0, "h": 70.0, "xs": [25.0],        "y0": 8.5,  "rows": 4, "pitch": 70.0},
+}
+
+def aq_ean13_bits(code):
+    """EAN-13 13자리 → 95비트 문자열. 형식/체크섬 오류 시 None."""
+    s = "".join(ch for ch in str(code) if ch.isdigit())
+    if len(s) != 13: return None
+    d = [int(c) for c in s]
+    chk = (10 - (sum(d[i] * (3 if i % 2 else 1) for i in range(12)) % 10)) % 10
+    if chk != d[12]: return None
+    bits = "101"
+    for i, dig in enumerate(d[1:7]):
+        bits += (_AQ_EAN_L if _AQ_EAN_PAR[d[0]][i] == "L" else _AQ_EAN_G)[dig]
+    bits += "01010"
+    for dig in d[7:13]: bits += _AQ_EAN_R[dig]
+    return bits + "101"
+
+def _aq_hexrgb(h):
+    h = (h or "#9AA0A6").lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+def _aq_lum_txt(rgb):
+    r, g, b = rgb
+    return (25, 20, 20) if (0.299 * r + 0.587 * g + 0.114 * b) > 150 else (255, 255, 255)
+
+class _AqPrintPDF(FPDF):
+    """[V52] 인쇄물 공용 PDF — NanumGothic(앱 표준 폰트) + 카드 프리미티브."""
+    BLACK = (25, 20, 20); DARK = (64, 64, 64); GREY = (191, 191, 191); YEL = (244, 214, 36)
+
+    def __init__(self):
+        super().__init__(orientation="P", unit="mm", format="A4")
+        self.set_auto_page_break(False)
+        self.set_margins(0, 0, 0)
+        self._hasb = False
+        try:
+            self.add_font("NanumGothic", "", FONT_REGULAR, uni=True)
+            if os.path.exists(FONT_BOLD):
+                self.add_font("NanumGothic", "B", FONT_BOLD, uni=True); self._hasb = True
+        except Exception:
+            pass
+
+    def f(self, size, bold=False):
+        try: self.set_font("NanumGothic", "B" if (bold and self._hasb) else "", size)
+        except Exception: self.set_font("Helvetica", "", size)
+
+    def txt(self, x, y, w, h, s, size, bold=False, color=None, align="L"):
+        self.f(size, bold)
+        self.set_text_color(*(color or self.BLACK))
+        self.set_xy(x, y); self.cell(w, h, str(s), align=align)
+
+    def fit_txt(self, x, y, w, h, s, size, bold=False, color=None, align="L", min_size=5.5):
+        s = str(s); sz = size
+        while sz > min_size:
+            self.f(sz, bold)
+            if self.get_string_width(s) <= w - 0.6: break
+            sz -= 0.5
+        self.f(sz, bold)
+        if self.get_string_width(s) > w - 0.6:
+            while s and self.get_string_width(s + "…") > w - 0.6: s = s[:-1]
+            s += "…"
+        self.set_text_color(*(color or self.BLACK))
+        self.set_xy(x, y); self.cell(w, h, s, align=align)
+
+    def lbox(self, x, y, w, h):
+        self.set_draw_color(*self.GREY); self.set_line_width(0.2); self.rect(x, y, w, h, "D")
+
+    def cframe(self, x, y, w, h, rgb, ft):
+        self.set_fill_color(*rgb); self.rect(x, y, w, h, "F")
+        self.set_fill_color(255, 255, 255); self.rect(x + ft, y + ft, w - 2 * ft, h - 2 * ft, "F")
+
+    def img_fit(self, img, x, y, w, h):
+        """PIL 이미지 비율 유지 중앙 배치 (keep_aspect_ratio 미의존 — fpdf2 구버전 호환)."""
+        if img is None: return
+        try:
+            iw, ih = float(img.width), float(img.height)
+            r = min(w / iw, h / ih)
+            dw, dh = iw * r, ih * r
+            self.image(img, x=x + (w - dw) / 2, y=y + (h - dh) / 2, w=dw, h=dh)
+        except Exception:
+            pass
+
+    def ean13(self, code, x, y, w, h, digits_pt=6.5):
+        bits = aq_ean13_bits(code)
+        if not bits:
+            self.txt(x, y + h / 2, w, 4, f"바코드 확인 필요: {code}", 6, color=(180, 60, 60), align="C")
+            return False
+        mw = w / 95.0
+        self.set_fill_color(*self.BLACK)
+        for i, b in enumerate(bits):
+            if b == "1":
+                guard = i < 3 or i >= 92 or 45 <= i < 50
+                self.rect(x + i * mw, y, mw, h + (1.4 if guard else 0), "F")
+        self.txt(x, y + h + 1.6, w, digits_pt * 0.5, code, digits_pt, align="C")
+        return True
+
+    def qr(self, data, x, y, size, label=""):
+        """QR(segno, 가드 임포트) — 데이터 없거나 라이브러리 없으면 자리표시(영상 준비중)."""
+        ok = False
+        if data:
+            try:
+                import segno
+                mat = [list(row) for row in segno.make(data, micro=False).matrix]
+                n = len(mat); quiet = 2
+                mw = size / (n + quiet * 2)
+                self.set_fill_color(*self.BLACK)
+                for r, row in enumerate(mat):
+                    for c, v in enumerate(row):
+                        if v: self.rect(x + (c + quiet) * mw, y + (r + quiet) * mw, mw, mw, "F")
+                ok = True
+            except Exception:
+                ok = False
+        if not ok:
+            self.set_draw_color(*self.GREY); self.set_line_width(0.25); self.rect(x, y, size, size, "D")
+            self.txt(x, y + size * 0.22, size, size * 0.3, "QR", max(7, size * 0.79), color=self.GREY, align="C")
+            self.txt(x, y + size * 0.56, size, size * 0.2, "영상 준비중", max(5, size * 0.28), color=self.GREY, align="C")
+        if label and ok:
+            self.txt(x, y + size + 0.6, size, 2.6, label, 5.5, color=self.DARK, align="C")
+
+_AQ_PR_GLYPH = {"㎜": "mm", "㎝": "cm", "㎞": "km", "ℓ": "L", "中": "중", "小": "소", "大": "대"}
+
+def _aq_pr_clean(s):
+    """NanumGothic에 없는 글리프(㎜·ℓ·中·小 등) 치환 — 서버 PDF 빈 글자 방지."""
+    s = str(s or "").strip()
+    for k, v in _AQ_PR_GLYPH.items():
+        s = s.replace(k, v)
+    return s
+
+def _aq_pr_item(r):
+    """AQ_Items 레코드 → 인쇄용 dict (QR링크 컬럼 생기면 자동 사용)."""
+    qr = ""
+    for col in ("QR링크", "영상링크", "참고영상"):
+        if str(r.get(col, "") or "").strip():
+            qr = str(r.get(col)).strip(); break
+    return {"code": str(r.get("품목코드", "")).strip().zfill(5),
+            "name": _aq_pr_clean(r.get("품목명_AQ")),
+            "spec": _aq_pr_clean(r.get("규격_AQ")),
+            "grp": str(r.get("진열분류", "") or "").strip(),
+            "desc": _aq_pr_clean(r.get("설명")),
+            "bc_std": str(r.get("표준바코드", "") or "").strip(),
+            "bc_local": str(r.get("지역바코드", "") or "").strip(),
+            "qr": qr}
+
+def _aq_pr_bc(it, bc_mode):
+    return it["bc_std"] if bc_mode == "표준" else (it["bc_local"] or it["bc_std"])
+
+def _aq_sticker_card(pdf, s, x, y, it, rgb, bc, img):
+    """스티커 카드 1장 — 규격별 레이아웃 (색 프레임 + 제품명|규격 / 이미지|QR|바코드 / 설명)."""
+    if s == "160":
+        FT = 2.5
+        pdf.cframe(x, y, 160.0, 70.0, rgb, FT)
+        cx, cw = x + FT + 2.5, 160.0 - 2 * (FT + 2.5)
+        r1y, r1h = y + FT + 2.5, 9.5
+        nw = cw * 0.60
+        pdf.lbox(cx, r1y, nw, r1h); pdf.fit_txt(cx + 2, r1y + 0.8, nw - 4, r1h - 1.6, it["name"], 13, bold=True)
+        pdf.lbox(cx + nw + 2, r1y, cw - nw - 2, r1h)
+        pdf.fit_txt(cx + nw + 4, r1y + 0.8, cw - nw - 6, r1h - 1.6, it["spec"], 11, bold=True, color=pdf.DARK)
+        r2y, r2h = r1y + r1h + 2.5, 33
+        pdf.lbox(cx, r2y, 40, r2h); pdf.img_fit(img, cx + 1.5, r2y + 1.5, 37, r2h - 3)
+        pdf.qr(it["qr"], cx + 44, r2y + 2, 28, label="영상 보기")
+        bx = cx + 44 + 28 + 6; bw = cx + cw - bx - 2
+        if bc: pdf.ean13(bc, bx, r2y + 5, bw, 18, digits_pt=8)
+        else: pdf.txt(bx, r2y + 13, bw, 5, "바코드 없음", 9, color=(180, 60, 60), align="C")
+        r3y = r2y + r2h + 2; r3h = y + 70.0 - FT - 2.5 - r3y
+        pdf.lbox(cx, r3y, cw, r3h)
+        if it["desc"]:
+            pdf.f(9); pdf.set_text_color(*pdf.BLACK); pdf.set_xy(cx + 2, r3y + 1.2)
+            pdf.multi_cell(cw - 4, 4.1, it["desc"][:130], max_line_height=4.1)
+    elif s == "80":
+        FT = 1.8
+        pdf.cframe(x, y, 80.0, 45.0, rgb, FT)
+        cx, cw = x + FT + 1.5, 80.0 - 2 * (FT + 1.5)
+        r1y, r1h = y + FT + 1.5, 6.2
+        nw = cw * 0.60
+        pdf.lbox(cx, r1y, nw, r1h); pdf.fit_txt(cx + 1.2, r1y + 0.4, nw - 2.4, r1h - 0.8, it["name"], 8.2, bold=True)
+        pdf.lbox(cx + nw + 1.2, r1y, cw - nw - 1.2, r1h)
+        pdf.fit_txt(cx + nw + 2.2, r1y + 0.4, cw - nw - 3.2, r1h - 0.8, it["spec"], 7, bold=True, color=pdf.DARK)
+        r2y, r2h = r1y + r1h + 1.4, 21
+        pdf.lbox(cx, r2y, 19, r2h); pdf.img_fit(img, cx + 0.8, r2y + 0.8, 17.4, r2h - 1.6)
+        pdf.qr(it["qr"], cx + 20.6, r2y + 3, 15)
+        bx = cx + 20.6 + 15 + 2.2; bw = cx + cw - bx - 0.5
+        if bc: pdf.ean13(bc, bx, r2y + 3, bw, 12, digits_pt=5.5)
+        else: pdf.txt(bx, r2y + 8, bw, 4, "바코드 없음", 6.5, color=(180, 60, 60), align="C")
+        r3y = r2y + r2h + 1.2; r3h = y + 45.0 - FT - 1.5 - r3y
+        pdf.lbox(cx, r3y, cw, r3h)
+        if it["desc"]:
+            pdf.f(6); pdf.set_text_color(*pdf.BLACK); pdf.set_xy(cx + 1.2, r3y + 0.8)
+            pdf.multi_cell(cw - 2.4, 2.8, it["desc"][:90], max_line_height=2.8)
+    else:  # "98" — 저높이 라벨: 설명을 우측 세로칸으로
+        FT = 1.6
+        pdf.cframe(x, y, 98.8, 33.67, rgb, FT)
+        cx, cw = x + FT + 1.3, 98.8 - 2 * (FT + 1.3)
+        r1y, r1h = y + FT + 1.3, 5.6
+        nw = cw * 0.56
+        pdf.lbox(cx, r1y, nw, r1h); pdf.fit_txt(cx + 1.2, r1y + 0.35, nw - 2.4, r1h - 0.7, it["name"], 7.8, bold=True)
+        pdf.lbox(cx + nw + 1.2, r1y, cw - nw - 1.2, r1h)
+        pdf.fit_txt(cx + nw + 2.2, r1y + 0.35, cw - nw - 3.2, r1h - 0.7, it["spec"], 6.8, bold=True, color=pdf.DARK)
+        r2y = r1y + r1h + 1.2
+        r2h = y + 33.67 - FT - 1.3 - r2y
+        pdf.lbox(cx, r2y, 17, r2h); pdf.img_fit(img, cx + 0.8, r2y + 0.8, 15.4, r2h - 1.6)
+        qs = min(14, r2h - 1)
+        pdf.qr(it["qr"], cx + 18.5, r2y + (r2h - qs) / 2, qs)
+        bx = cx + 18.5 + qs + 2; bw = 27
+        if bc: pdf.ean13(bc, bx, r2y + 2.2, bw, 10.5, digits_pt=5.2)
+        else: pdf.txt(bx, r2y + 6, bw, 4, "바코드 없음", 6.2, color=(180, 60, 60), align="C")
+        dx = bx + bw + 2; dw = cx + cw - dx
+        pdf.lbox(dx, r2y, dw, r2h)
+        if it["desc"]:
+            pdf.f(5.6); pdf.set_text_color(*pdf.BLACK); pdf.set_xy(dx + 1, r2y + 0.8)
+            pdf.multi_cell(dw - 2, 2.6, it["desc"][:110], max_line_height=2.6)
+
+def aq_sticker_pdf_bytes(recs, size_key, bc_mode, img_of=None):
+    """스티커 PDF 생성 → bytes. recs=AQ_Items 레코드 목록, img_of=코드→PIL 이미지(없으면 이미지 생략)."""
+    spec = AQ_STICKER_SPEC[size_key]
+    items = [_aq_pr_item(r) for r in recs]
+    order = {g: i for i, g in enumerate(AQ_GROUP_COLORS)}
+    items.sort(key=lambda d: (order.get(d["grp"], 99), d["code"]))   # 부속군 군집 → 같은 색끼리
+    pdf = _AqPrintPDF()
+    per_page = len(spec["xs"]) * spec["rows"]
+    for i, it in enumerate(items):
+        k = i % per_page
+        if k == 0: pdf.add_page()
+        x = spec["xs"][k % len(spec["xs"])]
+        y = spec["y0"] + (k // len(spec["xs"])) * spec["pitch"]
+        img = img_of(it["code"]) if img_of else None
+        _aq_sticker_card(pdf, size_key, x, y, it, _aq_hexrgb(AQ_GROUP_COLORS.get(it["grp"])), _aq_pr_bc(it, bc_mode), img)
+    return bytes(pdf.output())
+
+def _aq_guide_card(pdf, x, y, it, rgb, bc, bc_note, img):
+    """가이드북 품목 카드 88×62 — 대표님 스케치 레이아웃."""
+    CW, CH, FT = 88, 62, 2.0
+    pdf.cframe(x, y, CW, CH, rgb, FT)
+    cx, cw = x + FT + 2, CW - 2 * (FT + 2)
+    r1y, r1h = y + FT + 2, 8.5
+    nw = cw * 0.58
+    pdf.lbox(cx, r1y, nw, r1h); pdf.fit_txt(cx + 1.5, r1y + 0.6, nw - 3, r1h - 1.2, it["name"], 10.5, bold=True)
+    pdf.lbox(cx + nw + 1.5, r1y, cw - nw - 1.5, r1h)
+    pdf.fit_txt(cx + nw + 3, r1y + 0.6, cw - nw - 4.5, r1h - 1.2, it["spec"], 9, bold=True, color=pdf.DARK)
+    r2y, r2h = r1y + r1h + 2, 30
+    pdf.lbox(cx, r2y, 25, r2h); pdf.img_fit(img, cx + 1, r2y + 1, 23, r2h - 2)
+    qx = cx + 27.5
+    pdf.qr(it["qr"], qx, r2y + 1.5, 24, label="영상 보기")
+    bx = qx + 27; bw = cx + cw - bx
+    if bc:
+        pdf.ean13(bc, bx, r2y + 4, bw, 16)
+        if bc_note: pdf.txt(bx, r2y + 25, bw, 3.5, bc_note, 6.5, color=(180, 60, 60), align="C")
+    else:
+        pdf.txt(bx, r2y + 12, bw, 5, "바코드 없음", 8, color=(180, 60, 60), align="C")
+    r3y = r2y + r2h + 2; r3h = y + CH - FT - 2 - r3y
+    pdf.lbox(cx, r3y, cw, r3h)
+    if it["desc"]:
+        pdf.f(6.9); pdf.set_text_color(*pdf.BLACK); pdf.set_xy(cx + 1.5, r3y + 1.2)
+        pdf.multi_cell(cw - 3, 3.2, it["desc"][:160], max_line_height=3.2)
+
+def aq_guidebook_pdf_bytes(recs, site, bc_mode, img_of=None):
+    """가이드북 PDF → (bytes, 품목수, 확정배치사용여부). site='(전체 품목)'이면 진열분류 보유 전체."""
+    assign = {}
+    if site and site != "(전체 품목)":
+        for srow in aq_load_sites():
+            if str(srow.get("농협명", "")).strip() == site:
+                try:
+                    plan = json.loads(srow.get("배치JSON") or "{}")
+                    assign = plan.get("assign", {}) if isinstance(plan, dict) else {}
+                except Exception:
+                    assign = {}
+    use_assign = bool(assign)
+    items = [_aq_pr_item(r) for r in recs]
+    sel = []
+    for it in items:
+        if use_assign:
+            a = assign.get(it["code"])
+            if not isinstance(a, dict) or str(a.get("rack", "")).startswith("🅥"):
+                continue   # 확정 배치 품목만(가상랙 보관 제외)
+        elif not it["grp"]:
+            continue
+        sel.append(it)
+    groups = [g for g in AQ_GROUP_COLORS if any(it["grp"] == g for it in sel)]
+    groups += sorted({it["grp"] for it in sel} - set(groups))
+    pdf = _AqPrintPDF()
+    # ① 표지
+    pdf.add_page()
+    pdf.set_fill_color(*pdf.YEL); pdf.rect(0, 0, 210, 297, "F")
+    pdf.txt(0, 95, 210, 20, "Aqunaris", 52, bold=True, align="C")
+    pdf.txt(0, 122, 210, 12, "아쿠나리스 관수코너 가이드북", 22, bold=True, align="C")
+    pdf.txt(0, 140, 210, 10, site or "", 16, align="C")
+    pdf.txt(0, 152, 210, 8, f"바코드: {bc_mode}바코드 기준 · {datetime.date.today().strftime('%Y-%m-%d')}", 11, align="C")
+    pdf.txt(0, 270, 210, 8, "신진켐텍 · Looperget", 12, bold=True, align="C")
+    # ② 부속군 색상 색인
+    pdf.add_page()
+    pdf.txt(15, 14, 180, 10, "부속군 색상 색인", 18, bold=True)
+    pdf.set_draw_color(*pdf.BLACK); pdf.set_line_width(0.5); pdf.line(15, 26, 195, 26)
+    yy = 34
+    for g in groups:
+        pdf.set_fill_color(*_aq_hexrgb(AQ_GROUP_COLORS.get(g))); pdf.rect(15, yy, 14, 9, "F")
+        pdf.txt(33, yy, 110, 9, g or "(미지정)", 13, bold=True)
+        pdf.txt(150, yy, 45, 9, f"{sum(1 for it in sel if it['grp'] == g)}품목", 11, align="R")
+        yy += 13
+    pdf.txt(15, yy + 6, 180, 6, "카드 테두리·진열대 색상 자석테이프·상자 스티커가 모두 같은 부속군 색을 씁니다.", 9, color=pdf.DARK)
+    # ③ 부속군별 카드 (2열×4행)
+    X0, Y0, CW, CH, GX, GY = 12, 22, 88, 62, 10, 4
+    for g in groups:
+        gi = [it for it in sel if it["grp"] == g]
+        if not gi: continue
+        rgb = _aq_hexrgb(AQ_GROUP_COLORS.get(g))
+        k = 8
+        for it in gi:
+            if k == 8:
+                pdf.add_page()
+                pdf.set_fill_color(*rgb); pdf.rect(0, 0, 210, 16, "F")
+                pdf.txt(12, 3.5, 170, 9, g or "(미지정)", 15, bold=True, color=_aq_lum_txt(rgb))
+                k = 0
+            x = X0 + (k % 2) * (CW + GX)
+            y = Y0 + (k // 2) * (CH + GY)
+            bc = _aq_pr_bc(it, bc_mode)
+            note = "※표준 폴백" if (bc_mode == "지역" and not it["bc_local"] and it["bc_std"]) else ""
+            img = img_of(it["code"]) if img_of else None
+            _aq_guide_card(pdf, x, y, it, rgb, bc, note, img)
+            k += 1
+    return bytes(pdf.output()), len(sel), use_assign
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def aq_iso_data_uri(file_id, max_px=240):
     """[V49] 등각(ISO) 이미지 → 흰배경 누끼(테두리 연결 플러드필, V37 방식) → PNG data URI (SVG 삽입용).
@@ -5452,8 +5784,70 @@ elif mode == "🏪 아쿠나리스":
         if st.button("🔄 아쿠나리스 데이터 새로고침", key="aq_refresh"):
             aq_load_all.clear(); st.rerun()
 
-        tab_stat, tab_items, tab_quote, tab_box, tab_site = st.tabs(
-            ["📊 현황", "🗄️ 진열 품목", "🧮 진열 공급 견적(간이)", "📦 상자·수용량", "🏗️ 사이트 설계"])
+        tab_stat, tab_items, tab_quote, tab_box, tab_site, tab_print = st.tabs(
+            ["📊 현황", "🗄️ 진열 품목", "🧮 진열 공급 견적(간이)", "📦 상자·수용량", "🏗️ 사이트 설계", "🖨️ 인쇄물"])
+
+        # ── [V52] 인쇄물 — 스티커·가이드북 자동 생성 (부속군 색상 중심 v2) ──
+        with tab_print:
+            st.markdown("##### 🖨️ 스티커 · 가이드북 자동 생성")
+            st.caption("카드 = **부속군 색 프레임** + [제품명|규격] / [이미지|QR|농협 바코드] / [제품설명] — 섹션/단/열 표기 없음(색상 구분). "
+                       "QR은 참고영상 링크가 정리되어 AQ_Items에 `QR링크` 컬럼이 생기면 자동 반영됩니다(현재 자리표시).")
+            _pr_bc_sel = st.radio("바코드 체계 (농협 선택)", ["표준바코드 (880 GS1)", "지역바코드 (21 인스토어)"],
+                                  horizontal=True, key="aq_pr_bc")
+            _pr_bc_mode = "표준" if _pr_bc_sel.startswith("표준") else "지역"
+            _pr_img_on = st.checkbox("제품 이미지 포함 (드라이브에서 로드 — 첫 생성은 오래 걸릴 수 있음, 이후 캐시)",
+                                     value=True, key="aq_pr_img")
+            _pr_imgof = None
+            if _pr_img_on:
+                _pr_fmap = get_drive_file_map_deep()
+                def _pr_imgof(code, _fm=_pr_fmap):
+                    _p9 = prod_by_code.get(str(code).strip().zfill(5), {}) or {}
+                    _fid9 = get_best_image_id(code, str(_p9.get("image_data") or _p9.get("image") or ""), _fm)
+                    return download_image_by_id(_fid9) if _fid9 else None
+
+            st.markdown("**📦 부품상자 스티커** — 아이라밸 용지: 80=규격 **826**(6호) · 98=**228**(3호) · 160=**814**(431-1/432호)")
+            _pr_sizes = st.multiselect("스티커 규격", ["80", "98", "160"], default=["80", "98", "160"], key="aq_pr_sizes")
+            _pr_codes_raw = st.text_input("품목코드 필터 (쉼표 구분 — 비우면 스티커 대상 전체, 필요한 것만 뽑으면 용지 절약)",
+                                          key="aq_pr_codes")
+            if st.button("🖨️ 스티커 PDF 생성", key="aq_pr_st_go"):
+                _pr_filter = {c.strip().zfill(5) for c in _pr_codes_raw.split(",") if c.strip()} or None
+                with st.spinner("스티커 생성 중..."):
+                    try:
+                        _outs9 = {}
+                        for _s9 in (_pr_sizes or ["80", "98", "160"]):
+                            _grp9 = [r for r in aq_items
+                                     if str(r.get("스티커", "")).strip() == _s9
+                                     and (not _pr_filter or str(r.get("품목코드", "")).strip().zfill(5) in _pr_filter)]
+                            if _grp9:
+                                _outs9[_s9] = (aq_sticker_pdf_bytes(_grp9, _s9, _pr_bc_mode, _pr_imgof), len(_grp9))
+                        st.session_state["aq_pr_st_out"] = _outs9
+                        if not _outs9:
+                            st.warning("대상 품목이 없습니다 — AQ_Items 스티커 컬럼(80/98/160)과 필터를 확인하세요.")
+                    except Exception as e:
+                        st.error(f"스티커 생성 실패: {aq_err_str(e)}")
+            for _s9, (_b9, _n9) in (st.session_state.get("aq_pr_st_out") or {}).items():
+                st.download_button(f"⬇️ 스티커{_s9} PDF — {_n9}품목 ({len(_b9) // 1024}KB)", data=_b9,
+                                   file_name=f"스티커{_s9}_{datetime.date.today().strftime('%Y%m%d')}.pdf",
+                                   mime="application/pdf", key=f"aq_pr_st_dl_{_s9}")
+
+            st.markdown("---")
+            st.markdown("**📖 농협 맞춤 가이드북** — 표지 + 부속군 색상 색인 + 군별 품목 카드")
+            _pr_site_opts = ["(전체 품목)"] + [str(s.get("농협명", "")).strip()
+                                           for s in aq_load_sites() if str(s.get("농협명", "")).strip()]
+            _pr_site = st.selectbox("사이트 (확정 배치가 저장된 농협 선택 시 그 배치 품목만 수록)", _pr_site_opts, key="aq_pr_site")
+            if st.button("📖 가이드북 PDF 생성", key="aq_pr_gb_go"):
+                with st.spinner("가이드북 생성 중..."):
+                    try:
+                        _gb_b, _gb_n, _gb_asg = aq_guidebook_pdf_bytes(aq_items, _pr_site, _pr_bc_mode, _pr_imgof)
+                        st.session_state["aq_pr_gb_out"] = (_gb_b, _pr_site, _gb_n, _gb_asg, _pr_bc_mode)
+                    except Exception as e:
+                        st.error(f"가이드북 생성 실패: {aq_err_str(e)}")
+            _gb9 = st.session_state.get("aq_pr_gb_out")
+            if _gb9:
+                st.caption(f"{_gb9[1]} · {_gb9[2]}품목 · {'확정 배치 기준' if _gb9[3] else '진열분류 전체 기준'} · {_gb9[4]}바코드")
+                st.download_button(f"⬇️ 가이드북 PDF ({len(_gb9[0]) // 1024}KB)", data=_gb9[0],
+                                   file_name=f"가이드북_{_gb9[1]}_{_gb9[4]}_{datetime.date.today().strftime('%Y%m%d')}.pdf",
+                                   mime="application/pdf", key="aq_pr_gb_dl")
 
         # ── 현황 ─────────────────────────────────────────
         with tab_stat:

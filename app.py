@@ -1011,7 +1011,7 @@ def aq_rename_box(old, new):
 #  근거: Aqunaris V1.ai 벡터 실측(2026-07-18). 상자 개수 91/54/53/38 = 구매수량과 정확 일치.
 #  검증 모델: 층수 = floor(단높이/상자높이), Σ(상자폭÷층수) ≤ 내측폭 862 → V1 실배치 51/51단 적합.
 AQ_STD_SITE = "표준(Aqunaris V1)"
-AQ_STD_INNER = 862          # 랙 W900 - 기둥(19×2)
+AQ_STD_INNER = 1162         # [V55] 랙 W1200 - 기둥(19×2) — 대표님 실측 정정(구: W900/862, V1 도면 축척 역산 오차)
 AQ_STD_RACK_H = {
     "01": [1042, 727], "02": [405, 442, 405, 517], "03": [292, 330, 1148],
     "04": [405, 368, 330, 668], "05": [368, 368, 368, 668], "06": [368, 405, 375, 623],
@@ -1085,7 +1085,7 @@ def aq_std_payload(aq_items):
             plan_items[r["품목코드"]] = {"box": box, "qty": qty, "ori": "세로"}
     racks = []
     for s in sorted(AQ_STD_RACK_H):
-        racks.append({"명칭": f"섹션{s}", "폭mm": 900, "깊이mm": 450, "단수": len(AQ_STD_RACK_H[s]),
+        racks.append({"명칭": f"섹션{s}", "폭mm": 1200, "깊이mm": 450, "단수": len(AQ_STD_RACK_H[s]),   # [V55] 실측 1200
                       "단높이mm(콤마구분)": ",".join(str(x) for x in AQ_STD_RACK_H[s]),
                       "단깊이mm(콤마구분)": "", "비고": "표준(V1 역산)"})
     plan = {"groups": sorted(groups), "items": plan_items,
@@ -1233,7 +1233,9 @@ def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=
     _dash9 = ' stroke-dasharray="7,4"' if _virt9 else ''
     _fill9 = "#FFFBEB" if _virt9 else "#FAFAF7"
     out.append(f'<rect x="{x0:.1f}" y="{y0:.1f}" width="{pw:.1f}" height="{ph:.1f}" fill="{_fill9}" stroke="#191414" stroke-width="1.6"{_dash9}/>')
-    out.append(f'<text x="{x0:.1f}" y="{y0 - 4:.1f}" font-size="11" fill="#8C8681">{_aq_esc(rack_name)}</text>')
+    # [V55] 랙 이름 = 랙 순서 드래그 핸들 (≡ 표시)
+    out.append(f'<text class="aqrackhandle" data-rack="{_aq_esc(rack_name)}" x="{x0:.1f}" y="{y0 - 4:.1f}" '
+               f'font-size="11" fill="#8C8681">≡ {_aq_esc(rack_name)}</text>')
     y_real = 0
     for si, sh in enumerate(shelf_hs, 1):
         y_real += sh
@@ -1304,8 +1306,10 @@ def aq_racks_svg_all(rack_list, seq_by_shelf, per_row=6, scale=None, info=None):
         x = pad
         row_h = 0
         for rk in row:
-            pw, ph = _aq_rack_parts(out, x, y + 10, rk["명칭"], rk["내측폭"], rk["단높이"], seq_by_shelf,
+            _parts9 = []   # [V55] 랙 단위 <g> 그룹 — 랙 전체 드래그(순서 변경)용
+            pw, ph = _aq_rack_parts(_parts9, x, y + 10, rk["명칭"], rk["내측폭"], rk["단높이"], seq_by_shelf,
                                     scale=scale, show_dims=(scale >= 0.15), info=info)
+            out.append(f'<g class="aqrackg" data-rack="{_aq_esc(rk["명칭"])}">' + "".join(_parts9) + '</g>')
             x += pw + gap_x
             row_h = max(row_h, ph)
         total_w = max(total_w, x)
@@ -1387,7 +1391,8 @@ function aqGrp(el){return aqBoxes.filter(function(b){return b.dataset.code===el.
 function aqPush(op){op.id=Date.now()+'-'+(++aqSeq);aqOps.push(op);
  try{window.parent.localStorage.setItem('AQ_OPS',JSON.stringify({nonce:AQN,ts:Date.now(),ops:aqOps}));}catch(e){}
  var s=document.getElementById('aqst');if(s)s.textContent='조작 '+aqOps.length+'건 — 자동 반영 중…';
- clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,350);}
+ clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,350);
+ clearTimeout(window.__aqap2);window.__aqap2=setTimeout(aqApply,2500);}
 function aqApply(){try{var bs=window.parent.document.querySelectorAll('button');
  for(var i=0;i<bs.length;i++){if((bs[i].innerText||'').indexOf('배치 조작 반영')>-1){bs[i].click();return;}}}catch(e){}}
 function aqZoneAt(x,y){for(var i=0;i<aqZones.length;i++){var r=aqZones[i].getBoundingClientRect();
@@ -1450,6 +1455,31 @@ function aqMenuShow(el,ev){aqMenuHide();
  document.body.appendChild(m);}
 function aqMenuHide(){if(aqMenu&&aqMenu.parentNode)aqMenu.parentNode.removeChild(aqMenu);aqMenu=null;}
 document.addEventListener('mousedown',function(ev){if(aqMenu&&!aqMenu.contains(ev.target))aqMenuHide();},true);
+var aqRDrag=null;
+[].slice.call(document.querySelectorAll('.aqrackhandle')).forEach(function(h){
+ h.style.cursor='grab';
+ h.addEventListener('mousedown',function(ev){if(ev.button!==0)return;
+  aqRDrag={g:(h.closest?h.closest('g.aqrackg'):null),rack:h.getAttribute('data-rack'),
+           sx:ev.clientX,sy:ev.clientY,moved:false};
+  ev.preventDefault();ev.stopPropagation();});
+});
+document.addEventListener('mousemove',function(ev){if(!aqRDrag)return;
+ var dx=(ev.clientX-aqRDrag.sx)/aqZ,dy=(ev.clientY-aqRDrag.sy)/aqZ;
+ if(Math.abs(dx)+Math.abs(dy)>4)aqRDrag.moved=true;
+ if(aqRDrag.g)aqRDrag.g.setAttribute('transform','translate('+dx+','+dy+')');
+ if(typeof tip!=='undefined')tip.style.display='none';});
+document.addEventListener('mouseup',function(ev){if(!aqRDrag)return;
+ var d=aqRDrag;aqRDrag=null;
+ if(!d.moved){if(d.g)d.g.removeAttribute('transform');return;}
+ var best=null,bd=1e12;
+ [].slice.call(document.querySelectorAll('g.aqrackg')).forEach(function(g){
+  if(d.g&&g===d.g)return;
+  var r=g.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2;
+  var dist=(cx-ev.clientX)*(cx-ev.clientX)+(cy-ev.clientY)*(cy-ev.clientY);
+  if(dist<bd){bd=dist;best={g:g,cx:cx};}});
+ if(best){aqPush({t:'rord',rack:d.rack,target:best.g.getAttribute('data-rack'),after:ev.clientX>best.cx});}
+ else if(d.g){d.g.removeAttribute('transform');}
+});
 </script>""".replace("__NONCE__", str(nonce).replace('"', '')).replace(
             "__BOXES__", json.dumps([str(b) for b in (boxes or [])], ensure_ascii=False))
     html = (
@@ -6545,6 +6575,25 @@ elif mode == "🏪 아쿠나리스":
                     except Exception as e:
                         st.error(f"표준 불러오기 실패: {aq_err_str(e)}")
 
+            # ── [V55] 사이트 삭제 (대표님 요청 — 테스트 사이트 정리) ──
+            if sel_site != "(신규 등록)":
+                with st.expander("🗑 사이트 삭제", expanded=False):
+                    st.caption("이 사이트 행이 AQ_Sites 시트에서 제거됩니다(랙 구성·배치 포함). "
+                               "실수 방지를 위해 농협명을 그대로 입력해야 삭제됩니다. 복구는 시트 버전 기록으로 가능.")
+                    _del_in9 = st.text_input(f"삭제 확인 — 농협명 입력: {sel_site}", key=f"aq_del_in_{sel_site}")
+                    if st.button("🗑 이 사이트 삭제", key=f"aq_del_go_{sel_site}"):
+                        if _del_in9.strip() != sel_site:
+                            st.error("농협명이 일치하지 않습니다.")
+                        else:
+                            try:
+                                _rest9 = [s for s in aq_sites_all
+                                          if str(s.get("농협명", "")).strip() != sel_site]
+                                aq_save_sites(_rest9)
+                                aq_load_all.clear()
+                                st.success("삭제 완료"); time.sleep(0.5); st.rerun()
+                            except Exception as e:
+                                st.error(f"삭제 실패: {aq_err_str(e)}")
+
             if sel_site == "(신규 등록)":
                 with st.form("aq_site_add_form", clear_on_submit=True):
                     ns1, ns2, ns3 = st.columns(3)
@@ -6584,8 +6633,15 @@ elif mode == "🏪 아쿠나리스":
                 _df_racks_in = _df_racks_in[_rack_cols]
                 for _c in ["폭mm", "깊이mm", "총높이mm", "단수", "단두께mm"]:
                     _df_racks_in[_c] = pd.to_numeric(_df_racks_in[_c], errors="coerce")
+                # [V55] 상속 가시화 — 상속으로 채운 표를 다음 렌더에 실제 데이터로 주입
+                _rkv_key = f"aq_rack_ver_{sel_site}"
+                if _rkv_key not in st.session_state: st.session_state[_rkv_key] = 0
+                _df_over = st.session_state.pop(f"aq_rack_fill_{sel_site}", None)
+                if _df_over is not None:
+                    _df_racks_in = _df_over
                 df_racks_ed = st.data_editor(
-                    _df_racks_in, num_rows="dynamic", hide_index=True, key=f"aq_racks_ed_{sel_site}",
+                    _df_racks_in, num_rows="dynamic", hide_index=True,
+                    key=f"aq_racks_ed_{sel_site}_{st.session_state[_rkv_key]}",
                     column_config={
                         "폭mm": st.column_config.NumberColumn(format="%d"),
                         "깊이mm": st.column_config.NumberColumn(format="%d"),
@@ -6614,6 +6670,15 @@ elif mode == "🏪 아쿠나리스":
                             except Exception: _cnt_a9 = 0
                             if _cnt_b9 == 0 or _cnt_b9 == _cnt_a9:
                                 df_racks_eff.at[_bi9, "단높이mm(콤마구분)"] = _base_r.get("단높이mm(콤마구분)")
+                # [V55] 상속으로 값이 채워졌으면 편집표에 즉시 반영(가시화) — 사용자가 채워진 값을 보고 수정
+                try:
+                    _same_fill9 = df_racks_eff.fillna("").astype(str).equals(df_racks_ed.fillna("").astype(str))
+                except Exception:
+                    _same_fill9 = True
+                if not _same_fill9:
+                    st.session_state[f"aq_rack_fill_{sel_site}"] = df_racks_eff
+                    st.session_state[_rkv_key] += 1
+                    st.rerun()
                 # [V49] 랙 총높이 검증 — 불일치 랙은 배치(_rk_list)에서 제외
                 _rack_errs, _rack_notes, _bad_racks, _rack_reqs = [], [], set(), []   # [V53] 필요 Σ단높이 안내
                 for _ri9, _rr in df_racks_eff.iterrows():
@@ -6652,7 +6717,7 @@ elif mode == "🏪 아쿠나리스":
                 _dims_hint = aq_box_dims_map(aq_boxes)
                 if _dims_hint:
                     _hint = " · ".join(f"{n} {AQ_STD_INNER // wh[0]}칸" for n, wh in sorted(_dims_hint.items()))
-                    st.caption(f"표준 랙(W900, 내측 862mm) 단당 칸수: {_hint} — 층수 = 단높이 ÷ 상자높이 (예: 단높이 292 → 431-1호(112) 2층, 3호(116) 2층)")
+                    st.caption(f"표준 랙(W1200, 내측 1162mm) 단당 칸수: {_hint} — 층수 = 단높이 ÷ 상자높이 (예: 단높이 292 → 431-1호(112) 2층, 3호(116) 2층)")
 
                 st.markdown("##### 2️⃣ 진열할 부속군 선택")
                 try: _plan_cur = json.loads(str(_site.get("배치JSON") or "{}"))
@@ -6828,9 +6893,17 @@ elif mode == "🏪 아쿠나리스":
                         _rk_all = ([{"명칭": AQ_VIRT, "내측폭": 900, "단높이": [600, 600, 600],
                                      "단깊이": [], "깊이": 450}] if _virt_on else []) + _rk_list   # [V53] 가상랙 맨 앞 — 스크롤 없이 항상 보이게
                         if _HAS_JS_EVAL:
+                            # [V55] 근본 수정: streamlit_js_eval 프론트는 js_expressions "문자열이 바뀔 때만"
+                            #  재평가한다(index.html: if (new_value !== data_from_streamlit)). 고정 문자열이라
+                            #  최초 1회만 읽고 끝 → 조작이 영영 미반영되던 원인.
+                            #  '🔄 배치 조작 반영' 클릭(그림에서 자동클릭 포함) 턴에만 시퀀스를 올려 재평가
+                            #  (매 실행 변경은 리런 폭풍 유발 — 실브라우저 검증으로 확인).
+                            if st.session_state.pop("aq_ops_bump", False):
+                                st.session_state["aq_ops_read_seq"] = st.session_state.get("aq_ops_read_seq", 0) + 1
+                            _rdseq9 = st.session_state.get("aq_ops_read_seq", 0)
                             try:
                                 _ops_raw = streamlit_js_eval(
-                                    js_expressions="window.parent.localStorage.getItem('AQ_OPS')",
+                                    js_expressions=f"window.parent.localStorage.getItem('AQ_OPS') /*{_rdseq9}*/",
                                     key=f"aq_ops_{sel_site}")
                             except Exception:
                                 _ops_raw = None
@@ -6865,6 +6938,17 @@ elif mode == "🏪 아쿠나리스":
                                                     _asg9.pop(_c9o, None)
                                             elif _op9.get("t") == "box" and _op9.get("box"):   # [V54] 상자 변경
                                                 st.session_state.setdefault(f"aq_boxov_{sel_site}", {})[_c9o] = str(_op9["box"])
+                                            elif _op9.get("t") == "rord" and _op9.get("rack") and _op9.get("target"):
+                                                # [V55] 랙 순서 변경 — 드래그한 랙을 대상 랙 앞/뒤로
+                                                _co9 = (st.session_state.get(f"aq_rkord_{sel_site}")
+                                                        or [rk["명칭"] for rk in _rk_all])
+                                                _co9 = [n for n in _co9 if n != _op9["rack"]]
+                                                if _op9["target"] in _co9:
+                                                    _ti9 = _co9.index(_op9["target"]) + (1 if _op9.get("after") else 0)
+                                                else:
+                                                    _ti9 = len(_co9)
+                                                _co9.insert(_ti9, str(_op9["rack"]))
+                                                st.session_state[f"aq_rkord_{sel_site}"] = _co9
                                         except Exception:
                                             pass
                                         _done_ids.add(_op9.get("id"))
@@ -6873,6 +6957,16 @@ elif mode == "🏪 아쿠나리스":
                                     st.session_state[_asg_key] = _asg9
                                     st.session_state[_ver_key] += 1
                                     st.rerun()
+                        # [V55] 랙 순서 적용 (세션 → 없으면 저장된 rack_order) — 표시·자동배치·편집표 공통
+                        _ord9 = st.session_state.get(f"aq_rkord_{sel_site}")
+                        if not _ord9:
+                            _ord9 = [n for n in (_plan_cur.get("rack_order") or []) if isinstance(n, str)]
+                            if _ord9:
+                                st.session_state[f"aq_rkord_{sel_site}"] = _ord9
+                        if _ord9:
+                            _oidx9 = {n: i for i, n in enumerate(_ord9)}
+                            _rk_all = sorted(_rk_all, key=lambda rk: _oidx9.get(rk["명칭"], 999))
+                            _rk_list = sorted(_rk_list, key=lambda rk: _oidx9.get(rk["명칭"], 999))
                         ca1, ca0, ca2 = st.columns([2, 1, 3])
                         with ca0:
                             if st.button("🗑 배치 초기화", key=f"aq_clear_{sel_site}"):
@@ -7056,8 +7150,10 @@ elif mode == "🏪 아쿠나리스":
                                            "**더블클릭=복제/삭제** · 우상단 **⛶ 전체화면**·＋/− 줌. "
                                            "조작은 1~2초 내 자동 반영 — 안 되면 옆의 🔄 버튼을 누르세요.")
                             with _cb2:
-                                st.button("🔄 배치 조작 반영", key=f"aq_ops_apply_{sel_site}",
-                                          help="그림에서 드래그·더블클릭한 조작을 표와 배치에 반영합니다.")
+                                if st.button("🔄 배치 조작 반영", key=f"aq_ops_apply_{sel_site}",
+                                             help="그림에서 드래그·더블클릭한 조작을 표와 배치에 반영합니다."):
+                                    st.session_state["aq_ops_bump"] = True   # [V55] 다음 턴에 브리지 재평가
+                                    st.rerun()
                         _leg = " ".join(
                             f'<span style="display:inline-block;width:10px;height:10px;background:{AQ_GROUP_COLORS.get(g, "#9AA0A6")};margin-right:4px;"></span>'
                             f'<span style="font-size:12px;margin-right:10px;">{g}</span>' for g in _pg)
@@ -7259,6 +7355,11 @@ elif mode == "🏪 아쿠나리스":
                                                        "rows": (t[2] if len(t) > 2 else 1),
                                                        "n": (t[3] if len(t) > 3 else 1)}   # [V51] 전면 상자수
                                                    for c, t in _asg_sv.items() if t and t[0] and t[1]}
+                        _ord_sv = st.session_state.get(f"aq_rkord_{sel_site}")   # [V55] 랙 순서 저장
+                        if _ord_sv:
+                            _new_plan["rack_order"] = _ord_sv
+                        elif isinstance(_plan_cur.get("rack_order"), list):
+                            _new_plan["rack_order"] = _plan_cur["rack_order"]
                         for s in aq_sites_all:
                             if str(s.get("농협명", "")).strip() == sel_site:
                                 s["랙구성JSON"] = json.dumps(_racks_out, ensure_ascii=False)

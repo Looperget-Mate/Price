@@ -1346,7 +1346,7 @@ def aq_shelf_top_svg(rack_name, shelf_no, inner, shelf_h, depth, seq, rows_by_co
     return (f'<svg width="{pw + pad*2:.0f}" height="{ph + pad*2:.0f}" xmlns="http://www.w3.org/2000/svg">'
             + "".join(out) + '</svg>')
 
-def aq_svg_hover_html(svg, interactive=False, nonce=""):
+def aq_svg_hover_html(svg, interactive=False, nonce="", boxes=None):
     """[V49] SVG를 호버 툴팁(품목명 크게·규격·상자·최대수량)과 함께 iframe HTML로 래핑.
     반환: (html, 권장 iframe 높이px). components.html로 렌더해야 JS 툴팁이 동작.
     [V51] interactive=True → 드래그 이동(같은 품목 묶음)·더블클릭 복제/삭제·전체화면/줌 툴바.
@@ -1371,7 +1371,7 @@ def aq_svg_hover_html(svg, interactive=False, nonce=""):
             f'<button onclick="aqFull()" style="{_btn}">⛶ 전체화면</button></div>')
         js_int = """
 <script>
-var AQN="__NONCE__", aqOps=[], aqZ=1, aqDrag=null, aqMenu=null, aqSeq=0;
+var AQN="__NONCE__", AQB=__BOXES__, aqOps=[], aqZ=1, aqDrag=null, aqMenu=null, aqSeq=0;
 var aqBoxes=[].slice.call(document.querySelectorAll('.aqbox[data-code]'));
 var aqZones=[].slice.call(document.querySelectorAll('.aqshelf'));
 function aqZoom(f){aqZ=Math.max(0.3,Math.min(4,aqZ*f));document.getElementById('aqzoom').style.transform='scale('+aqZ+')';}
@@ -1436,10 +1436,22 @@ function aqMenuShow(el,ev){aqMenuHide();
   shelf:parseInt(el.dataset.shelf)});
   var g=aqGrp(el);if(g.length>0){g[g.length-1].style.display='none';}aqMenuHide();};
  b3.onclick=aqMenuHide;
+ if(AQB&&AQB.length){var bt=document.createElement('div');
+  bt.style.cssText='color:#CFC9C3;font-size:10px;margin:7px 0 3px 0;';bt.textContent='📦 상자 변경';m.appendChild(bt);
+  var bw=document.createElement('div');bw.style.cssText='max-width:230px;';
+  AQB.forEach(function(bn){if(bn===el.getAttribute('data-box'))return;
+   var bb=document.createElement('button');bb.textContent=bn;
+   bb.style.cssText='margin:0 4px 4px 0;padding:3px 7px;border:1px solid #8C8681;'
+    +'background:#2B2626;color:#FFFFFF;border-radius:5px;cursor:pointer;font-size:11px;';
+   bb.onclick=function(){aqPush({t:'box',code:el.dataset.code,rack:el.dataset.rack,
+    shelf:parseInt(el.dataset.shelf),box:bn});aqMenuHide();};
+   bw.appendChild(bb);});
+  m.appendChild(bw);}
  document.body.appendChild(m);}
 function aqMenuHide(){if(aqMenu&&aqMenu.parentNode)aqMenu.parentNode.removeChild(aqMenu);aqMenu=null;}
 document.addEventListener('mousedown',function(ev){if(aqMenu&&!aqMenu.contains(ev.target))aqMenuHide();},true);
-</script>""".replace("__NONCE__", str(nonce).replace('"', ''))
+</script>""".replace("__NONCE__", str(nonce).replace('"', '')).replace(
+            "__BOXES__", json.dumps([str(b) for b in (boxes or [])], ensure_ascii=False))
     html = (
         '<div id="aqwrap" style="position:relative;font-family:sans-serif;background:#FFFFFF;overflow:auto;">'
         + tools + '<div id="aqzoom" style="transform-origin:0 0;">' + svg + '</div>' +
@@ -1456,7 +1468,8 @@ document.addEventListener('mousedown',function(ev){if(aqMenu&&!aqMenu.contains(e
         ' document.getElementById("aqtip-name").textContent=el.getAttribute("data-name")||"";'
         ' document.getElementById("aqtip-spec").textContent=el.getAttribute("data-spec")||"";'
         ' var b=el.getAttribute("data-box")||"", c=el.getAttribute("data-cap")||"";'
-        ' document.getElementById("aqtip-cap").textContent=(b?("\\uD83D\\uDCE6 "+b):"")+(c?(" \\u00B7 \\ucd5c\\ub300 "+c+"\\uac1c"):"");'
+        ' var ctxt=c?(c==="\\uc5c6\\uc74c"?" \\u00B7 \\uc218\\ub7c9\\uc815\\ubcf4 \\uc5c6\\uc74c":(" \\u00B7 \\ucd5c\\ub300 "+c+"\\uac1c")):"";'
+        ' document.getElementById("aqtip-cap").textContent=(b?("\\uD83D\\uDCE6 "+b):"")+ctxt;'
         ' tip.style.display="block"; aqMove(ev);}'
         'function aqMove(ev){'
         ' var x=ev.clientX+14,y=ev.clientY+14;'
@@ -1559,14 +1572,19 @@ class _AqPrintPDF(FPDF):
         try: self.set_font(self._mono or self._fam, "B" if bold else "", size)
         except Exception: self.f(size, bold)
 
+    @staticmethod
+    def _mono_ok(s):
+        """[V54] JetBrains Mono엔 한글 글리프가 없음 — 한글 포함 문자열은 본문 폰트로 폴백."""
+        return not any("가" <= ch <= "힣" or "㄰" <= ch <= "㆏" for ch in str(s))
+
     def txt(self, x, y, w, h, s, size, bold=False, color=None, align="L", mono=False):
-        (self.fmono if mono else self.f)(size, bold)
+        (self.fmono if (mono and self._mono_ok(s)) else self.f)(size, bold)
         self.set_text_color(*(color or self.BLACK))
         self.set_xy(x, y); self.cell(w, h, str(s), align=align)
 
     def fit_txt(self, x, y, w, h, s, size, bold=False, color=None, align="L", min_size=5.5, mono=False):
         s = str(s); sz = size
-        _setf = self.fmono if mono else self.f
+        _setf = self.fmono if (mono and self._mono_ok(s)) else self.f
         while sz > min_size:
             _setf(sz, bold)
             if self.get_string_width(s) <= w - 0.6: break
@@ -1656,6 +1674,22 @@ def _aq_pil_from_any(v):
             return None
     return v
 
+def _aq_trim_white(img, thresh=244, pad=0.05):
+    """[V54] 흰 여백 자동 크롭(누끼 효과) — 피사체가 카드 이미지 칸을 최대한 채우게."""
+    try:
+        g = img.convert("L")
+        mask = g.point(lambda p: 255 if p < thresh else 0)
+        bbox = mask.getbbox()
+        if not bbox:
+            return img
+        w, h = img.size
+        px = int((bbox[2] - bbox[0]) * pad) + 2
+        py = int((bbox[3] - bbox[1]) * pad) + 2
+        return img.crop((max(0, bbox[0] - px), max(0, bbox[1] - py),
+                         min(w, bbox[2] + px), min(h, bbox[3] + py)))
+    except Exception:
+        return img
+
 _AQ_PR_GLYPH = {"㎜": "mm", "㎝": "cm", "㎞": "km", "ℓ": "L", "中": "중", "小": "소", "大": "대"}
 
 def _aq_pr_clean(s):
@@ -1683,7 +1717,7 @@ def _aq_pr_item(r):
 def _aq_pr_bc(it, bc_mode):
     return it["bc_std"] if bc_mode == "표준" else (it["bc_local"] or it["bc_std"])
 
-_AQ_STICKER_CAPTION = "Aqunaris · ShinJinChemTech"   # [V53] 보증 캡션 (로고 8mm 미만 지면 — 디자인가이드 §3)
+_AQ_STICKER_CAPTION = "Aqunaris · ShinJinChemTech · sjct.kr"   # [V53] 보증 캡션 — [V54] sjct.kr 병기
 
 def _aq_sticker_card(pdf, s, x, y, it, rgb, bc, img):
     """스티커 카드 1장 — [V53] 디자인가이드 v1 §5-1: 상단 색 밴드(부속군명 병기) + 얇은 색 테두리,
@@ -1790,10 +1824,10 @@ def _aq_guide_card(pdf, x, y, it, rgb, bc, bc_note, img):
     pdf.lbox(cx + nw + 1.5, r1y, cw - nw - 1.5, r1h)
     pdf.fit_txt(cx + nw + 3, r1y + 0.9, cw - nw - 4.5, r1h - 1.8, it["spec"], 8.5, bold=True, color=pdf.DARK, mono=True)   # [V53] 데이터=모노
     r2y, r2h = r1y + r1h + 2, 30
-    pdf.lbox(cx, r2y, 25, r2h); pdf.img_fit(img, cx + 1, r2y + 1, 23, r2h - 2)
-    qx = cx + 27.5
-    pdf.qr(it["qr"], qx, r2y + 1.5, 24, label="영상 보기")
-    bx = qx + 27; bw = cx + cw - bx
+    pdf.lbox(cx, r2y, 29, r2h); pdf.img_fit(img, cx + 0.8, r2y + 0.8, 27.4, r2h - 1.6)   # [V54] 이미지 확대
+    qx = cx + 31
+    pdf.qr(it["qr"], qx, r2y + 3.5, 20, label="영상 보기")
+    bx = qx + 23; bw = cx + cw - bx
     if bc:
         pdf.ean13(bc, bx, r2y + 4, bw, 16)
         if bc_note: pdf.txt(bx, r2y + 25, bw, 3.5, bc_note, 6.5, color=(180, 60, 60), align="C")
@@ -1832,8 +1866,8 @@ def aq_guidebook_pdf_bytes(recs, site, bc_mode, img_of=None):
     pdf = _AqPrintPDF()
     _today = datetime.date.today().strftime("%Y-%m-%d")
 
-    def _foot():   # [V53] 푸터 — 페이지번호 + 보증 캡션 + 발행일 (디자인가이드 §5-2)
-        pdf.txt(0, 290.5, 210, 4, f"{pdf.page_no()}   ·   Aqunaris · ShinJinChemTech   ·   {_today}",
+    def _foot():   # [V53] 푸터 — 페이지번호 + 보증 캡션 + 발행일 (디자인가이드 §5-2) — [V54] sjct.kr
+        pdf.txt(0, 290.5, 210, 4, f"{pdf.page_no()}   ·   Aqunaris · ShinJinChemTech · sjct.kr   ·   {_today}",
                 6.5, color=(168, 168, 168), align="C")
 
     # ① 표지 — [V53] 화이트 기조 + Aqunaris 워드마크 + 부속군 색 스트립 + SJ 보증 로고 (§5-2, 옐로 전면 폐지)
@@ -1856,7 +1890,7 @@ def aq_guidebook_pdf_bytes(recs, site, bc_mode, img_of=None):
         pdf.txt(_sx, 165.5, _sw, 4.5, "부속군 색상 체계 — 진열대 · 상자 스티커 · 가이드북 공통", 8, color=pdf.INK500, align="C")
     if not pdf.sj_logo(84, 238, 42):   # 보증 = SJ 로고 1개 (두 브랜드 텍스트 병렬 폐지)
         pdf.txt(0, 244, 210, 6, "Aqunaris · ShinJinChemTech", 10, color=pdf.INK500, align="C")
-    pdf.txt(0, 284, 210, 6, f"{_today} · v1", 9, color=pdf.INK500, align="C", mono=True)
+    pdf.txt(0, 284, 210, 6, f"{_today} · v1 · sjct.kr", 9, color=pdf.INK500, align="C", mono=True)
 
     # ② 부속군 색상 색인 (+HEX 병기 §5-2)
     pdf.add_page()
@@ -5949,43 +5983,110 @@ elif mode == "🏪 아쿠나리스":
                     _iso9 = str((_bc.get(_c9, {}) or {}).get("이미지ISO", "") or "").strip()
                     if _iso9:                                   # [V53] ①등각(ISO)/등재 이미지 우선
                         _im9 = _aq_pil_from_any(download_image_by_id(_iso9))
-                        if _im9 is not None: return _im9
+                        if _im9 is not None: return _aq_trim_white(_im9)   # [V54] 흰 여백 크롭
                     _p9 = prod_by_code.get(_c9, {}) or {}       # ②차순위 — 드라이브 코드명/카탈로그 이미지
                     _fid9 = get_best_image_id(code, str(_p9.get("image_data") or _p9.get("image") or ""), _fm)
-                    return _aq_pil_from_any(download_image_by_id(_fid9)) if _fid9 else None
+                    _im9 = _aq_pil_from_any(download_image_by_id(_fid9)) if _fid9 else None
+                    return _aq_trim_white(_im9) if _im9 is not None else None
 
-            st.markdown("**📦 부품상자 스티커** — 이미지는 ①등각(ISO, AQ_Items 이미지ISO) ②제품 사진 순으로 적용")
-            _pr_sizes = st.multiselect("스티커 용지 (사이즈 · 아이라벨 규격코드 · 적용 부품상자)",
-                                       ["80", "98", "160"], default=["80", "98", "160"], key="aq_pr_sizes",
-                                       format_func=lambda s: AQ_STICKER_SPEC[s]["label"])
-            _pr_codes_raw = st.text_input("품목코드 필터 (쉼표 구분 — 비우면 스티커 대상 전체, 필요한 것만 뽑으면 용지 절약)",
-                                          key="aq_pr_codes")
-            if st.button("🖨️ 스티커 PDF 생성", key="aq_pr_st_go"):
-                _pr_filter = {c.strip().zfill(5) for c in _pr_codes_raw.split(",") if c.strip()} or None
-                with st.spinner("스티커 생성 중..."):
-                    try:
-                        _outs9 = {}
-                        for _s9 in (_pr_sizes or ["80", "98", "160"]):
-                            _grp9 = [r for r in aq_items
-                                     if str(r.get("스티커", "")).strip() == _s9
-                                     and (not _pr_filter or str(r.get("품목코드", "")).strip().zfill(5) in _pr_filter)]
-                            if _grp9:
-                                _outs9[_s9] = (aq_sticker_pdf_bytes(_grp9, _s9, _pr_bc_mode, _pr_imgof), len(_grp9))
-                        st.session_state["aq_pr_st_out"] = _outs9
-                        if not _outs9:
-                            st.warning("대상 품목이 없습니다 — AQ_Items 스티커 컬럼(80/98/160)과 필터를 확인하세요.")
-                    except Exception as e:
-                        st.error(f"스티커 생성 실패: {aq_err_str(e)}")
+            # ── [V54] 대상 사이트 (스티커·가이드북 공통) — 농협 선택 시 확정 배치 품목·변경된 상자 기준 ──
+            _pr_site_opts = ["(전체 품목)"] + [str(s.get("농협명", "")).strip()
+                                           for s in aq_load_sites() if str(s.get("농협명", "")).strip()]
+            _pr_site = st.selectbox("대상 사이트 — 농협 선택 시 그 농협의 **확정 배치 품목·상자 기준**으로 스티커·가이드북 생성",
+                                    _pr_site_opts, key="aq_pr_site")
+            _AQ_BOX2ST = {"6호": "80", "3호": "98", "431-1호": "160", "432호": "160"}   # 상자→스티커 용지
+            _sp_items, _sp_assign = {}, {}
+            if _pr_site != "(전체 품목)":
+                for _srow9 in aq_load_sites():
+                    if str(_srow9.get("농협명", "")).strip() == _pr_site:
+                        try:
+                            _pl9 = json.loads(str(_srow9.get("배치JSON") or "{}"))
+                            if isinstance(_pl9, dict):
+                                _sp_items = _pl9.get("items", {}) if isinstance(_pl9.get("items", {}), dict) else {}
+                                _sp_assign = _pl9.get("assign", {}) if isinstance(_pl9.get("assign", {}), dict) else {}
+                        except Exception:
+                            pass
+                if not _sp_assign:
+                    st.info(f"'{_pr_site}'에 저장된 확정 배치가 없어 전체 품목 기준으로 동작합니다 — 사이트 설계에서 배치 후 💾 저장하세요.")
+
+            st.markdown("**📦 부품상자 스티커** — 부속군에서 골라 **체크한 품목만** 생성 · 이미지 ①등각(ISO) ②제품 사진")
+            st.caption("용지: " + " / ".join(AQ_STICKER_SPEC[s]["label"] for s in ("80", "98", "160"))
+                       + " — 스티커 용지는 품목의 **상자** 기준 자동 결정(사이트에서 상자를 바꿨으면 바뀐 용지로).")
+            _pr_targets = []
+            for r in aq_items:
+                _c9t = str(r.get("품목코드", "")).strip().zfill(5)
+                if _sp_assign:   # 농협 확정 배치 품목만 + 사이트의 상자 오버라이드 반영
+                    _a9t = _sp_assign.get(_c9t)
+                    if not isinstance(_a9t, dict) or str(_a9t.get("rack", "")).startswith("🅥"):
+                        continue
+                    _bx9 = str((_sp_items.get(_c9t, {}) or {}).get("box") or r.get("기본상자") or "").strip()
+                else:
+                    _bx9 = str(r.get("기본상자") or "").strip()
+                _sz9 = _AQ_BOX2ST.get(_bx9) or (str(r.get("스티커", "")).strip()
+                                                if str(r.get("스티커", "")).strip() in AQ_STICKER_SPEC else "")
+                if not _sz9:
+                    continue
+                _pr_targets.append({"품목코드": _c9t, "품목명": str(r.get("품목명_AQ", "") or ""),
+                                    "규격": str(r.get("규격_AQ", "") or ""),
+                                    "부속군": str(r.get("진열분류", "") or "(미지정)"),
+                                    "상자": _bx9 or "-", "용지": AQ_STICKER_SPEC[_sz9]["label"], "_sz": _sz9})
+            if not _pr_targets:
+                st.info("스티커 대상 품목이 없습니다 — 상자(6호/3호/431-1호/432호) 또는 AQ_Items 스티커 컬럼을 확인하세요.")
+            else:
+                _pg_all9 = sorted({t["부속군"] for t in _pr_targets})
+                _pr_gsel = st.multiselect("부속군 필터", _pg_all9, default=_pg_all9, key=f"aq_pr_gsel_{_pr_site}")
+                _view9 = [t for t in _pr_targets if t["부속군"] in (_pr_gsel or _pg_all9)]
+                if "aq_pr_pick_ver" not in st.session_state: st.session_state["aq_pr_pick_ver"] = 0
+                _pc1, _pc2, _pc3 = st.columns([1, 1, 4])
+                if _pc1.button("✅ 전체 선택", key="aq_pr_all"):
+                    st.session_state["aq_pr_pick_def"] = True
+                    st.session_state["aq_pr_pick_ver"] += 1
+                    st.rerun()
+                if _pc2.button("⬜ 전체 해제", key="aq_pr_none"):
+                    st.session_state["aq_pr_pick_def"] = False
+                    st.session_state["aq_pr_pick_ver"] += 1
+                    st.rerun()
+                if not _view9:
+                    st.info("부속군 필터에 해당하는 품목이 없습니다.")
+                    df_pick_ed = None
+                else:
+                    _def9 = st.session_state.get("aq_pr_pick_def", True)
+                    _df_pick = pd.DataFrame([{"선택": _def9, **{k: t[k] for k in ("품목코드", "품목명", "규격", "부속군", "상자", "용지")}}
+                                             for t in _view9])
+                    df_pick_ed = st.data_editor(
+                        _df_pick, hide_index=True, height=290,
+                        key=f"aq_pr_pick_{_pr_site}_{st.session_state['aq_pr_pick_ver']}",
+                        disabled=["품목코드", "품목명", "규격", "부속군", "상자", "용지"],
+                        column_config={"선택": st.column_config.CheckboxColumn("선택", help="체크한 품목만 스티커 생성")})
+                _sel_codes9 = set()
+                if df_pick_ed is not None:
+                    _sel_codes9 = {str(_row9["품목코드"]).strip().zfill(5)
+                                   for _, _row9 in df_pick_ed.iterrows() if bool(_row9["선택"])}
+                _sz_of9 = {t["품목코드"]: t["_sz"] for t in _pr_targets}
+                st.caption(f"선택 {len(_sel_codes9)} / 표시 {len(_view9)} / 대상 {len(_pr_targets)}품목"
+                           + (f" · **{_pr_site} 확정 배치 기준**" if _sp_assign else " · 전체 품목 기준"))
+                if st.button("🖨️ 선택 품목 스티커 PDF 생성", key="aq_pr_st_go", type="primary"):
+                    with st.spinner("스티커 생성 중..."):
+                        try:
+                            _by_code9 = {str(r.get("품목코드", "")).strip().zfill(5): r for r in aq_items}
+                            _outs9 = {}
+                            for _s9 in ("80", "98", "160"):
+                                _grp9 = [_by_code9[c] for c in sorted(_sel_codes9)
+                                         if _sz_of9.get(c) == _s9 and c in _by_code9]
+                                if _grp9:
+                                    _outs9[_s9] = (aq_sticker_pdf_bytes(_grp9, _s9, _pr_bc_mode, _pr_imgof), len(_grp9))
+                            st.session_state["aq_pr_st_out"] = _outs9
+                            if not _outs9:
+                                st.warning("선택된 품목이 없습니다 — 체크박스를 확인하세요.")
+                        except Exception as e:
+                            st.error(f"스티커 생성 실패: {aq_err_str(e)}")
             for _s9, (_b9, _n9) in (st.session_state.get("aq_pr_st_out") or {}).items():
                 st.download_button(f"⬇️ {AQ_STICKER_SPEC[_s9]['label']} — {_n9}품목 ({len(_b9) // 1024}KB)", data=_b9,
                                    file_name=f"{AQ_STICKER_SPEC[_s9]['fname']}_{datetime.date.today().strftime('%Y%m%d')}.pdf",
                                    mime="application/pdf", key=f"aq_pr_st_dl_{_s9}")
 
             st.markdown("---")
-            st.markdown("**📖 농협 맞춤 가이드북** — 표지 + 부속군 색상 색인 + 군별 품목 카드")
-            _pr_site_opts = ["(전체 품목)"] + [str(s.get("농협명", "")).strip()
-                                           for s in aq_load_sites() if str(s.get("농협명", "")).strip()]
-            _pr_site = st.selectbox("사이트 (확정 배치가 저장된 농협 선택 시 그 배치 품목만 수록)", _pr_site_opts, key="aq_pr_site")
+            st.markdown("**📖 농협 맞춤 가이드북** — 표지 + 부속군 색상 색인 + 군별 품목 카드 (위 대상 사이트 기준)")
             if st.button("📖 가이드북 PDF 생성", key="aq_pr_gb_go"):
                 with st.spinner("가이드북 생성 중..."):
                     try:
@@ -6470,13 +6571,13 @@ elif mode == "🏪 아쿠나리스":
                 st.caption(f"상태: {_site.get('상태', '')} · 지역: {_site.get('지역', '')} · 설치일: {_site.get('설치일', '')}")
 
                 st.markdown("##### 1️⃣ 공간(랙) 구성 — 현장 실측 입력 (행 추가/삭제 가능)")
-                # [V43] 깊이 규칙: 랙 공통 깊이는 '깊이mm', 단별로 다르면 '단깊이mm'에 콤마 목록(단1=최하단부터).
-                st.caption("깊이mm = 랙 공통 깊이 · 단별로 다르면 **단깊이mm(콤마구분)**에 단1(최하단)부터 입력 (예: 450,450,450,300,300). 깊이가 얕은 단은 진열 계획에서 상자를 **가로** 방향으로 배치할 수 있습니다.")
+                # [V54] 단깊이 컬럼 폐지(대표님 지시 — 랙 깊이만 사용) · 새 행은 첫 랙 값 자동 상속
+                st.caption("📋 **새 랙 행은 명칭만 입력하면 첫 랙의 값(폭·깊이·총높이·단수·단두께·단높이)이 자동 적용**됩니다 — 현장 랙은 대부분 같은 규격이므로 다른 부분만 수정하세요. 저장 시 실제 값으로 기록됩니다.")
                 # [V49] 단높이 검증 규칙: 총높이mm 입력 시 Σ단높이 + 단두께×(단수−1) = 총높이 여야 배치에 반영.
                 st.caption("📐 **총높이mm**를 입력하면 단높이 합을 검증합니다 — Σ단높이 = 총높이 − 단두께×(단높이 개수−1). 예: 총 2000·두께 40·3단 → 단높이 합이 1920('800,800,320' ✓ / '800,700,320' ✗). 불일치 랙은 맞출 때까지 배치에서 제외됩니다.")
                 try: _racks_cur = json.loads(str(_site.get("랙구성JSON") or "[]"))
                 except Exception: _racks_cur = []
-                _rack_cols = ["명칭", "폭mm", "깊이mm", "총높이mm", "단수", "단두께mm", "단높이mm(콤마구분)", "단깊이mm(콤마구분)", "비고"]
+                _rack_cols = ["명칭", "폭mm", "깊이mm", "총높이mm", "단수", "단두께mm", "단높이mm(콤마구분)", "비고"]   # [V54] 단깊이 폐지
                 _df_racks_in = pd.DataFrame(_racks_cur)
                 for _c in _rack_cols:
                     if _c not in _df_racks_in.columns: _df_racks_in[_c] = ""
@@ -6492,11 +6593,32 @@ elif mode == "🏪 아쿠나리스":
                         "단수": st.column_config.NumberColumn(format="%d"),
                         "단두께mm": st.column_config.NumberColumn(format="%d", help="선반(단) 판 두께 — 예 40 (빈칸=0)"),
                     })
+                # ── [V54] 첫 랙 값 자동 상속 — 이후 모든 검증·배치·저장은 df_racks_eff 기준 ──
+                df_racks_eff = df_racks_ed.copy()
+                _base_r = None
+                for _bi9, _br9 in df_racks_eff.iterrows():
+                    if pd.notna(_br9.get("폭mm")) and str(_br9.get("단높이mm(콤마구분)") or "").strip():
+                        _base_r = _br9; break
+                if _base_r is not None:
+                    for _bi9, _br9 in df_racks_eff.iterrows():
+                        _has_any9 = bool(str(_br9.get("명칭") or "").strip()) or pd.notna(_br9.get("폭mm"))
+                        if not _has_any9 or _bi9 == _base_r.name: continue
+                        for _fc9 in ["폭mm", "깊이mm", "총높이mm", "단수", "단두께mm"]:
+                            if pd.isna(_br9.get(_fc9)):
+                                df_racks_eff.at[_bi9, _fc9] = _base_r.get(_fc9)
+                        # 단높이는 단수가 첫 랙과 같을 때만 상속(다른 단수는 직접 입력)
+                        if not str(_br9.get("단높이mm(콤마구분)") or "").strip():
+                            try: _cnt_b9 = int(float(df_racks_eff.at[_bi9, "단수"] or 0))
+                            except Exception: _cnt_b9 = 0
+                            try: _cnt_a9 = int(float(_base_r.get("단수") or 0))
+                            except Exception: _cnt_a9 = 0
+                            if _cnt_b9 == 0 or _cnt_b9 == _cnt_a9:
+                                df_racks_eff.at[_bi9, "단높이mm(콤마구분)"] = _base_r.get("단높이mm(콤마구분)")
                 # [V49] 랙 총높이 검증 — 불일치 랙은 배치(_rk_list)에서 제외
                 _rack_errs, _rack_notes, _bad_racks, _rack_reqs = [], [], set(), []   # [V53] 필요 Σ단높이 안내
-                for _, _rr in df_racks_ed.iterrows():
+                for _ri9, _rr in df_racks_eff.iterrows():
                     _nm9 = str(_rr.get("명칭") or "").strip()
-                    if not _nm9: continue
+                    _lb9 = _nm9 or f"{_ri9 + 1}행"   # [V54] 이름 없는 새 행도 필요합계 안내
                     try: _tot9 = int(float(_rr.get("총높이mm") or 0))
                     except Exception: _tot9 = 0
                     try: _thk9 = int(float(_rr.get("단두께mm") or 0))
@@ -6505,20 +6627,21 @@ elif mode == "🏪 아쿠나리스":
                         _hs9 = [int(float(x)) for x in str(_rr.get("단높이mm(콤마구분)") or "").split(",") if str(x).strip()]
                     except Exception:
                         _hs9 = []
+                    try: _cnt9 = int(float(_rr.get("단수") or 0))
+                    except Exception: _cnt9 = 0
+                    if _tot9 > 0 and (_cnt9 or _hs9):   # [V53] 총높이·단수·단두께 입력 → 필요 Σ단높이 즉시 안내
+                        _n9c = _cnt9 or len(_hs9)
+                        _req9 = _tot9 - _thk9 * max(0, _n9c - 1)
+                        _rack_reqs.append(f"{_lb9}: 필요 Σ단높이 {_req9}mm"
+                                          + (f" (현재 {sum(_hs9)})" if _hs9 else ""))
+                    if not _nm9: continue
                     if _tot9 > 0 and _hs9:
                         _eff9 = _tot9 - _thk9 * (len(_hs9) - 1)
                         if sum(_hs9) != _eff9:
                             _bad_racks.add(_nm9)
                             _rack_errs.append(f"**{_nm9}**: 단높이 합 {sum(_hs9)} ≠ {_eff9} (총 {_tot9} − 두께 {_thk9}×{len(_hs9) - 1})")
-                    try: _cnt9 = int(float(_rr.get("단수") or 0))
-                    except Exception: _cnt9 = 0
                     if _cnt9 and _hs9 and _cnt9 != len(_hs9):
                         _rack_notes.append(f"{_nm9}: 단수 {_cnt9} ≠ 단높이 {len(_hs9)}개")
-                    if _tot9 > 0 and (_cnt9 or _hs9):   # [V53] 총높이·단수·단두께 입력 → 필요 Σ단높이 즉시 안내
-                        _n9c = _cnt9 or len(_hs9)
-                        _req9 = _tot9 - _thk9 * max(0, _n9c - 1)
-                        _rack_reqs.append(f"{_nm9}: 필요 Σ단높이 {_req9}mm"
-                                          + (f" (현재 {sum(_hs9)})" if _hs9 else ""))
                 if _rack_reqs:
                     st.caption("📐 **필요 단높이 합** — 총높이 − 단두께×(단수−1): " + " · ".join(_rack_reqs))
                 if _rack_errs:
@@ -6660,7 +6783,7 @@ elif mode == "🏪 아쿠나리스":
                 if True:   # [V47] expander→상시 표시(내부 들여쓰기 보존)
                     st.caption("배치의 단위는 **단(선반)**입니다. 용도군(진열분류)별로 단에 군집 배치하고, 단 아래 **색상 자석테이프**로 영역을 표시합니다(색=분류별 지정색). 섹션(세로 열) 개념은 표준화 참고 전용입니다.")
                     _rk_list = []
-                    for _, _rr in df_racks_ed.iterrows():
+                    for _, _rr in df_racks_eff.iterrows():   # [V54] 상속 적용본
                         _nm3 = str(_rr.get("명칭") or "").strip()
                         if not _nm3: continue
                         if _nm3 in _bad_racks: continue   # [V49] 단높이 합 검증 실패 랙 제외
@@ -6740,6 +6863,8 @@ elif mode == "🏪 아쿠나리스":
                                                     _asg9[_c9o] = (_cur9[0], _cur9[1], _rw9, _n9 - 1)
                                                 else:
                                                     _asg9.pop(_c9o, None)
+                                            elif _op9.get("t") == "box" and _op9.get("box"):   # [V54] 상자 변경
+                                                st.session_state.setdefault(f"aq_boxov_{sel_site}", {})[_c9o] = str(_op9["box"])
                                         except Exception:
                                             pass
                                         _done_ids.add(_op9.get("id"))
@@ -6811,7 +6936,9 @@ elif mode == "🏪 아쿠나리스":
                                     if not _aq_use(r["품목코드"]): continue   # [V48] 공급 제외 반영
                                     _c4 = r["품목코드"]
                                     _b4 = ""
-                                    if edited_plan is not None:               # [V49] 진열 계획 편집값 우선
+                                    _bov4 = st.session_state.get(f"aq_boxov_{sel_site}", {})
+                                    if _c4 in _bov4: _b4 = str(_bov4[_c4])    # [V54] 그림 더블클릭 상자 변경 최우선
+                                    if not _b4 and edited_plan is not None:   # [V49] 진열 계획 편집값 우선
                                         _mb4 = edited_plan.loc[edited_plan["품목코드"] == _c4, "상자"]
                                         if len(_mb4): _b4 = str(_mb4.iloc[0] or "").strip()
                                     if not _b4:
@@ -6824,6 +6951,17 @@ elif mode == "🏪 아쿠나리스":
                                     _rows_asg.append({"품목코드": _c4, "품목명": str(r.get("품목명_AQ", "") or ""), "분류": g,
                                                       "상자": _b4, "랙": _rk4, "단": int(_sh4 or 0), "줄": int(_rw4 or 1),
                                                       "상자수": int(_n4 or 1)})
+                            # [V54] 자유 배치 등록 품목은 분류 미선택/미지정이어도 표에 포함 — 랙·단 지정 가능해야 배치됨
+                            _added4 = {rp["품목코드"] for rp in _rows_asg}
+                            for _cf4 in _free_live:
+                                if _cf4 in _added4: continue
+                                _rf4 = _aq_by_code.get(_cf4, {}) or {}
+                                _af4 = _asg_cur.get(_cf4, ("", 0, 1))
+                                _rows_asg.append({"품목코드": _cf4, "품목명": str(_rf4.get("품목명_AQ", "") or _cf4),
+                                                  "분류": str(_rf4.get("진열분류", "") or "(미지정)"),
+                                                  "상자": "(자유)", "랙": _af4[0], "단": int(_af4[1] or 0),
+                                                  "줄": int((_af4[2] if len(_af4) > 2 else 1) or 1),
+                                                  "상자수": int((_af4[3] if len(_af4) > 3 else 1) or 1)})
                             _rk_names = [rk["명칭"] for rk in _rk_all]   # [V51] 가상랙 포함
                             _box_opts4 = sorted(set(aq_box_names) | {rp["상자"] for rp in _rows_asg if rp["상자"] and rp["상자"] != "(자유)"})
                             df_asg = st.data_editor(
@@ -6897,6 +7035,8 @@ elif mode == "🏪 아쿠나리스":
                                     _m9["box"] = _t9[2]
                                     try: _m9["cap"] = str(aq_caps.get(_c9, {}).get(_t9[2], ("", ""))[0] or "")
                                     except Exception: _m9["cap"] = ""
+                                    if not _m9["cap"]:
+                                        _m9["cap"] = "없음"   # [V54] 상자 수용량 기록 없음 → '수량정보 없음' 표기
                                     if _t9[2] == "루퍼젯팩":   # [V53] 루퍼젯 본품 — 박스 전면에 뒷표기 노출
                                         _nm_t9 = str(_r9.get("품목명_AQ", "") or "").split()
                                         _m9["tag"] = _nm_t9[-1] if _nm_t9 else ""
@@ -6907,7 +7047,8 @@ elif mode == "🏪 아쿠나리스":
                         _svg_all9 = aq_racks_svg_all(_rk_show, _seq_by_shelf, info=_info_map)
                         if _svg_all9:
                             _nonce9 = f"{st.session_state['aq_ops_salt']}|{sel_site}"   # [V53] ver 제외 — 늦은 조작 유실 방지(op id 중복 차단)
-                            _html9, _hpx9 = aq_svg_hover_html(_svg_all9, interactive=True, nonce=_nonce9)   # [V51]
+                            _html9, _hpx9 = aq_svg_hover_html(_svg_all9, interactive=True, nonce=_nonce9,
+                                                              boxes=_box_opts4)   # [V51] — [V54] 더블클릭 상자 변경
                             _components9.html(_html9, height=min(_hpx9 + 34, 960), scrolling=True)
                             _cb1, _cb2 = st.columns([5, 2])
                             with _cb1:
@@ -7026,7 +7167,7 @@ elif mode == "🏪 아쿠나리스":
                 with st.expander("📏 표준 배치 검증 (V1 섹션 위치 기준 — 표준화 참고 전용)", expanded=(sel_site == AQ_STD_SITE)):
                     _dims_v = aq_box_dims_map(aq_boxes)
                     _rack_h_map, _inner_by_sec = {}, {}
-                    for _, _rr in df_racks_ed.iterrows():
+                    for _, _rr in df_racks_eff.iterrows():   # [V54] 상속 적용본
                         _nm2 = str(_rr.get("명칭") or "")
                         if "섹션" not in _nm2: continue
                         _digits = "".join(ch for ch in _nm2 if ch.isdigit())
@@ -7069,7 +7210,7 @@ elif mode == "🏪 아쿠나리스":
                 if st.button("💾 사이트 저장 (랙 구성 + 진열 계획)", type="primary", key=f"aq_site_save_{sel_site}"):
                     try:
                         _racks_out = []
-                        for _, _rr in df_racks_ed.iterrows():
+                        for _, _rr in df_racks_eff.iterrows():   # [V54] 상속 적용본 저장 = 실제 값으로 기록
                             _d = {}
                             for _c in _rack_cols:
                                 _v = _rr.get(_c)
@@ -7078,7 +7219,7 @@ elif mode == "🏪 아쿠나리스":
                             for _c in ["폭mm", "깊이mm", "총높이mm", "단수", "단두께mm"]:   # [V49] 신규 컬럼 포함
                                 try: _d[_c] = int(float(_d[_c])) if str(_d[_c]).strip() else ""
                                 except Exception: _d[_c] = str(_d[_c])
-                            for _c in ["명칭", "단높이mm(콤마구분)", "단깊이mm(콤마구분)", "비고"]:
+                            for _c in ["명칭", "단높이mm(콤마구분)", "비고"]:   # [V54] 단깊이 폐지
                                 _d[_c] = str(_d[_c])
                             _racks_out.append(_d)
                         _items_out = {}

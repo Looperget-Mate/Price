@@ -1278,6 +1278,20 @@ def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=
                     out.append(f'<text x="{bx + bw*scale/2:.1f}" y="{by + bh*scale/2 + _fs9*0.36:.1f}" '
                                f'font-size="{_fs9:.1f}" text-anchor="middle" font-weight="bold" '
                                f'fill="#191414" pointer-events="none">{_aq_esc(_tag9)}</text>')
+                if attrs:   # [V56] 전체화면 라벨(품목명·규격) — 평소 숨김, ⛶ 진입 시 JS가 표시
+                    _lume9 = _aq_lum_txt(_aq_hexrgb(AQ_GROUP_COLORS.get(it[1])))
+                    _lfill9 = f"rgb({_lume9[0]},{_lume9[1]},{_lume9[2]})"
+                    _lfs9 = max(3.0, min(6.0, bw * scale * 0.155))
+                    _nm9l = str(meta.get("name") or it[0])[:14]
+                    _sp9l = str(meta.get("spec") or "")[:12]
+                    if not _tag9:   # 루퍼젯 본품은 뒷표기가 이미 중앙 표시 → 규격만 추가
+                        out.append(f'<text class="aqlbl" x="{bx + bw*scale/2:.1f}" y="{by + bh*scale/2 - _lfs9*0.15:.1f}" '
+                                   f'font-size="{_lfs9:.1f}" text-anchor="middle" fill="{_lfill9}" '
+                                   f'pointer-events="none" style="display:none">{_aq_esc(_nm9l)}</text>')
+                    if _sp9l:
+                        out.append(f'<text class="aqlbl" x="{bx + bw*scale/2:.1f}" y="{by + bh*scale/2 + _lfs9*1.05:.1f}" '
+                                   f'font-size="{_lfs9 * 0.9:.1f}" text-anchor="middle" fill="{_lfill9}" '
+                                   f'pointer-events="none" style="display:none">{_aq_esc(_sp9l)}</text>')
             tape.append((cx, cx + cw, AQ_GROUP_COLORS.get(stack[0][1], "#9AA0A6")))
         for tx0, tx1, col in tape:   # 색상 자석테이프(단 전면 하단 밴드)
             out.append(f'<rect x="{x0 + frame_t*scale + tx0*scale:.1f}" y="{base - 3:.1f}" width="{(tx1-tx0)*scale:.1f}" height="3.4" fill="{col}"/>')
@@ -1385,7 +1399,12 @@ function aqFull(){var w=document.getElementById('aqwrap');
  if(w.requestFullscreen){w.requestFullscreen().catch(function(){aqNewTab();});}else{aqNewTab();}}
 function aqNewTab(){var t=window.open('','_blank');if(!t)return;
  t.document.write('<html><head><title>Aqunaris 배치</title></head><body style="background:#fff;">'
- +document.getElementById('aqzoom').innerHTML+'</body></html>');t.document.close();}
+ +document.getElementById('aqzoom').innerHTML
+ +'<script>[].slice.call(document.querySelectorAll(".aqlbl")).forEach(function(x){x.style.display="block";});<\\/script>'
+ +'</body></html>');t.document.close();}
+document.addEventListener('fullscreenchange',function(){
+ var on=!!document.fullscreenElement;
+ [].slice.call(document.querySelectorAll('.aqlbl')).forEach(function(x){x.style.display=on?'block':'none';});});
 function aqGrp(el){return aqBoxes.filter(function(b){return b.dataset.code===el.dataset.code
  &&b.dataset.rack===el.dataset.rack&&b.dataset.shelf===el.dataset.shelf;});}
 function aqPush(op){op.id=Date.now()+'-'+(++aqSeq);aqOps.push(op);
@@ -6887,11 +6906,24 @@ elif mode == "🏪 아쿠나리스":
                         AQ_VIRT = "🅥 가상랙"
                         if "aq_ops_salt" not in st.session_state:   # 세션 고유 논스 — 이전 세션 조작 재적용 방지
                             st.session_state["aq_ops_salt"] = str(int(time.time() * 1000))
-                        _virt_on = st.checkbox(
-                            "🅥 가상랙 표시 — 꽉 찬 랙의 상자를 잠시 옮겨 둘 임시 공간 (견적·적합판정·자동배치와 무관, 배치는 저장됨)",
-                            value=True, key=f"aq_virt_{sel_site}")
-                        _rk_all = ([{"명칭": AQ_VIRT, "내측폭": 900, "단높이": [600, 600, 600],
-                                     "단깊이": [], "깊이": 450}] if _virt_on else []) + _rk_list   # [V53] 가상랙 맨 앞 — 스크롤 없이 항상 보이게
+                        _vc1, _vc2 = st.columns([3, 1.4])
+                        with _vc1:
+                            _virt_on = st.checkbox(
+                                "🅥 가상랙 표시 — 꽉 찬 랙의 상자를 잠시 옮겨 둘 임시 공간 (견적·적합판정·자동배치와 무관, 배치는 저장됨)",
+                                value=True, key=f"aq_virt_{sel_site}")
+                        with _vc2:
+                            _virt_pos = st.radio("가상랙 위치", ["맨 앞", "맨 뒤"], horizontal=True,
+                                                 key=f"aq_virt_pos_{sel_site}")   # [V56] 즉시 이동
+                        _vp_prev9 = st.session_state.get(f"aq_vp_prev_{sel_site}")
+                        if _vp_prev9 != _virt_pos:   # 위치 선택이 바뀌면 드래그 순서 기록에서 가상랙 제거(라디오 우선)
+                            st.session_state[f"aq_vp_prev_{sel_site}"] = _virt_pos
+                            _ro9 = st.session_state.get(f"aq_rkord_{sel_site}")
+                            if _ro9:
+                                st.session_state[f"aq_rkord_{sel_site}"] = [n for n in _ro9 if n != AQ_VIRT]
+                        _virt_rk9 = [{"명칭": AQ_VIRT, "내측폭": 900, "단높이": [600, 600, 600],
+                                      "단깊이": [], "깊이": 450}]
+                        _rk_all = (((_virt_rk9 if _virt_pos == "맨 앞" else []) + _rk_list
+                                    + (_virt_rk9 if _virt_pos == "맨 뒤" else [])) if _virt_on else _rk_list)
                         if _HAS_JS_EVAL:
                             # [V55] 근본 수정: streamlit_js_eval 프론트는 js_expressions "문자열이 바뀔 때만"
                             #  재평가한다(index.html: if (new_value !== data_from_streamlit)). 고정 문자열이라
@@ -6920,6 +6952,14 @@ elif mode == "🏪 아쿠나리스":
                                 _new_ops = [o for o in _ops_pl["ops"]
                                             if isinstance(o, dict) and o.get("id") and o["id"] not in _done_ids]
                                 if _new_ops:
+                                    # [V56] 조작 전 상태 스냅샷 → ↩️ 되돌리기 스택(최근 20건), 새 조작 시 redo 비움
+                                    _un9 = st.session_state.setdefault(f"aq_undo_{sel_site}", [])
+                                    _un9.append({"asg": dict(st.session_state.get(_asg_key, {})),
+                                                 "boxov": dict(st.session_state.get(f"aq_boxov_{sel_site}", {})),
+                                                 "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or [])})
+                                    if len(_un9) > 20:
+                                        del _un9[0]
+                                    st.session_state[f"aq_redo_{sel_site}"] = []
                                     _asg9 = dict(st.session_state.get(_asg_key, {}))
                                     for _op9 in _new_ops:
                                         try:
@@ -7144,11 +7184,40 @@ elif mode == "🏪 아쿠나리스":
                             _html9, _hpx9 = aq_svg_hover_html(_svg_all9, interactive=True, nonce=_nonce9,
                                                               boxes=_box_opts4)   # [V51] — [V54] 더블클릭 상자 변경
                             _components9.html(_html9, height=min(_hpx9 + 34, 960), scrolling=True)
-                            _cb1, _cb2 = st.columns([5, 2])
+                            _cb1, _cbU, _cbR, _cb2 = st.columns([3.4, 1, 1, 1.5])
                             with _cb1:
-                                st.caption("🖱️ 호버=정보 · **드래그=다른 랙/단·가상랙으로 이동**(같은 품목 상자 묶음) · "
-                                           "**더블클릭=복제/삭제** · 우상단 **⛶ 전체화면**·＋/− 줌. "
-                                           "조작은 1~2초 내 자동 반영 — 안 되면 옆의 🔄 버튼을 누르세요.")
+                                st.caption("🖱️ 호버=정보 · **드래그=이동**(상자·랙 이름≡) · **더블클릭=복제/삭제/상자 변경** · "
+                                           "**⛶ 전체화면=모든 상자에 품명·규격 표시**. 조작은 1~3초 내 자동 반영 — 안 되면 🔄.")
+                            _un_st9 = st.session_state.get(f"aq_undo_{sel_site}") or []
+                            _rd_st9 = st.session_state.get(f"aq_redo_{sel_site}") or []
+                            with _cbU:
+                                if st.button(f"↩️ 되돌리기({len(_un_st9)})", key=f"aq_undo_btn_{sel_site}",
+                                             disabled=not _un_st9,
+                                             help="그림 조작(이동·복제·삭제·상자 변경·랙 순서)을 한 단계 되돌립니다."):
+                                    _rd9 = st.session_state.setdefault(f"aq_redo_{sel_site}", [])
+                                    _rd9.append({"asg": dict(st.session_state.get(_asg_key, {})),
+                                                 "boxov": dict(st.session_state.get(f"aq_boxov_{sel_site}", {})),
+                                                 "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or [])})
+                                    _sn9 = _un_st9.pop()
+                                    st.session_state[_asg_key] = _sn9["asg"]
+                                    st.session_state[f"aq_boxov_{sel_site}"] = _sn9["boxov"]
+                                    st.session_state[f"aq_rkord_{sel_site}"] = _sn9["rkord"]
+                                    st.session_state[_ver_key] += 1
+                                    st.rerun()
+                            with _cbR:
+                                if st.button(f"↪️ 다시 실행({len(_rd_st9)})", key=f"aq_redo_btn_{sel_site}",
+                                             disabled=not _rd_st9,
+                                             help="되돌린 조작을 다시 적용합니다."):
+                                    _un9b = st.session_state.setdefault(f"aq_undo_{sel_site}", [])
+                                    _un9b.append({"asg": dict(st.session_state.get(_asg_key, {})),
+                                                  "boxov": dict(st.session_state.get(f"aq_boxov_{sel_site}", {})),
+                                                  "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or [])})
+                                    _sn9 = _rd_st9.pop()
+                                    st.session_state[_asg_key] = _sn9["asg"]
+                                    st.session_state[f"aq_boxov_{sel_site}"] = _sn9["boxov"]
+                                    st.session_state[f"aq_rkord_{sel_site}"] = _sn9["rkord"]
+                                    st.session_state[_ver_key] += 1
+                                    st.rerun()
                             with _cb2:
                                 if st.button("🔄 배치 조작 반영", key=f"aq_ops_apply_{sel_site}",
                                              help="그림에서 드래그·더블클릭한 조작을 표와 배치에 반영합니다."):

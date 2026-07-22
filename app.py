@@ -1213,6 +1213,54 @@ def _aq_esc(s):
     """[V49] SVG/HTML 속성용 이스케이프."""
     return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
 
+_AQ_CW = {   # [V57] 문자별 폭(em) — 크롬 sans-serif(Arial+맑은고딕) 실측 보정
+    "m": 0.89, "M": 0.90, "w": 0.75, "W": 0.95, "i": 0.25, "l": 0.25, "j": 0.25, "t": 0.30,
+    "f": 0.30, "r": 0.36, " ": 0.35, ".": 0.30, ",": 0.30, "*": 0.45, "~": 0.72, "/": 0.30,
+    "-": 0.36, "(": 0.36, ")": 0.36, "·": 0.36, "'": 0.20, ":": 0.30,
+}
+
+def _aq_txt_w(s, fs=1.0):
+    """[V57] SVG text 근사 폭(px). 한글·전각=1.0em · 숫자 0.57 · 대문자 0.62 · 소문자 0.52(표 우선).
+    실측(크롬) 대비 5% 여유를 둬 '박스 밖으로 나가는' 오차 방향을 차단한다."""
+    w = 0.0
+    for ch in str(s):
+        if ord(ch) > 0x2E80: w += 1.0
+        elif ch in _AQ_CW:   w += _AQ_CW[ch]
+        elif ch.isdigit():   w += 0.57
+        elif ch.isupper():   w += 0.62
+        else:                w += 0.52
+    return w * fs * 1.05
+
+def _aq_strip_paren(s):
+    """[V57] 괄호부 제거 — '밸브바디(조임식연결구)' → '밸브바디'. 괄호만 남으면 원문 유지."""
+    t, out, depth = str(s), [], 0
+    for ch in t:
+        if ch in "(（[": depth += 1
+        elif ch in ")）]":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            out.append(ch)
+    r = "".join(out).strip(" ·-/,")
+    return r or t.strip()
+
+def _aq_fit_label(s, max_px, fs, min_fs=2.4):
+    """[V57] 박스 폭 안에 들어가도록 (텍스트, 폰트크기) 조정.
+    ① 괄호부 제거 ② 폰트 축소(min_fs까지) ③ 그래도 넘치면 말줄임(…). 안 들어가면 ('', fs)."""
+    t = str(s).strip()
+    if not t or max_px <= 1: return "", fs
+    if _aq_txt_w(t, fs) > max_px:
+        t2 = _aq_strip_paren(t)
+        if t2 and _aq_txt_w(t2, fs) < _aq_txt_w(t, fs): t = t2
+    w1 = _aq_txt_w(t, 1.0) or 1.0
+    if w1 * fs > max_px:
+        fs = max(min_fs, max_px / w1)
+    fs = int(fs * 10) / 10.0 or min_fs     # SVG에 소수 1자리로 찍히므로 내림 = 반올림 확대 방지
+    if _aq_txt_w(t, fs) > max_px:          # 최소 폰트에서도 넘침 → 말줄임
+        while t and _aq_txt_w(t + "…", fs) > max_px:
+            t = t[:-1]
+        t = (t + "…") if t else ""
+    return t, fs
+
 def _aq_hover_attrs(it, info):
     """[V49] 상자 rect의 호버 툴팁 데이터 속성. info={코드:{name,spec,box,cap,...}} 없으면 빈 문자열."""
     if not info: return ""
@@ -1273,28 +1321,60 @@ def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=
                     out.append(f'<rect x="{bx:.1f}" y="{by:.1f}" '
                                f'width="{bw*scale:.1f}" height="{bh*scale:.1f}" fill="{col}" fill-opacity="0.72" stroke="#191414" stroke-width="0.6"{attrs}/>')
                 _tag9 = str(meta.get("tag") or "")   # [V53] 루퍼젯 본품 뒷표기(P13B/P20/P25/H20/H25) — 옐로 위 블랙
-                if _tag9:
-                    _fs9 = max(4.5, min(9.0, bw * scale * 0.30))
-                    out.append(f'<text x="{bx + bw*scale/2:.1f}" y="{by + bh*scale/2 + _fs9*0.36:.1f}" '
-                               f'font-size="{_fs9:.1f}" text-anchor="middle" font-weight="bold" '
-                               f'fill="#191414" pointer-events="none">{_aq_esc(_tag9)}</text>')
+                _cx9 = bx + bw * scale / 2
+                _bwin9 = max(2.0, bw * scale - 2.4)   # [V57] 좌우 여백 제외한 실제 쓸 수 있는 폭
+                # 아래쪽은 맨 밑 상자만 색상 자석테이프(3.4px)·단 구분선(1.6px)에 가려지므로 그만큼 더 비운다
+                _rb9 = 4.0 if li == 0 else 0.9
+                _bhin9 = max(2.0, bh * scale - 0.9 - _rb9)
+                _cy9 = by + 0.9 + _bhin9 / 2          # 글자 세로 기준선 = 가려지지 않는 영역의 중심
+                if _tag9:   # [V57] 평소(비전체화면) 뒷표기 — 전체화면에서는 aqlbl 라벨로 교체(JS가 숨김)
+                    _tg9t, _tg9f = _aq_fit_label(_tag9, _bwin9,
+                                                 max(4.5, min(9.0, bw * scale * 0.30, _bhin9 * 0.62)), min_fs=3.2)
+                    if _tg9t:
+                        out.append(f'<text class="aqtag" x="{_cx9:.1f}" y="{_cy9 + _tg9f*0.36:.1f}" '
+                                   f'font-size="{_tg9f:.1f}" text-anchor="middle" font-weight="bold" '
+                                   f'fill="#191414" pointer-events="none">{_aq_esc(_tg9t)}</text>')
                 if attrs:   # [V56] 전체화면 라벨(품목명·규격) — 평소 숨김, ⛶ 진입 시 JS가 표시
+                    #        [V57] 상자 안에 반드시 들어가도록 폭·높이 기준 자동 축소 + 괄호부 제거 + 말줄임
                     _lume9 = _aq_lum_txt(_aq_hexrgb(AQ_GROUP_COLORS.get(it[1])))
                     _lfill9 = f"rgb({_lume9[0]},{_lume9[1]},{_lume9[2]})"
-                    _lfs9 = max(3.0, min(6.0, bw * scale * 0.155))
-                    _nm9l = str(meta.get("name") or it[0])[:14]
-                    _sp9l = str(meta.get("spec") or "")[:12]
-                    if not _tag9:   # 루퍼젯 본품은 뒷표기가 이미 중앙 표시 → 규격만 추가
-                        out.append(f'<text class="aqlbl" x="{bx + bw*scale/2:.1f}" y="{by + bh*scale/2 - _lfs9*0.15:.1f}" '
-                                   f'font-size="{_lfs9:.1f}" text-anchor="middle" fill="{_lfill9}" '
-                                   f'pointer-events="none" style="display:none">{_aq_esc(_nm9l)}</text>')
-                    if _sp9l:
-                        out.append(f'<text class="aqlbl" x="{bx + bw*scale/2:.1f}" y="{by + bh*scale/2 + _lfs9*1.05:.1f}" '
-                                   f'font-size="{_lfs9 * 0.9:.1f}" text-anchor="middle" fill="{_lfill9}" '
-                                   f'pointer-events="none" style="display:none">{_aq_esc(_sp9l)}</text>')
+                    _sp9l = str(meta.get("spec") or "")
+                    _base9 = max(2.6, min(7.0, bw * scale * 0.16))
+                    _l1s9 = _base9 * (1.3 if _tag9 else 1.0)   # 루퍼젯 본품은 뒷표기를 조금 크게
+                    _l2s9 = _base9 * 0.88 if _sp9l else 0.0
+                    # 실측(크롬) 글자 상자 = 위 1.16em · 아래 0.30em · 줄간격 0.22em → 상자 높이를 넘으면 비례 축소
+                    if _l2s9:
+                        _ink9 = 1.16 * _l1s9 + 0.22 * _l1s9 + 1.30 * _l2s9
+                        if _ink9 > _bhin9:
+                            _k9 = _bhin9 / _ink9
+                            if _l1s9 * _k9 < 2.4:   # 두 줄이면 너무 작아짐 → 규격 생략하고 한 줄을 크게
+                                _sp9l, _l2s9 = "", 0.0
+                            else:
+                                _l1s9, _l2s9 = _l1s9 * _k9, _l2s9 * _k9
+                    if not _l2s9 and 1.46 * _l1s9 > _bhin9:
+                        _l1s9 = _bhin9 / 1.46
+                    if _tag9:   # 루퍼젯 본품 = 뒷표기(굵게) + 규격 — 큰 글씨 겹침 제거
+                        _l1t9, _l1f9 = _aq_fit_label(_tag9, _bwin9, _l1s9, min_fs=1.8)
+                        _l1w9 = "bold"
+                        _l1c9 = "#191414"   # 옐로 상자 위 블랙 유지
+                    else:
+                        _l1t9, _l1f9 = _aq_fit_label(str(meta.get("name") or it[0]), _bwin9, _l1s9, min_fs=1.8)
+                        _l1w9, _l1c9 = "normal", _lfill9
+                    _l2t9, _l2f9 = _aq_fit_label(_sp9l, _bwin9, _l2s9, min_fs=1.8) if _sp9l else ("", 0.0)
+                    _gap9 = _l1f9 * 0.22
+                    _tot9 = 1.16 * _l1f9 + ((_gap9 + 1.30 * _l2f9) if _l2t9 else 0.30 * _l1f9)
+                    _y19 = _cy9 - _tot9 / 2 + 1.16 * _l1f9
+                    if _l1t9:
+                        out.append(f'<text class="aqlbl" x="{_cx9:.1f}" y="{_y19:.1f}" '
+                                   f'font-size="{_l1f9:.1f}" text-anchor="middle" fill="{_l1c9}" '
+                                   f'font-weight="{_l1w9}" pointer-events="none" style="display:none">{_aq_esc(_l1t9)}</text>')
+                    if _l2t9:
+                        out.append(f'<text class="aqlbl" x="{_cx9:.1f}" y="{_y19 + _gap9 + _l2f9:.1f}" '
+                                   f'font-size="{_l2f9:.1f}" text-anchor="middle" fill="{_lfill9}" '
+                                   f'pointer-events="none" style="display:none">{_aq_esc(_l2t9)}</text>')
             tape.append((cx, cx + cw, AQ_GROUP_COLORS.get(stack[0][1], "#9AA0A6")))
         for tx0, tx1, col in tape:   # 색상 자석테이프(단 전면 하단 밴드)
-            out.append(f'<rect x="{x0 + frame_t*scale + tx0*scale:.1f}" y="{base - 3:.1f}" width="{(tx1-tx0)*scale:.1f}" height="3.4" fill="{col}"/>')
+            out.append(f'<rect class="aqtape" x="{x0 + frame_t*scale + tx0*scale:.1f}" y="{base - 3:.1f}" width="{(tx1-tx0)*scale:.1f}" height="3.4" fill="{col}"/>')
     return pw, ph
 
 def aq_rack_svg(rack_name, inner, shelf_hs, shelf_seqs, frame_t=19, scale=0.22, info=None):
@@ -1400,11 +1480,23 @@ function aqFull(){var w=document.getElementById('aqwrap');
 function aqNewTab(){var t=window.open('','_blank');if(!t)return;
  t.document.write('<html><head><title>Aqunaris 배치</title></head><body style="background:#fff;">'
  +document.getElementById('aqzoom').innerHTML
- +'<script>[].slice.call(document.querySelectorAll(".aqlbl")).forEach(function(x){x.style.display="block";});<\\/script>'
+ +'<script>[].slice.call(document.querySelectorAll(".aqlbl")).forEach(function(x){x.style.display="block";});'
+ +'[].slice.call(document.querySelectorAll(".aqtag")).forEach(function(x){x.style.display="none";});<\\/script>'
  +'</body></html>');t.document.close();}
+var aqZpre=null;
+function aqFitZoom(){/* [V57] 전체화면 진입 시 화면에 꽉 차게 자동 확대 — 작은 라벨도 읽히게 */
+ var zw=document.getElementById('aqzoom'),s=zw.firstElementChild;if(!s)return;
+ var w=parseFloat(s.getAttribute('width'))||zw.scrollWidth,h=parseFloat(s.getAttribute('height'))||zw.scrollHeight;
+ if(!w||!h)return;
+ var f=Math.min((window.innerWidth-14)/w,(window.innerHeight-40)/h);
+ aqZ=Math.max(1,Math.min(4,f));zw.style.transform='scale('+aqZ+')';}
 document.addEventListener('fullscreenchange',function(){
  var on=!!document.fullscreenElement;
- [].slice.call(document.querySelectorAll('.aqlbl')).forEach(function(x){x.style.display=on?'block':'none';});});
+ [].slice.call(document.querySelectorAll('.aqlbl')).forEach(function(x){x.style.display=on?'block':'none';});
+ [].slice.call(document.querySelectorAll('.aqtag')).forEach(function(x){x.style.display=on?'none':'block';});
+ var zw=document.getElementById('aqzoom');
+ if(on){aqZpre=aqZ;aqFitZoom();}
+ else{aqZ=(aqZpre==null?1:aqZpre);aqZpre=null;zw.style.transform=(aqZ===1?'':'scale('+aqZ+')');}});
 function aqGrp(el){return aqBoxes.filter(function(b){return b.dataset.code===el.dataset.code
  &&b.dataset.rack===el.dataset.rack&&b.dataset.shelf===el.dataset.shelf;});}
 function aqPush(op){op.id=Date.now()+'-'+(++aqSeq);aqOps.push(op);
@@ -7187,7 +7279,8 @@ elif mode == "🏪 아쿠나리스":
                             _cb1, _cbU, _cbR, _cb2 = st.columns([3.4, 1, 1, 1.5])
                             with _cb1:
                                 st.caption("🖱️ 호버=정보 · **드래그=이동**(상자·랙 이름≡) · **더블클릭=복제/삭제/상자 변경** · "
-                                           "**⛶ 전체화면=모든 상자에 품명·규격 표시**. 조작은 1~3초 내 자동 반영 — 안 되면 🔄.")
+                                           "**⛶ 전체화면=화면에 꽉 차게 확대 + 모든 상자에 품명·규격 표시**(상자보다 길면 괄호 생략·자동 축소). "
+                                           "조작은 1~3초 내 자동 반영 — 안 되면 🔄.")
                             _un_st9 = st.session_state.get(f"aq_undo_{sel_site}") or []
                             _rd_st9 = st.session_state.get(f"aq_redo_{sel_site}") or []
                             with _cbU:

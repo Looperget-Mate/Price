@@ -1012,12 +1012,17 @@ def aq_rename_box(old, new):
 #  검증 모델: 층수 = floor(단높이/상자높이), Σ(상자폭÷층수) ≤ 내측폭 862 → V1 실배치 51/51단 적합.
 AQ_STD_SITE = "표준(Aqunaris V1)"
 AQ_STD_INNER = 1162         # [V55] 랙 W1200 - 기둥(19×2) — 대표님 실측 정정(구: W900/862, V1 도면 축척 역산 오차)
+# [V60] 대표님 실측 도면 정정(2026-07-23): 랙 총높이 2400 · 단두께 40 · 단별 개구부(아래→위).
+#  표기 없는 개구부(꼭대기 또는 바닥)는 Σ단높이 = 2400 − 40×(단수−1) 잔여로 산정 — 랙 검증식과 정합.
+#  (구 값은 V1 도면 1:7.5 축척 역산 근사 — 단높이가 실제보다 작아 3호·6호 2층 적층이 잘려 나가던 원인)
+AQ_STD_TOTAL_H = 2400
+AQ_STD_SHELF_T = 40
 AQ_STD_RACK_H = {
-    "01": [1042, 727], "02": [405, 442, 405, 517], "03": [292, 330, 1148],
-    "04": [405, 368, 330, 668], "05": [368, 368, 368, 668], "06": [368, 405, 375, 623],
-    "07": [292, 292, 292, 255, 638], "08": [292, 292, 292, 255, 638],
-    "09": [292, 292, 292, 255, 638], "10": [292, 292, 292, 255, 638],
-    "11": [292, 292, 292, 255, 638], "12": [292, 292, 292, 255, 638],
+    "01": [1350, 1010], "02": [500, 550, 500, 730], "03": [350, 400, 1570],
+    "04": [500, 450, 400, 930], "05": [450, 450, 450, 930], "06": [450, 500, 450, 880],
+    "07": [890, 350, 350, 350, 300], "08": [890, 350, 350, 350, 300],
+    "09": [890, 350, 350, 350, 300], "10": [890, 350, 350, 350, 300],
+    "11": [890, 350, 350, 350, 300], "12": [890, 350, 350, 350, 300],
 }
 # [V58] V1 도면의 랙 나열 순서 재현 — 도면 윗줄 = 섹션12→07(우측 벽 반전), 아랫줄 = 섹션01→06
 AQ_STD_RACK_ORDER = [f"섹션{s}" for s in ("12", "11", "10", "09", "08", "07",
@@ -1026,9 +1031,9 @@ AQ_STD_RACK_ORDER = [f"섹션{s}" for s in ("12", "11", "10", "09", "08", "07",
 #  (개별 지주대를 그리지 않고 '영역+수량'으로만 표시 — 대표님 지시 2026-07-23. 수량 기본값=AQ_Items 기본수량)
 AQ_STD_FREE = {
     "00527": {"shape": "사각", "w": 380, "h": 340,  "qty": 6,  "rack": "섹션01", "shelf": 2, "n": 6},
-    "01016": {"shape": "사각", "w": 380, "h": 1000, "qty": 10, "rack": "섹션01", "shelf": 1, "n": 1},
-    "01889": {"shape": "사각", "w": 380, "h": 1000, "qty": 10, "rack": "섹션01", "shelf": 1, "n": 1},
-    "01854": {"shape": "사각", "w": 380, "h": 1000, "qty": 10, "rack": "섹션01", "shelf": 1, "n": 1},
+    "01016": {"shape": "사각", "w": 380, "h": 1300, "qty": 10, "rack": "섹션01", "shelf": 1, "n": 1},
+    "01889": {"shape": "사각", "w": 380, "h": 1300, "qty": 10, "rack": "섹션01", "shelf": 1, "n": 1},
+    "01854": {"shape": "사각", "w": 380, "h": 1300, "qty": 10, "rack": "섹션01", "shelf": 1, "n": 1},
     # 연결호스 코일(도면 섹션02 단4 좌측 호스 뭉치) — 원형 3단 적층 영역
     "01547": {"shape": "원", "w": 405, "h": 160, "qty": 6, "rack": "섹션02", "shelf": 4, "n": 3},
 }
@@ -1113,8 +1118,9 @@ def aq_std_payload(aq_items):
     racks = []
     for s in sorted(AQ_STD_RACK_H):
         racks.append({"명칭": f"섹션{s}", "폭mm": 1200, "깊이mm": 450, "단수": len(AQ_STD_RACK_H[s]),   # [V55] 실측 1200
+                      "총높이mm": AQ_STD_TOTAL_H, "단두께mm": AQ_STD_SHELF_T,   # [V60] 실측 — 검증식 정합
                       "단높이mm(콤마구분)": ",".join(str(x) for x in AQ_STD_RACK_H[s]),
-                      "단깊이mm(콤마구분)": "", "비고": "표준(V1 역산)"})
+                      "단깊이mm(콤마구분)": "", "비고": "표준(실측 2026-07-23)"})
     # [V58] 표준 자유배치 존(섹션01 여과기·지주대) + 도면 랙 순서를 배치JSON에 포함
     free_std, assign_std = {}, {}
     for r in aq_items:
@@ -1188,7 +1194,9 @@ def aq_pack_shelf_stacks(box_seq, inner, shelf_h, max_layers=3):
     runs = []
     for it in box_seq:
         # [V58] 열 힌트(튜플 6번째, 좌0/중1/우2)가 다르면 다른 열 — V1 도면의 나란히 배치 재현
-        key = (it[1], it[2], it[3], it[4], it[5] if len(it) > 5 else 1)
+        # [V60] 분류는 키에서 제외 — 도면 실측: 적층은 '같은 상자'끼리면 분류가 달라도 위아래로 쌓는다
+        #  (예: 섹션02 압력계(루퍼젯)+이경부싱(나사식)+물호스밸브소켓(물호스) 3호 3층 스택)
+        key = (it[2], it[3], it[4], it[5] if len(it) > 5 else 1)
         if runs and runs[-1][0] == key:
             runs[-1][1].append(it)
         else:
@@ -1648,6 +1656,27 @@ document.addEventListener('mousemove',function(ev){if(!aqDrag)return;
   r.setAttribute('stroke',on?'#F4D624':'none');r.setAttribute('stroke-width',on?'3':'0');
   r.setAttribute('fill',on?'#F4D624':'none');r.setAttribute('fill-opacity',on?'0.12':'0');});
 });
+function aqNudge(b,dx,dy){var o=aqOff(b);aqSetT(b,o.x+dx/aqZ,o.y+dy/aqZ);
+ aqTexts(b).forEach(function(t){var q=aqOff(t);aqSetT(t,q.x+dx/aqZ,q.y+dy/aqZ);});}
+function aqSnapBox(b,z,skip){/* [V60] 드롭 스냅 — 단 바닥/동일상자 위 적층 + 이웃·기둥에 딱 붙이기 */
+ var rb=b.getBoundingClientRect(),zr=z.getBoundingClientRect();
+ var others=aqBoxes.filter(function(x){
+  if(x===b||skip.indexOf(x)>-1||x.style.display==='none')return false;
+  if(x.dataset.rack!==z.dataset.rack||x.dataset.shelf!==z.dataset.shelf)return false;
+  return x.getBoundingClientRect().width>0;});
+ var cx=rb.left+rb.width/2,dy=null;
+ var unders=others.filter(function(x){var r=x.getBoundingClientRect();   /* 드롭 지점 아래 동일 상자 → 위에 적층 */
+  return x.dataset.box===b.dataset.box&&r.left<cx&&cx<r.right;});
+ if(unders.length){var top=Math.min.apply(null,unders.map(function(x){return x.getBoundingClientRect().top;}));
+  if(top-rb.height>=zr.top-2)dy=top-rb.bottom;}
+ if(dy===null)dy=zr.bottom-rb.bottom;   /* 그 외 → 단 바닥에 밀착 */
+ var dx=0,best=14;   /* 14px 이내면 이웃 상자·랙 기둥에 흡착 */
+ others.forEach(function(x){var r=x.getBoundingClientRect();
+  if(Math.abs(r.right-rb.left)<best){best=Math.abs(r.right-rb.left);dx=r.right-rb.left;}
+  if(Math.abs(r.left-rb.right)<best){best=Math.abs(r.left-rb.right);dx=r.left-rb.right;}});
+ if(Math.abs(zr.left-rb.left)<best){best=Math.abs(zr.left-rb.left);dx=zr.left-rb.left;}
+ if(Math.abs(zr.right-rb.right)<best){best=Math.abs(zr.right-rb.right);dx=zr.right-rb.right;}
+ aqNudge(b,dx,dy);}
 document.addEventListener('mouseup',function(ev){if(!aqDrag)return;
  var d=aqDrag;aqDrag=null;
  aqZones.forEach(function(r){r.setAttribute('stroke','none');r.setAttribute('fill','none');});
@@ -1665,6 +1694,8 @@ document.addEventListener('mouseup',function(ev){if(!aqDrag)return;
     aqPush({t:'move',code:b.dataset.code,rack:b.dataset.rack,shelf:parseInt(b.dataset.shelf),
             track:z.dataset.rack,tshelf:parseInt(z.dataset.shelf),xr:Math.round(xr*1000)/1000});}}
   b.dataset.rack=z.dataset.rack;b.dataset.shelf=z.dataset.shelf;});
+ var rem=d.items.map(function(it){return it.b;});   /* [V60] 드롭 즉시 스냅 — 먼저 놓인 것부터 이웃이 됨 */
+ d.items.forEach(function(it){rem.shift();aqSnapBox(it.b,z,rem.slice());});
 });
 function aqDelOne(b){aqPush({t:'del',code:b.dataset.code,rack:b.dataset.rack,shelf:parseInt(b.dataset.shelf)});
  b.style.display='none';aqTexts(b).forEach(function(t){t.style.display='none';});}
@@ -6479,11 +6510,32 @@ elif mode == "🏪 아쿠나리스":
 
         # ── 진열 품목 브라우저 ────────────────────────────
         with tab_items:
-            c_f1, c_f2 = st.columns([2, 3])
+            # [V60] 사이트 선택 — 표준(AQ_Items 정본) 외에 저장된 농협·표준v2 등 어느 사이트의 배치든 조회
+            _ib_site_opts = ["(표준 — AQ_Items 섹션·단·열)"] + [str(s.get("농협명", "")).strip()
+                                                          for s in aq_load_sites() if str(s.get("농협명", "")).strip()]
+            c_f0, c_f1, c_f2 = st.columns([2, 1.4, 2.6])
+            with c_f0:
+                _ib_site = st.selectbox("배치 기준 사이트", _ib_site_opts, key="aq_items_site",
+                                        help="농협(또는 표준v2 등 저장 사이트)을 고르면 그 사이트에 저장된 배치·상자 기준으로 표시합니다.")
             with c_f1:
                 aq_g_sel = st.selectbox("진열분류", ["전체"] + aq_groups, key="aq_grp_sel")
             with c_f2:
                 aq_kw = st.text_input("검색 (코드/품목명/규격)", key="aq_kw")
+            _ib_assign, _ib_items = {}, {}
+            if not _ib_site.startswith("(표준"):
+                for _srow0 in aq_load_sites():
+                    if str(_srow0.get("농협명", "")).strip() == _ib_site:
+                        try:
+                            _pl0 = json.loads(str(_srow0.get("배치JSON") or "{}"))
+                            if isinstance(_pl0, dict):
+                                _ib_assign = _pl0.get("assign", {}) if isinstance(_pl0.get("assign", {}), dict) else {}
+                                _ib_items = _pl0.get("items", {}) if isinstance(_pl0.get("items", {}), dict) else {}
+                        except Exception:
+                            pass
+                if not _ib_assign:
+                    st.info(f"'{_ib_site}'에 저장된 확정 배치가 없습니다 — 표준 위치 컬럼으로 표시합니다. (사이트 설계에서 배치 후 💾 저장)")
+            _ib_only = st.checkbox("배치된 품목만 보기", value=bool(_ib_assign), key="aq_items_only",
+                                   disabled=not _ib_assign) if not _ib_site.startswith("(표준") else False
             rows_view = []
             for r in aq_items:
                 if aq_g_sel != "전체" and (r.get("진열분류") or "(미지정)") != aq_g_sel:
@@ -6492,17 +6544,29 @@ elif mode == "🏪 아쿠나리스":
                 if aq_kw and aq_kw.strip() and aq_kw.strip().lower() not in hay:
                     continue
                 p = prod_by_code.get(r["품목코드"], {})
-                loc = "-".join(str(x) for x in [r.get("섹션", ""), r.get("단", ""), r.get("열", "")] if str(x).strip())
+                _a0 = _ib_assign.get(r["품목코드"]) if _ib_assign else None
+                if _ib_only and not isinstance(_a0, dict):
+                    continue
+                if isinstance(_a0, dict):   # [V60] 사이트 저장 배치 기준 위치·상자
+                    loc = f"{_a0.get('rack', '')}-단{_a0.get('shelf', '')}" + (f"×{_a0.get('n')}" if int(_a0.get("n", 1) or 1) > 1 else "")
+                    _bx0 = str((_ib_items.get(r["품목코드"], {}) or {}).get("box") or r.get("기본상자") or "")
+                else:
+                    loc = "-".join(str(x) for x in [r.get("섹션", ""), r.get("단", ""), r.get("열", "")] if str(x).strip())
+                    if _ib_assign: loc = ""   # 사이트 기준인데 미배치 → 빈칸
+                    _bx0 = str(r.get("기본상자", "") or "")
                 rows_view.append({
                     "품목코드": r["품목코드"], "품목명": str(r.get("품목명_AQ", "") or ""), "규격": str(r.get("규격_AQ", "") or ""),
-                    "진열분류": str(r.get("진열분류", "") or ""), "위치(섹션-단-열)": loc,
-                    "기본상자": str(r.get("기본상자", "") or ""), "기본수량": str(r.get("기본수량", "") or ""),
+                    "진열분류": str(r.get("진열분류", "") or ""),
+                    ("배치(랙-단)" if _ib_assign else "위치(섹션-단-열)"): loc,
+                    "상자": _bx0, "기본수량": str(r.get("기본수량", "") or ""),
                     "수용기록": len(aq_caps.get(r["품목코드"], {})),
                     "스티커": str(r.get("스티커", "") or ""), "지역농협가": str(p.get("price_nh_loc", "") or ""),
                     "소비자가": str(p.get("price_cons", "") or ""), "계통등록": str(r.get("계통등록", "") or ""),
                     "상태": str(r.get("상태", "") or ""),
                 })
-            st.caption(f"표시 {len(rows_view)}개 품목 (매입가 미표시 · 기본상자/기본수량은 폴백 기본값, 실제 배치는 사이트별 조정 · 수용기록=축적된 상자별 수용량 데이터 수)")
+            st.caption(f"표시 {len(rows_view)}개 품목 · 기준 = {_ib_site}"
+                       + (" (저장 배치·사이트 상자 반영)" if _ib_assign else " (AQ_Items 표준 위치)")
+                       + " · 매입가 미표시 · 수용기록=축적된 상자별 수용량 데이터 수")
             st.dataframe(pd.DataFrame(rows_view), hide_index=True, height=480)
 
             # ── [V48] 품목 이미지 2종 체계 — 빌더용(기존 유지)과 등각(ISO: 현장 시연·가이드북·스티커용) ──

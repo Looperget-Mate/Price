@@ -1210,7 +1210,8 @@ def aq_pack_shelf_stacks(box_seq, inner, shelf_h, max_layers=3, force=None):
         w, h = items[0][3], items[0][4]
         _forced = (isinstance(_key, tuple) and len(_key) == 2 and _key[0] == "__FORCE__")
         if _forced:   # [V64] 수동 고정 — 한 열에 전부 적층(물리 한도·루퍼젯팩·열 규칙 우회, 안전 상한 12)
-            layers = max(1, min(12, len(items)))
+            _flim = int(shelf_h // h) if h > 0 else 0   # [V65] 단높이 지킴 — 물리 층수까지만(떠오름 방지, 더 쌓으려면 단높이↑)
+            layers = max(1, min(len(items), _flim or 1))
         else:
             layers = min(max_layers, int(shelf_h // h)) if h > 0 else 0
             if items[0][2] == "루퍼젯팩":   # [V61] 팩 제품은 적층하지 않고 나란히(도면 실측·낱개 이동)
@@ -7446,6 +7447,7 @@ elif mode == "🏪 아쿠나리스":
                                         del _un9[0]
                                     st.session_state[f"aq_redo_{sel_site}"] = []
                                     _asg9 = dict(st.session_state.get(_asg_key, {}))
+                                    _op_errs9 = []   # [V65] 조작 처리 실패를 삼키지 않고 화면에 표시
                                     for _op9 in _new_ops:
                                         try:
                                             _c9o = str(_op9.get("code") or "")
@@ -7548,9 +7550,11 @@ elif mode == "🏪 아쿠나리스":
                                                     _ti9 = len(_co9)
                                                 _co9.insert(_ti9, str(_op9["rack"]))
                                                 st.session_state[f"aq_rkord_{sel_site}"] = _co9
-                                        except Exception:
-                                            pass
+                                        except Exception as _oe9:   # [V65] 삼키지 말고 수집(무한 재시도 방지 위해 done은 유지)
+                                            _op_errs9.append(f"{_op9.get('t', '?')} {_op9.get('code', '')}: {aq_err_str(_oe9)}")
                                         _done_ids.add(_op9.get("id"))
+                                    if _op_errs9:   # [V65] 실패한 조작을 화면에 노출(조용히 사라지던 것 → 원인 가시화)
+                                        st.session_state["aq_op_errs"] = _op_errs9
                                     if len(_done_ids) > 400:   # 세션 메모리 상한
                                         st.session_state[f"aq_ops_ids_{sel_site}"] = set(list(_done_ids)[-200:])
                                     st.session_state[_asg_key] = _asg9
@@ -7791,6 +7795,9 @@ elif mode == "🏪 아쿠나리스":
                                         _nm_t9 = str(_r9.get("품목명_AQ", "") or "").split()
                                         _m9["tag"] = _nm_t9[-1] if _nm_t9 else ""
                                 _info_map[_c9] = _m9
+                        if st.session_state.get("aq_op_errs"):   # [V65] 조작 반영 중 실패한 것 노출(조용히 사라지지 않게)
+                            _oe = st.session_state.pop("aq_op_errs")
+                            st.error("⚠️ 일부 배치 조작이 반영되지 않았습니다(무시되고 넘어감) — 아래 확인:\n- " + "\n- ".join(_oe[:8]))
                         _view_rks = st.multiselect("표시할 랙 (기본 전체 — V1 도면처럼 나란히)", _rk_names, default=_rk_names, key=f"aq_rk_view_{sel_site}")
                         _rk_show = [rk for rk in _rk_all if rk["명칭"] in (_view_rks or _rk_names)]   # [V51] 가상랙 포함
                         import streamlit.components.v1 as _components9   # [V49] 호버 툴팁은 iframe에서만 동작

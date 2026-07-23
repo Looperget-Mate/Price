@@ -1175,13 +1175,15 @@ def aq_canon_seq(seq, group_order=None, colmap=None):
         return cm.get(t[0], t[5] if len(t) > 5 else 1)
     return sorted(seq, key=lambda t: (_col(t), gp.get(t[1], 99), -t[4], -t[3], t[2], t[0]))
 
-def aq_pack_shelf_stacks(box_seq, inner, shelf_h, max_layers=3):
+def aq_pack_shelf_stacks(box_seq, inner, shelf_h, max_layers=3, force=None):
     """[V49] 단 내부 스택(열) 패킹 — 플라스틱 상자 물리 규칙(박 대표님 지시 2026-07-21):
       ① 적층은 '같은 상자'끼리만(아래 상자에 윗 상자가 끼워짐 — 다른 상자를 위에 못 올림)
       ② 적층 높이 ≤ 단높이 (층수 = min(3, 단높이//상자높이), 0층이면 그 단에 못 들어감)
       ③ 상자는 반드시 바로 아래 상자 위에 — 붕 뜬 배치 구조적으로 불가(열 단위 적층)
     box_seq=[(코드,분류,상자,폭,높이)] (정준 정렬 가정) — 같은 (분류,상자,치수) 연속 구간이 열을 공유.
+    [V64] force=수동 적층 고정 코드 집합 — 그 코드는 물리 한도·루퍼젯팩 잠금·열 분리를 우회해 한 열에 전부 적층.
     반환: (cols, fitted, rejected) — cols=[(x오프셋, 폭, [아래→위 items])]."""
+    force = force or set()
     cols, fitted, rejected = [], [], []
     x = 0
     runs = []
@@ -1189,16 +1191,23 @@ def aq_pack_shelf_stacks(box_seq, inner, shelf_h, max_layers=3):
         # [V58] 열 힌트(튜플 6번째, 좌0/중1/우2)가 다르면 다른 열 — V1 도면의 나란히 배치 재현
         # [V60] 분류는 키에서 제외 — 도면 실측: 적층은 '같은 상자'끼리면 분류가 달라도 위아래로 쌓는다
         #  (예: 섹션02 압력계(루퍼젯)+이경부싱(나사식)+물호스밸브소켓(물호스) 3호 3층 스택)
-        key = (it[2], it[3], it[4], it[5] if len(it) > 5 else 1)
+        if str(it[0]) in force:   # [V64] 수동 고정 코드 → 코드별 자체 열(열힌트 무시)
+            key = ("__FORCE__", str(it[0]))
+        else:
+            key = (it[2], it[3], it[4], it[5] if len(it) > 5 else 1)
         if runs and runs[-1][0] == key:
             runs[-1][1].append(it)
         else:
             runs.append((key, [it]))
     for _key, items in runs:
         w, h = items[0][3], items[0][4]
-        layers = min(max_layers, int(shelf_h // h)) if h > 0 else 0
-        if items[0][2] == "루퍼젯팩":   # [V61] 팩 제품은 적층하지 않고 나란히(도면 실측·낱개 이동)
-            layers = min(layers, 1)
+        _forced = (isinstance(_key, tuple) and len(_key) == 2 and _key[0] == "__FORCE__")
+        if _forced:   # [V64] 수동 고정 — 한 열에 전부 적층(물리 한도·루퍼젯팩·열 규칙 우회, 안전 상한 12)
+            layers = max(1, min(12, len(items)))
+        else:
+            layers = min(max_layers, int(shelf_h // h)) if h > 0 else 0
+            if items[0][2] == "루퍼젯팩":   # [V61] 팩 제품은 적층하지 않고 나란히(도면 실측·낱개 이동)
+                layers = min(layers, 1)
         if layers < 1 or w > inner:
             rejected.extend(items); continue
         cur = None
@@ -1350,7 +1359,7 @@ def _aq_hover_attrs(it, info):
             f' data-box="{_aq_esc(meta.get("box") or it[2])}"'
             f' data-cap="{_aq_esc(meta.get("cap") or "")}"')
 
-def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=19, scale=0.22, show_dims=True, info=None, shelf_t=0):
+def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=19, scale=0.22, show_dims=True, info=None, shelf_t=0, force=None):
     """(x0,y0) 기준으로 랙 1대의 SVG 요소들을 out 리스트에 추가. 반환: (폭px, 높이px).
     [V49] 스택 패킹 렌더(동일상자 열 적층) + info 있으면 호버 데이터 속성 + 도형/이미지(자유 배치) 지원.
     [V62] shelf_t = 단(선반 판) 두께 — 단높이(개구부)는 총높이−단두께×(단수−1)이라, 판 두께를
@@ -1381,7 +1390,7 @@ def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=
         y_real += shelf_t                          # [V62] 다음 단은 선반 판 두께만큼 위 (빈 단도 누적되도록 continue 앞)
         seq = shelf_seqs.get((rack_name, si)) or shelf_seqs.get(si) or []
         if not seq: continue
-        cols_p, fitted, rej = aq_pack_shelf_stacks(seq, inner, sh)
+        cols_p, fitted, rej = aq_pack_shelf_stacks(seq, inner, sh, force=force)   # [V64] 수동 적층 고정
         tape = []
         for cx, cw, stack in cols_p:
             for li, it in enumerate(stack):
@@ -1468,9 +1477,10 @@ def aq_rack_svg(rack_name, inner, shelf_hs, shelf_seqs, frame_t=19, scale=0.22, 
     return (f'<svg width="{pw + pad*2:.0f}" height="{ph + pad*2 + 14:.0f}" xmlns="http://www.w3.org/2000/svg">'
             + "".join(out) + '</svg>')
 
-def aq_racks_svg_all(rack_list, seq_by_shelf, per_row=6, scale=None, info=None):
+def aq_racks_svg_all(rack_list, seq_by_shelf, per_row=6, scale=None, info=None, mstack=None):
     """[V47] 전체 배치 뷰 — V1 도면처럼 랙들을 줄당 per_row대씩 나란히 렌더.
-    rack_list=[{명칭,내측폭,단높이}], seq_by_shelf={(랙명,단):[...]}. [V49] info=호버 툴팁 데이터."""
+    rack_list=[{명칭,내측폭,단높이}], seq_by_shelf={(랙명,단):[...]}. [V49] info=호버 툴팁 데이터.
+    [V64] mstack=수동 적층 고정 코드 집합(렌더 전용 — 검증·견적 패킹엔 미적용)."""
     if not rack_list: return ""
     if scale is None:
         n = len(rack_list)
@@ -1486,7 +1496,8 @@ def aq_racks_svg_all(rack_list, seq_by_shelf, per_row=6, scale=None, info=None):
             _parts9 = []   # [V55] 랙 단위 <g> 그룹 — 랙 전체 드래그(순서 변경)용
             pw, ph = _aq_rack_parts(_parts9, x, y + 10, rk["명칭"], rk["내측폭"], rk["단높이"], seq_by_shelf,
                                     scale=scale, show_dims=(scale >= 0.15), info=info,
-                                    shelf_t=int(rk.get("단두께") or 0))   # [V62] 단 판 두께 반영
+                                    shelf_t=int(rk.get("단두께") or 0),   # [V62] 단 판 두께 반영
+                                    force=mstack)   # [V64] 수동 적층 고정
             out.append(f'<g class="aqrackg" data-rack="{_aq_esc(rk["명칭"])}">' + "".join(_parts9) + '</g>')
             x += pw + gap_x
             row_h = max(row_h, ph)
@@ -1692,12 +1703,21 @@ document.addEventListener('mouseup',function(ev){if(!aqDrag)return;
  var zr=z.getBoundingClientRect();   /* [V59] 드롭한 좌우 위치를 배치 순서에 반영 */
  var xr=Math.max(0,Math.min(1,(ev.clientX-zr.left)/Math.max(1,zr.width)));
  var done={};
+ function aqOnBox(b,ev){   /* [V64] 대상 단에서 다른 상자 위(바닥에서 떠서)에 떨어뜨렸나 = 수동 적층 고정 */
+  for(var i=0;i<aqBoxes.length;i++){var x=aqBoxes[i];
+   if(x===b||x.style.display==='none')continue;
+   if(d.items.some(function(it){return it.b===x;}))continue;
+   if(x.dataset.rack!==z.dataset.rack||x.dataset.shelf!==z.dataset.shelf)continue;
+   var r=x.getBoundingClientRect();
+   if(r.width>0&&r.left<ev.clientX&&ev.clientX<r.right&&ev.clientY<r.bottom-4)return 1;}
+  return 0;}
  d.items.forEach(function(it){var b=it.b;
   var k=b.dataset.code+'|'+b.dataset.rack+'|'+b.dataset.shelf;
   if(!done[k]){done[k]=true;
    if(z.dataset.rack!==b.dataset.rack||z.dataset.shelf!==b.dataset.shelf||d.moved){
     var op={t:'move',code:b.dataset.code,rack:b.dataset.rack,shelf:parseInt(b.dataset.shelf),
-            track:z.dataset.rack,tshelf:parseInt(z.dataset.shelf),xr:Math.round(xr*1000)/1000};
+            track:z.dataset.rack,tshelf:parseInt(z.dataset.shelf),xr:Math.round(xr*1000)/1000,
+            stack:aqOnBox(b,ev)};   /* [V64] 1=상자 위 적층 고정 / 0=바닥 → 고정 해제 */
     if(d.one)op.one=1;   /* [V61] 낱개 이동 → 서버가 분할 진열로 처리 */
     aqPush(op);}}
   b.dataset.rack=z.dataset.rack;b.dataset.shelf=z.dataset.shelf;});
@@ -7337,6 +7357,9 @@ elif mode == "🏪 아쿠나리스":
                                     str(k): [[str(e[0]), int(e[1]), int(e[2])] for e in v
                                              if isinstance(e, (list, tuple)) and len(e) >= 3]
                                     for k, v in _saved_sp.items() if isinstance(v, list)}
+                            _saved_mst = _plan_cur.get("mstack", []) if isinstance(_plan_cur, dict) else []   # [V64] 수동 적층 고정 복원
+                            st.session_state[f"aq_mstack_{sel_site}"] = (set(str(c) for c in _saved_mst)
+                                                                         if isinstance(_saved_mst, list) else set())
                         # ── [V51] 가상랙(임시 보관 공간) + 배치 그림 드래그/더블클릭 조작 브리지 ──
                         AQ_VIRT = "🅥 가상랙"
                         if "aq_ops_salt" not in st.session_state:   # 세션 고유 논스 — 이전 세션 조작 재적용 방지
@@ -7393,6 +7416,7 @@ elif mode == "🏪 아쿠나리스":
                                                  "boxov": dict(st.session_state.get(f"aq_boxov_{sel_site}", {})),
                                                  "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or []),
                                                  "xord": dict(st.session_state.get(f"aq_xord_{sel_site}", {})),
+                                                 "mstack": set(st.session_state.get(f"aq_mstack_{sel_site}", set())),   # [V64]
                                                  "split": {k: [list(e) for e in v] for k, v in
                                                            st.session_state.get(f"aq_split_{sel_site}", {}).items()}})
                                     if len(_un9) > 20:
@@ -7406,6 +7430,9 @@ elif mode == "🏪 아쿠나리스":
                                             _rw9 = (_cur9[2] if _cur9 and len(_cur9) > 2 else 1)
                                             _n9 = (_cur9[3] if _cur9 and len(_cur9) > 3 else 1)
                                             if _op9.get("t") == "move" and _op9.get("track"):
+                                                _msk9 = st.session_state.setdefault(f"aq_mstack_{sel_site}", set())   # [V64] 수동 적층 고정
+                                                if _op9.get("stack"): _msk9.add(_c9o)   # 상자 위 드롭 → 고정
+                                                else: _msk9.discard(_c9o)               # 바닥 드롭 → 고정 해제
                                                 # [V61] 분할 진열 — 낱개(one) 이동은 본 자리/분할 자리 간 1상자 단위로
                                                 _spm9 = st.session_state.setdefault(f"aq_split_{sel_site}", {})
                                                 _lsp9 = _spm9.get(_c9o) or []
@@ -7578,6 +7605,7 @@ elif mode == "🏪 아쿠나리스":
                                 st.session_state[f"aq_unp_{sel_site}"] = _unp
                                 st.session_state[f"aq_xord_{sel_site}"] = {}   # [V59] 드롭 순서 초기화(표준 열 순서로)
                                 st.session_state[f"aq_split_{sel_site}"] = {}   # [V61] 분할 진열도 초기화
+                                st.session_state[f"aq_mstack_{sel_site}"] = set()   # [V64] 수동 적층 고정도 초기화
                                 st.rerun()
                         with ca2:
                             _unp_l = st.session_state.get(f"aq_unp_{sel_site}", [])
@@ -7736,7 +7764,8 @@ elif mode == "🏪 아쿠나리스":
                         _view_rks = st.multiselect("표시할 랙 (기본 전체 — V1 도면처럼 나란히)", _rk_names, default=_rk_names, key=f"aq_rk_view_{sel_site}")
                         _rk_show = [rk for rk in _rk_all if rk["명칭"] in (_view_rks or _rk_names)]   # [V51] 가상랙 포함
                         import streamlit.components.v1 as _components9   # [V49] 호버 툴팁은 iframe에서만 동작
-                        _svg_all9 = aq_racks_svg_all(_rk_show, _seq_by_shelf, info=_info_map)
+                        _mst9 = st.session_state.get(f"aq_mstack_{sel_site}", set())   # [V64] 수동 적층 고정 코드
+                        _svg_all9 = aq_racks_svg_all(_rk_show, _seq_by_shelf, info=_info_map, mstack=_mst9)
                         if _svg_all9:
                             _nonce9 = f"{st.session_state['aq_ops_salt']}|{sel_site}"   # [V53] ver 제외 — 늦은 조작 유실 방지(op id 중복 차단)
                             _ct9 = st.session_state.get(f"aq_applied_ts_{sel_site}", 0)   # [V63] 자가치유 기준 ts
@@ -7747,7 +7776,17 @@ elif mode == "🏪 아쿠나리스":
                             with _cb1:
                                 st.caption("🖱️ 호버=정보 · **드래그=상자 1개 이동**(여러 개 자리엔 낱개 분할 — 루퍼젯 팩도 하나씩) · **빈 곳 드래그=영역 다중선택 · Shift+클릭=추가 선택**(선택 후 드래그=일괄 이동, Delete=일괄 삭제) · "
                                            "**더블클릭=복제/삭제/상자 변경** · **⛶ 전체화면=꽉 차게 확대+전 상자 품명·규격**(전체화면에서도 이동·삭제 가능). "
+                                           "🧱 **다른 상자 위에 올려 놓으면 = 수동 적층 고정**(자동배치를 덮어써 그대로 유지 · 빈 단 바닥에 다시 놓으면 해제). "
                                            "조작은 그림에 즉시 표시되고 **4초 뒤(전체화면은 종료 시) 일괄 반영** — 바로 반영하려면 🔄.")
+                                if _mst9:
+                                    _mc1, _mc2 = st.columns([3, 1])
+                                    with _mc1:
+                                        st.caption(f"🧱 수동 적층 고정 {len(_mst9)}개 품목 — 저장 시 유지됩니다.")
+                                    with _mc2:
+                                        if st.button("🧹 적층 고정 해제(전체)", key=f"aq_mst_clear_{sel_site}"):
+                                            st.session_state[f"aq_mstack_{sel_site}"] = set()
+                                            st.session_state[_ver_key] = st.session_state.get(_ver_key, 0) + 1
+                                            st.rerun()
                             _un_st9 = st.session_state.get(f"aq_undo_{sel_site}") or []
                             _rd_st9 = st.session_state.get(f"aq_redo_{sel_site}") or []
                             with _cbU:
@@ -7759,6 +7798,7 @@ elif mode == "🏪 아쿠나리스":
                                                  "boxov": dict(st.session_state.get(f"aq_boxov_{sel_site}", {})),
                                                  "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or []),
                                                  "xord": dict(st.session_state.get(f"aq_xord_{sel_site}", {})),
+                                                 "mstack": set(st.session_state.get(f"aq_mstack_{sel_site}", set())),   # [V64]
                                                  "split": {k: [list(e) for e in v] for k, v in
                                                            st.session_state.get(f"aq_split_{sel_site}", {}).items()}})
                                     _sn9 = _un_st9.pop()
@@ -7766,6 +7806,7 @@ elif mode == "🏪 아쿠나리스":
                                     st.session_state[f"aq_boxov_{sel_site}"] = _sn9["boxov"]
                                     st.session_state[f"aq_rkord_{sel_site}"] = _sn9["rkord"]
                                     st.session_state[f"aq_xord_{sel_site}"] = dict(_sn9.get("xord", {}))
+                                    st.session_state[f"aq_mstack_{sel_site}"] = set(_sn9.get("mstack", set()))   # [V64]
                                     st.session_state[f"aq_split_{sel_site}"] = {k: [list(e) for e in v]
                                                                                 for k, v in _sn9.get("split", {}).items()}
                                     st.session_state[_ver_key] += 1
@@ -7779,6 +7820,7 @@ elif mode == "🏪 아쿠나리스":
                                                   "boxov": dict(st.session_state.get(f"aq_boxov_{sel_site}", {})),
                                                   "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or []),
                                                   "xord": dict(st.session_state.get(f"aq_xord_{sel_site}", {})),
+                                                  "mstack": set(st.session_state.get(f"aq_mstack_{sel_site}", set())),   # [V64]
                                                   "split": {k: [list(e) for e in v] for k, v in
                                                             st.session_state.get(f"aq_split_{sel_site}", {}).items()}})
                                     _sn9 = _rd_st9.pop()
@@ -7786,6 +7828,7 @@ elif mode == "🏪 아쿠나리스":
                                     st.session_state[f"aq_boxov_{sel_site}"] = _sn9["boxov"]
                                     st.session_state[f"aq_rkord_{sel_site}"] = _sn9["rkord"]
                                     st.session_state[f"aq_xord_{sel_site}"] = dict(_sn9.get("xord", {}))
+                                    st.session_state[f"aq_mstack_{sel_site}"] = set(_sn9.get("mstack", set()))   # [V64]
                                     st.session_state[f"aq_split_{sel_site}"] = {k: [list(e) for e in v]
                                                                                 for k, v in _sn9.get("split", {}).items()}
                                     st.session_state[_ver_key] += 1
@@ -8008,6 +8051,9 @@ elif mode == "🏪 아쿠나리스":
                                    for c, v in _sp_sv.items() if v}
                         if _sp_out:
                             _new_plan["splits"] = _sp_out
+                        _mst_sv = st.session_state.get(f"aq_mstack_{sel_site}", set())   # [V64] 수동 적층 고정 저장
+                        if _mst_sv:
+                            _new_plan["mstack"] = sorted(str(c) for c in _mst_sv)
                         _ord_sv = st.session_state.get(f"aq_rkord_{sel_site}")   # [V55] 랙 순서 저장
                         if _ord_sv:
                             _new_plan["rack_order"] = _ord_sv

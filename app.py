@@ -7377,6 +7377,14 @@ elif mode == "🏪 아쿠나리스":
                                 st.session_state[f"aq_mstack_{sel_site}"] = {}
                         # ── [V51] 가상랙(임시 보관 공간) + 배치 그림 드래그/더블클릭 조작 브리지 ──
                         AQ_VIRT = "🅥 가상랙"
+                        # [V64] aq_mstack 정규화 — 이전 세션(v1)에서 set으로 남아 있으면 dict로 변환.
+                        #  (없으면 dict(set) 변환이 ValueError → 커밋 무한 실패·되돌리기 불가·드래그 크래시)
+                        _mstk_k9 = f"aq_mstack_{sel_site}"
+                        _mstk_v9 = st.session_state.get(_mstk_k9)
+                        if isinstance(_mstk_v9, set):
+                            st.session_state[_mstk_k9] = {str(c): str(c) for c in _mstk_v9}
+                        elif not isinstance(_mstk_v9, dict):
+                            st.session_state[_mstk_k9] = {}
                         if "aq_ops_salt" not in st.session_state:   # 세션 고유 논스 — 이전 세션 조작 재적용 방지
                             st.session_state["aq_ops_salt"] = str(int(time.time() * 1000))
                         _vc1, _vc2 = st.columns([3, 1.4])

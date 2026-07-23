@@ -1350,11 +1350,14 @@ def _aq_hover_attrs(it, info):
             f' data-box="{_aq_esc(meta.get("box") or it[2])}"'
             f' data-cap="{_aq_esc(meta.get("cap") or "")}"')
 
-def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=19, scale=0.22, show_dims=True, info=None):
+def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=19, scale=0.22, show_dims=True, info=None, shelf_t=0):
     """(x0,y0) 기준으로 랙 1대의 SVG 요소들을 out 리스트에 추가. 반환: (폭px, 높이px).
-    [V49] 스택 패킹 렌더(동일상자 열 적층) + info 있으면 호버 데이터 속성 + 도형/이미지(자유 배치) 지원."""
+    [V49] 스택 패킹 렌더(동일상자 열 적층) + info 있으면 호버 데이터 속성 + 도형/이미지(자유 배치) 지원.
+    [V62] shelf_t = 단(선반 판) 두께 — 단높이(개구부)는 총높이−단두께×(단수−1)이라, 판 두께를
+          높이·단 바닥 y에 더해야 단수가 달라도 랙 총높이가 동일하게(=실제) 그려진다."""
     W = inner + frame_t * 2
-    H = sum(shelf_hs) + frame_t
+    _nsh = len(shelf_hs)
+    H = sum(shelf_hs) + shelf_t * max(0, _nsh - 1) + frame_t   # [V62] 단두께 반영
     pw, ph = W * scale, H * scale
     _virt9 = str(rack_name).startswith("🅥")   # [V53] 가상랙 = 점선 프레임 + 연노랑 배경으로 구분
     _dash9 = ' stroke-dasharray="7,4"' if _virt9 else ''
@@ -1365,8 +1368,9 @@ def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=
                f'font-size="11" fill="#8C8681">≡ {_aq_esc(rack_name)}</text>')
     y_real = 0
     for si, sh in enumerate(shelf_hs, 1):
+        base = y0 + ph - y_real * scale          # [V62] 이 단 바닥(아래 판 두께 누적 반영)
         y_real += sh
-        y_px = y0 + ph - y_real * scale
+        y_px = y0 + ph - y_real * scale           # 이 단 개구부 상단 = 선반 판 윗면
         out.append(f'<line x1="{x0:.1f}" y1="{y_px:.1f}" x2="{x0 + pw:.1f}" y2="{y_px:.1f}" stroke="#191414" stroke-width="1.6"/>')
         if show_dims:
             out.append(f'<text x="{x0 + 2:.1f}" y="{y_px + 9:.1f}" font-size="7" fill="#B9B3AD">{si}·{sh}</text>')
@@ -1374,10 +1378,10 @@ def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=
         out.append(f'<rect class="aqshelf" data-rack="{_aq_esc(rack_name)}" data-shelf="{si}" '
                    f'x="{x0 + frame_t*scale:.1f}" y="{y_px:.1f}" width="{inner*scale:.1f}" height="{sh*scale:.1f}" '
                    f'fill="none" stroke="none"/>')
+        y_real += shelf_t                          # [V62] 다음 단은 선반 판 두께만큼 위 (빈 단도 누적되도록 continue 앞)
         seq = shelf_seqs.get((rack_name, si)) or shelf_seqs.get(si) or []
         if not seq: continue
         cols_p, fitted, rej = aq_pack_shelf_stacks(seq, inner, sh)
-        base = y0 + ph - (y_real - sh) * scale
         tape = []
         for cx, cw, stack in cols_p:
             for li, it in enumerate(stack):
@@ -1481,7 +1485,8 @@ def aq_racks_svg_all(rack_list, seq_by_shelf, per_row=6, scale=None, info=None):
         for rk in row:
             _parts9 = []   # [V55] 랙 단위 <g> 그룹 — 랙 전체 드래그(순서 변경)용
             pw, ph = _aq_rack_parts(_parts9, x, y + 10, rk["명칭"], rk["내측폭"], rk["단높이"], seq_by_shelf,
-                                    scale=scale, show_dims=(scale >= 0.15), info=info)
+                                    scale=scale, show_dims=(scale >= 0.15), info=info,
+                                    shelf_t=int(rk.get("단두께") or 0))   # [V62] 단 판 두께 반영
             out.append(f'<g class="aqrackg" data-rack="{_aq_esc(rk["명칭"])}">' + "".join(_parts9) + '</g>')
             x += pw + gap_x
             row_h = max(row_h, ph)
@@ -1595,7 +1600,7 @@ document.addEventListener('fullscreenchange',function(){
  var zw=document.getElementById('aqzoom');
  if(on){aqZpre=aqZ;aqFitZoom();}
  else{aqZ=(aqZpre==null?1:aqZpre);aqZpre=null;zw.style.transform=(aqZ===1?'':'scale('+aqZ+')');
-  if(aqOps.length){clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,400);}}});   /* [V58] 종료 시 일괄 반영 */
+  if(aqOps.length){clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,900);}}});   /* [V58] 종료 시 일괄 반영 — [V62] 전체화면 종료 리플로우/리사이즈가 가라앉은 뒤 커밋 */
 function aqGrp(el){return aqBoxes.filter(function(b){return b.dataset.code===el.dataset.code
  &&b.dataset.rack===el.dataset.rack&&b.dataset.shelf===el.dataset.shelf;});}
 function aqPush(op){op.id=Date.now()+'-'+(++aqSeq);aqOps.push(op);
@@ -1611,6 +1616,9 @@ function aqApply(){if(!aqOps.length)return;
  if(document.fullscreenElement)return;
  if(aqDrag||aqRDrag||aqBand){clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,1500);return;}
  aqStat('반영 중… ('+aqOps.length+'건)');
+ /* [V62] 커밋 직전 새 ts로 재기록 → streamlit_js_eval이 값 변경을 확실히 감지해 적용 리런이 반드시 발생
+    (전체화면 종료 시 옛 값 반환으로 복구 리런이 안 뜨던 경합 차단 · 중복은 op id 디둡으로 무해) */
+ try{window.parent.localStorage.setItem('AQ_OPS',JSON.stringify({nonce:AQN,ts:Date.now(),ops:aqOps}));}catch(e){}
  try{var bs=window.parent.document.querySelectorAll('button');
  for(var i=0;i<bs.length;i++){if((bs[i].innerText||'').indexOf('배치 조작 반영')>-1){bs[i].click();
   clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,3000);return;}}}catch(e){}
@@ -7276,9 +7284,11 @@ elif mode == "🏪 아쿠나리스":
                         except Exception: _ds3 = []
                         try: _dp3 = int(float(_rr.get("깊이mm") or 0))
                         except Exception: _dp3 = 0
+                        try: _tk3 = int(float(_rr.get("단두께mm") or 0))   # [V62] 단 판 두께
+                        except Exception: _tk3 = 0
                         if _wv3 > 0 and _hs3:
                             _rk_list.append({"명칭": _nm3, "내측폭": _wv3 - 38, "단높이": _hs3,
-                                             "단깊이": _ds3, "깊이": _dp3 or 450})
+                                             "단깊이": _ds3, "깊이": _dp3 or 450, "단두께": _tk3})
                     _dims_p = aq_box_dims_map(aq_boxes)
                     _dims_p.update({f"자유:{c}": (fc["w"], fc["h"]) for c, fc in _free_live.items()})   # [V49] 자유 배치 치수
                     if not _rk_list:

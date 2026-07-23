@@ -1038,6 +1038,15 @@ def aq_std_free_of(code):
     c = str(code or "").strip()
     return AQ_STD_FREE.get(c) or AQ_STD_FREE.get(c.zfill(5))
 
+# [V59] 표준 전면 상자수(n) — V1 도면 실측: 루퍼젯팩 P25·H25·P13B = 2팩 나란히, P20·H20 = 1팩
+AQ_STD_N = {"01923": 2, "01924": 2, "01926": 2}
+
+def aq_std_n_of(code):
+    """[V59] 코드의 표준 전면 상자수 힌트 (자유배치 n 포함)."""
+    c = str(code or "").strip().zfill(5)
+    if c in AQ_STD_N: return AQ_STD_N[c]
+    return (aq_std_free_of(c) or {}).get("n", 1)
+
 def aq_box_dims_map(boxes):
     """AQ_Boxes → {상자종류: (폭mm, 높이mm)} (치수 있는 것만)."""
     out = {}
@@ -1111,9 +1120,17 @@ def aq_std_payload(aq_items):
     for r in aq_items:
         c = str(r.get("품목코드", "")).strip()
         fd = aq_std_free_of(c)
-        if not fd: continue
-        free_std[c] = {"shape": fd["shape"], "w": fd["w"], "h": fd["h"], "qty": fd["qty"]}
-        assign_std[c] = {"rack": fd["rack"], "shelf": fd["shelf"], "rows": 1, "n": fd.get("n", 1)}
+        if fd:
+            free_std[c] = {"shape": fd["shape"], "w": fd["w"], "h": fd["h"], "qty": fd["qty"]}
+            assign_std[c] = {"rack": fd["rack"], "shelf": fd["shelf"], "rows": 1, "n": fd.get("n", 1)}
+            continue
+        if str(c).zfill(5) in AQ_STD_N:   # [V59] 루퍼젯팩 표준 수량 — 위치는 AQ_Items 섹션·단
+            _sec9p = str(r.get("섹션", "") or "").strip()
+            try: _sh9p = int(float(r.get("단") or 0))
+            except Exception: _sh9p = 0
+            if _sec9p and _sh9p > 0:
+                assign_std[c] = {"rack": f"섹션{_sec9p}", "shelf": _sh9p, "rows": 1,
+                                 "n": AQ_STD_N[str(c).zfill(5)]}
     plan = {"groups": sorted(groups), "items": plan_items,
             "free": free_std, "assign": assign_std, "rack_order": list(AQ_STD_RACK_ORDER),
             "updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M") + " (표준)"}
@@ -1124,12 +1141,27 @@ def aq_std_payload(aq_items):
 #  섹션(세로 열) 고정 개념은 유동성을 죽임(신규 추가·변경 불가) → 폐기, 표준화 참고 전용.
 #  [V49] 색상 = V1 실측 확정 팔레트 v1 (2026-07-21, 아쿠나리스_부속군_색상팔레트_v1_확정.md).
 #  ⚠ 군 명칭(키)은 현행 9군 유지 — 10군 재편(노지SP 분리·미니SP→시설관수)은 AQ_Items 재분류와 함께 후속(§3·§4).
+# [V59] 부속군 10군 재편 — 팔레트 v1 확정(아쿠나리스_부속군_색상팔레트_v1_확정.md §1·§3)
+#  9군→10군: 여과기·스프링클러지주 → 여과기+노지SP 분리 / 미니스프링클러·분수부속 → 시설관수+분수호스 분리.
+#  AQ_Items 진열분류도 10군 부속군코드로 재지정(NAS `배치` 정본 + 재지정 17건, tools/aq_regroup_10.py).
 AQ_GROUP_COLORS = {
-    "스마트카플러": "#68258A", "조임식부속": "#938073", "나사식부속": "#231F20",
-    "퀸밸브": "#1A2989", "새들·점적스타트": "#00923A", "물호스·연질부속": "#00A7EA",
-    "미니스프링클러·분수부속": "#EC008C", "루퍼젯·공구": "#F4D624",
-    "여과기·스프링클러지주": "#A1A2A2", "(미지정)": "#9AA0A6",
+    "루퍼젯": "#F4D624", "송수호스": "#68258A", "조임식": "#938073",
+    "나사식": "#231F20", "시설관수": "#1A2989", "점적": "#00923A",
+    "노지SP": "#EA5516", "분수호스": "#EC008C", "물호스": "#00A7EA",
+    "여과기": "#A1A2A2", "(미지정)": "#9AA0A6",
 }
+AQ_GROUP_LEGACY = {   # 구 9군 명칭 → 신 부속군코드 (저장된 배치JSON groups 등 하위호환)
+    "스마트카플러": "송수호스", "조임식부속": "조임식", "나사식부속": "나사식",
+    "퀸밸브": "시설관수", "새들·점적스타트": "점적", "물호스·연질부속": "물호스",
+    "루퍼젯·공구": "루퍼젯",
+    "미니스프링클러·분수부속": "시설관수",   # 분리군 — 대표 케이스는 품목 재지정으로 해소, 폴백만 시설관수
+    "여과기·스프링클러지주": "여과기",       # 분리군 — 폴백만 여과기
+}
+
+def aq_grp_norm(g):
+    """[V59] 진열분류(부속군) 정규화 — 구 9군 명칭이 남아 있으면 신 10군 코드로."""
+    g = str(g or "").strip() or "(미지정)"
+    return AQ_GROUP_LEGACY.get(g, g)
 
 AQ_COL_ORD = {"좌": 0, "중": 1, "우": 2}   # [V58] AQ_Items '열' → 단 내 좌우 순서 (V1 도면 재현)
 
@@ -1176,12 +1208,13 @@ def aq_pack_shelf_stacks(box_seq, inner, shelf_h, max_layers=3):
             cur[2].append(it); fitted.append(it)
     return cols, fitted, rejected
 
-def aq_auto_place(rack_list, items_seq, box_dims, group_order=None, pre=None, center_codes=None):
+def aq_auto_place(rack_list, items_seq, box_dims, group_order=None, pre=None, center_codes=None, colhint=None, n_of=None):
     """단 중심 자동배치(군집): 랙 순서·단은 아래→위, 품목은 분류 군집 순서 그대로 채움.
     rack_list=[{명칭,내측폭,단높이:[...]}], items_seq=[(코드,분류,상자)] (분류별 연속 정렬).
     패킹은 정준 정렬(aq_canon_seq) 기준 — 편집표 재검증과 동일 결과 보장.
     [V53] pre={코드:(랙명,단번호)} = 표준 위치 우선 배치(표준 실측 검증 근거로 존중) /
           center_codes = 루퍼젯 본품 등 → 가운데 랙의 중앙 단부터 우선 배치.
+    [V59] colhint(code, rack, shelf)→열힌트 — 렌더 패킹과 동일한 런 분할로 시험 배치(불일치 방지).
     반환: (assign={코드:(랙명,단번호)}, unplaced=[코드...])"""
     shelves, shelf_by = [], {}
     for rk in rack_list:
@@ -1190,6 +1223,14 @@ def aq_auto_place(rack_list, items_seq, box_dims, group_order=None, pre=None, ce
             shelves.append(s); shelf_by[(rk["명칭"], si)] = s
     pre = pre or {}
     center_codes = set(center_codes or [])
+    _ch = colhint or (lambda c, rk, sh: 1)
+    _nf = n_of or (lambda c: 1)
+    def _t6(t, s):   # 시험 대상 단(s)에 맞는 열힌트를 6번째 원소로
+        return (t[0], t[1], t[2], t[3], t[4], _ch(t[0], s["rack"], s["no"]))
+    def _seq6(s, t):
+        # [V59] 전면 상자수(n)만큼 복제해 시험 — 렌더 패킹과 동일한 폭 소모(여과기 3×2 등)
+        return aq_canon_seq([_t6(x, s) for x in s["seq"]] + [_t6(t, s)] * max(1, int(_nf(t[0]) or 1)),
+                            group_order)
     assign, unplaced = {}, []
     rest = []
     for code, grp, box in items_seq:
@@ -1200,7 +1241,7 @@ def aq_auto_place(rack_list, items_seq, box_dims, group_order=None, pre=None, ce
         tgt = pre.get(code)
         if tgt and tgt in shelf_by:                          # ① [V53] 표준 위치 우선
             s = shelf_by[tgt]
-            s["seq"] = aq_canon_seq(s["seq"] + [t], group_order)
+            s["seq"] = _seq6(s, t)
             assign[code] = tgt
             continue
         rest.append(t)
@@ -1219,7 +1260,7 @@ def aq_auto_place(rack_list, items_seq, box_dims, group_order=None, pre=None, ce
             placed = False
             for no in order_sh:
                 s = shelf_by[(mid_rk["명칭"], no)]
-                trial = aq_canon_seq(s["seq"] + [t], group_order)
+                trial = _seq6(s, t)
                 if not aq_pack_shelf_stacks(trial, s["inner"], s["h"])[2]:
                     s["seq"] = trial; assign[t[0]] = (s["rack"], s["no"]); placed = True; break
             if not placed:
@@ -1231,7 +1272,7 @@ def aq_auto_place(rack_list, items_seq, box_dims, group_order=None, pre=None, ce
         i = cur
         while i < len(shelves):
             s = shelves[i]
-            trial = aq_canon_seq(s["seq"] + [(code, grp, box, w, h)], group_order)
+            trial = _seq6(s, (code, grp, box, w, h))
             _cols, fitted, rej = aq_pack_shelf_stacks(trial, s["inner"], s["h"])   # [V49] 스택 패킹
             if not rej:
                 s["seq"] = trial
@@ -1338,7 +1379,7 @@ def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=
         for cx, cw, stack in cols_p:
             for li, it in enumerate(stack):
                 bw, bh = it[3], it[4]
-                col = AQ_GROUP_COLORS.get(it[1], "#9AA0A6")
+                col = AQ_GROUP_COLORS.get(aq_grp_norm(it[1]), "#9AA0A6")
                 bx = x0 + frame_t * scale + cx * scale
                 by = base - (li + 1) * bh * scale
                 attrs = _aq_hover_attrs(it, info)
@@ -1371,7 +1412,7 @@ def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=
                                    f'fill="#191414" pointer-events="none">{_aq_esc(_tg9t)}</text>')
                 if attrs:   # [V56] 전체화면 라벨(품목명·규격) — 평소 숨김, ⛶ 진입 시 JS가 표시
                     #        [V57] 상자 안에 반드시 들어가도록 폭·높이 기준 자동 축소 + 괄호부 제거 + 말줄임
-                    _lume9 = _aq_lum_txt(_aq_hexrgb(AQ_GROUP_COLORS.get(it[1])))
+                    _lume9 = _aq_lum_txt(_aq_hexrgb(AQ_GROUP_COLORS.get(aq_grp_norm(it[1]))))
                     _lfill9 = f"rgb({_lume9[0]},{_lume9[1]},{_lume9[2]})"
                     _sp9l = str(meta.get("spec") or "")
                     _base9 = max(2.6, min(7.0, bw * scale * 0.16))
@@ -1407,7 +1448,7 @@ def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=
                         out.append(f'<text class="aqlbl" x="{_cx9:.1f}" y="{_y19 + _gap9 + _l2f9:.1f}" '
                                    f'font-size="{_l2f9:.1f}" text-anchor="middle" fill="{_lfill9}" '
                                    f'pointer-events="none" style="display:none">{_aq_esc(_l2t9)}</text>')
-            tape.append((cx, cx + cw, AQ_GROUP_COLORS.get(stack[0][1], "#9AA0A6")))
+            tape.append((cx, cx + cw, AQ_GROUP_COLORS.get(aq_grp_norm(stack[0][1]), "#9AA0A6")))
         for tx0, tx1, col in tape:   # 색상 자석테이프(단 전면 하단 밴드)
             out.append(f'<rect class="aqtape" x="{x0 + frame_t*scale + tx0*scale:.1f}" y="{base - 3:.1f}" width="{(tx1-tx0)*scale:.1f}" height="3.4" fill="{col}"/>')
     return pw, ph
@@ -1465,7 +1506,7 @@ def aq_shelf_top_svg(rack_name, shelf_no, inner, shelf_h, depth, seq, rows_by_co
             d, n_rows = depth, 1          # 깊이 미등록 → 1줄 전체 깊이로 표시
         n_max = max(1, int(depth // d))
         n_rows = max(1, min(n_rows, n_max))
-        col = AQ_GROUP_COLORS.get(grp, "#9AA0A6")
+        col = AQ_GROUP_COLORS.get(aq_grp_norm(grp), "#9AA0A6")
         attrs = _aq_hover_attrs(it, info)
         for j in range(n_rows):
             y = pad + ph - (j + 1) * d * scale
@@ -1614,14 +1655,16 @@ document.addEventListener('mouseup',function(ev){if(!aqDrag)return;
  if(!d.moved){d.items.forEach(rev);return;}
  var z=aqZoneAt(ev.clientX,ev.clientY);
  if(!z){d.items.forEach(rev);return;}
+ var zr=z.getBoundingClientRect();   /* [V59] 드롭한 좌우 위치를 배치 순서에 반영 */
+ var xr=Math.max(0,Math.min(1,(ev.clientX-zr.left)/Math.max(1,zr.width)));
  var done={};
  d.items.forEach(function(it){var b=it.b;
-  if(z.dataset.rack===b.dataset.rack&&z.dataset.shelf===b.dataset.shelf){rev(it);return;}   /* 같은 단 → 제자리 */
   var k=b.dataset.code+'|'+b.dataset.rack+'|'+b.dataset.shelf;
   if(!done[k]){done[k]=true;
-   aqPush({t:'move',code:b.dataset.code,rack:b.dataset.rack,shelf:parseInt(b.dataset.shelf),
-           track:z.dataset.rack,tshelf:parseInt(z.dataset.shelf)});}
-  b.dataset.rack=z.dataset.rack;b.dataset.shelf=z.dataset.shelf;});   /* 후속 조작이 새 위치를 참조 */
+   if(z.dataset.rack!==b.dataset.rack||z.dataset.shelf!==b.dataset.shelf||d.moved){
+    aqPush({t:'move',code:b.dataset.code,rack:b.dataset.rack,shelf:parseInt(b.dataset.shelf),
+            track:z.dataset.rack,tshelf:parseInt(z.dataset.shelf),xr:Math.round(xr*1000)/1000});}}
+  b.dataset.rack=z.dataset.rack;b.dataset.shelf=z.dataset.shelf;});
 });
 function aqDelOne(b){aqPush({t:'del',code:b.dataset.code,rack:b.dataset.rack,shelf:parseInt(b.dataset.shelf)});
  b.style.display='none';aqTexts(b).forEach(function(t){t.style.display='none';});}
@@ -2083,6 +2126,7 @@ def aq_sticker_pdf_bytes(recs, size_key, bc_mode, img_of=None):
     spec = AQ_STICKER_SPEC[size_key]
     items = [_aq_pr_item(r) for r in recs]
     order = {g: i for i, g in enumerate(AQ_GROUP_COLORS)}
+    for it in items: it["grp"] = aq_grp_norm(it["grp"])   # [V59] 구군 명칭 정규화
     items.sort(key=lambda d: (order.get(d["grp"], 99), d["code"]))   # 부속군 군집 → 같은 색끼리
     pdf = _AqPrintPDF()
     per_page = len(spec["xs"]) * spec["rows"]
@@ -2092,7 +2136,7 @@ def aq_sticker_pdf_bytes(recs, size_key, bc_mode, img_of=None):
         x = spec["xs"][k % len(spec["xs"])]
         y = spec["y0"] + (k // len(spec["xs"])) * spec["pitch"]
         img = img_of(it["code"]) if img_of else None
-        _aq_sticker_card(pdf, size_key, x, y, it, _aq_hexrgb(AQ_GROUP_COLORS.get(it["grp"])), _aq_pr_bc(it, bc_mode), img)
+        _aq_sticker_card(pdf, size_key, x, y, it, _aq_hexrgb(AQ_GROUP_COLORS.get(aq_grp_norm(it["grp"]))), _aq_pr_bc(it, bc_mode), img)
     return bytes(pdf.output())
 
 def _aq_guide_card(pdf, x, y, it, rgb, bc, bc_note, img):
@@ -2143,6 +2187,7 @@ def aq_guidebook_pdf_bytes(recs, site, bc_mode, img_of=None):
         elif not it["grp"]:
             continue
         sel.append(it)
+    for it in items: it["grp"] = aq_grp_norm(it["grp"])   # [V59] 구군 명칭 정규화
     groups = [g for g in AQ_GROUP_COLORS if any(it["grp"] == g for it in sel)]
     groups += sorted({it["grp"] for it in sel} - set(groups))
     pdf = _AqPrintPDF()
@@ -2180,8 +2225,8 @@ def aq_guidebook_pdf_bytes(recs, site, bc_mode, img_of=None):
     pdf.set_draw_color(*pdf.BLACK); pdf.set_line_width(0.5); pdf.line(15, 26, 195, 26)
     yy = 34
     for g in groups:
-        _hex9 = str(AQ_GROUP_COLORS.get(g) or "#9AA0A6").upper()
-        pdf.set_fill_color(*_aq_hexrgb(AQ_GROUP_COLORS.get(g))); pdf.rect(15, yy, 14, 9, "F")
+        _hex9 = str(AQ_GROUP_COLORS.get(aq_grp_norm(g)) or "#9AA0A6").upper()
+        pdf.set_fill_color(*_aq_hexrgb(AQ_GROUP_COLORS.get(aq_grp_norm(g)))); pdf.rect(15, yy, 14, 9, "F")
         pdf.txt(33, yy, 95, 9, g or "(미지정)", 13, bold=True)
         pdf.txt(128, yy + 1.4, 30, 6, _hex9, 7.5, color=pdf.INK500, mono=True)
         pdf.txt(158, yy, 37, 9, f"{sum(1 for it in sel if it['grp'] == g)}품목", 11, align="R")
@@ -2194,7 +2239,7 @@ def aq_guidebook_pdf_bytes(recs, site, bc_mode, img_of=None):
     for g in groups:
         gi = [it for it in sel if it["grp"] == g]
         if not gi: continue
-        rgb = _aq_hexrgb(AQ_GROUP_COLORS.get(g))
+        rgb = _aq_hexrgb(AQ_GROUP_COLORS.get(aq_grp_norm(g)))
         k = 8
         for it in gi:
             if k == 8:
@@ -6293,7 +6338,8 @@ elif mode == "🏪 아쿠나리스":
 
             st.markdown("**📦 부품상자 스티커** — 부속군에서 골라 **체크한 품목만** 생성 · 이미지 ①등각(ISO) ②제품 사진")
             st.caption("용지: " + " / ".join(AQ_STICKER_SPEC[s]["label"] for s in ("80", "98", "160"))
-                       + " — 스티커 용지는 품목의 **상자** 기준 자동 결정(사이트에서 상자를 바꿨으면 바뀐 용지로).")
+                       + " — 기본 = 품목의 **상자** 기준 자동 결정(농협 선택 시 그 농협에 저장된 변경 상자 기준). "
+                         "[V59] 아래 표의 **용지 칸을 품목별로 직접 변경**할 수도 있습니다.")
             _pr_targets = []
             for r in aq_items:
                 _c9t = str(r.get("품목코드", "")).strip().zfill(5)
@@ -6338,13 +6384,20 @@ elif mode == "🏪 아쿠나리스":
                     df_pick_ed = st.data_editor(
                         _df_pick, hide_index=True, height=290,
                         key=f"aq_pr_pick_{_pr_site}_{st.session_state['aq_pr_pick_ver']}",
-                        disabled=["품목코드", "품목명", "규격", "부속군", "상자", "용지"],
-                        column_config={"선택": st.column_config.CheckboxColumn("선택", help="체크한 품목만 스티커 생성")})
+                        disabled=["품목코드", "품목명", "규격", "부속군", "상자"],
+                        column_config={"선택": st.column_config.CheckboxColumn("선택", help="체크한 품목만 스티커 생성"),
+                                       "용지": st.column_config.SelectboxColumn(   # [V59] 품목별 라벨(용지) 변경
+                                           "용지", options=[AQ_STICKER_SPEC[k]["label"] for k in ("80", "98", "160")],
+                                           help="기본 = 상자 기준 자동. 품목별로 다른 라벨 용지로 바꿔 생성할 수 있습니다.")})
                 _sel_codes9 = set()
-                if df_pick_ed is not None:
-                    _sel_codes9 = {str(_row9["품목코드"]).strip().zfill(5)
-                                   for _, _row9 in df_pick_ed.iterrows() if bool(_row9["선택"])}
                 _sz_of9 = {t["품목코드"]: t["_sz"] for t in _pr_targets}
+                if df_pick_ed is not None:
+                    _lbl2sz9 = {AQ_STICKER_SPEC[k]["label"]: k for k in AQ_STICKER_SPEC}
+                    for _, _row9 in df_pick_ed.iterrows():
+                        _c9p = str(_row9["품목코드"]).strip().zfill(5)
+                        if bool(_row9["선택"]): _sel_codes9.add(_c9p)
+                        _szp9 = _lbl2sz9.get(str(_row9.get("용지") or "").strip())
+                        if _szp9: _sz_of9[_c9p] = _szp9   # [V59] 표에서 바꾼 용지 우선
                 st.caption(f"선택 {len(_sel_codes9)} / 표시 {len(_view9)} / 대상 {len(_pr_targets)}품목"
                            + (f" · **{_pr_site} 확정 배치 기준**" if _sp_assign else " · 전체 품목 기준"))
                 if st.button("🖨️ 선택 품목 스티커 PDF 생성", key="aq_pr_st_go", type="primary"):
@@ -6976,7 +7029,7 @@ elif mode == "🏪 아쿠나리스":
                 except Exception: _plan_cur = {}
                 if not isinstance(_plan_cur, dict): _plan_cur = {}
                 _plan_items = _plan_cur.get("items", {}) if isinstance(_plan_cur.get("items", {}), dict) else {}
-                _g_default = [g for g in _plan_cur.get("groups", []) if g in aq_groups]
+                _g_default = [g for g in (aq_grp_norm(x) for x in _plan_cur.get("groups", [])) if g in aq_groups]   # [V59] 구군 호환
                 plan_groups = st.multiselect("진열분류", aq_groups, default=_g_default, key=f"aq_plan_g_{sel_site}")
 
                 edited_plan = None
@@ -7137,6 +7190,11 @@ elif mode == "🏪 아쿠나리스":
                                                                     int(v.get("n", 1) or 1))      # [V51] 전면 상자수
                                                            for k, v in _saved_asg.items() if isinstance(v, dict)}
                                                           if isinstance(_saved_asg, dict) else {})
+                            if isinstance(_saved_asg, dict):   # [V59] 저장된 드롭 순서(ord) 복원
+                                st.session_state[f"aq_xord_{sel_site}"] = {
+                                    str(k): [str(v.get("rack", "")), int(v.get("shelf", 0)), float(v["ord"])]
+                                    for k, v in _saved_asg.items()
+                                    if isinstance(v, dict) and v.get("ord") is not None}
                         # ── [V51] 가상랙(임시 보관 공간) + 배치 그림 드래그/더블클릭 조작 브리지 ──
                         AQ_VIRT = "🅥 가상랙"
                         if "aq_ops_salt" not in st.session_state:   # 세션 고유 논스 — 이전 세션 조작 재적용 방지
@@ -7191,7 +7249,8 @@ elif mode == "🏪 아쿠나리스":
                                     _un9 = st.session_state.setdefault(f"aq_undo_{sel_site}", [])
                                     _un9.append({"asg": dict(st.session_state.get(_asg_key, {})),
                                                  "boxov": dict(st.session_state.get(f"aq_boxov_{sel_site}", {})),
-                                                 "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or [])})
+                                                 "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or []),
+                                                 "xord": dict(st.session_state.get(f"aq_xord_{sel_site}", {}))})
                                     if len(_un9) > 20:
                                         del _un9[0]
                                     st.session_state[f"aq_redo_{sel_site}"] = []
@@ -7204,6 +7263,10 @@ elif mode == "🏪 아쿠나리스":
                                             _n9 = (_cur9[3] if _cur9 and len(_cur9) > 3 else 1)
                                             if _op9.get("t") == "move" and _op9.get("track"):
                                                 _asg9[_c9o] = (str(_op9["track"]), int(_op9["tshelf"]), _rw9, _n9)
+                                                if _op9.get("xr") is not None:   # [V59] 드롭 좌우 위치 → 단 내 순서
+                                                    st.session_state.setdefault(f"aq_xord_{sel_site}", {})[_c9o] = [
+                                                        str(_op9["track"]), int(_op9["tshelf"]),
+                                                        round(-0.2 + 2.4 * max(0.0, min(1.0, float(_op9["xr"]))), 3)]
                                             elif _op9.get("t") == "dup" and _cur9:
                                                 _asg9[_c9o] = (_cur9[0], _cur9[1], _rw9, min(_n9 + 1, 8))
                                             elif _op9.get("t") == "del" and _cur9:
@@ -7280,18 +7343,32 @@ elif mode == "🏪 아쿠나리스":
                                 # [V53] ② 루퍼젯 본품(루퍼젯팩)은 가운데 랙 중앙 단 우선
                                 _ctr9 = [_c9s for _c9s, _g9s, _b9s in _seq
                                          if _b9s == "루퍼젯팩" and _c9s not in _std_pre9]
+                                def _ch_auto9(c, rk, sh):   # [V59] 시험 패킹도 렌더와 같은 열힌트 사용
+                                    _r0 = _aq_by_code.get(c, {}) or {}
+                                    _se0 = str(_r0.get("섹션", "") or "").strip()
+                                    try: _sd0 = int(float(_r0.get("단") or 0))
+                                    except Exception: _sd0 = 0
+                                    if _se0 and _sd0 == sh and rk in (f"섹션{_se0}", _se0):
+                                        return AQ_COL_ORD.get(str(_r0.get("열", "") or "").strip(), 1)
+                                    return 1
+                                _asg_old0 = st.session_state.get(_asg_key, {})   # [V59] 기존 상자수도 시험에 반영
+                                def _nf_auto9(c):
+                                    _t0 = _asg_old0.get(c) or ()
+                                    return (_t0[3] if len(_t0) > 3 else 0) or aq_std_n_of(c)
                                 _asg_new, _unp = aq_auto_place(_rk_list, _seq, _dims_p, group_order=_pg,
-                                                               pre=_std_pre9, center_codes=_ctr9)
+                                                               pre=_std_pre9, center_codes=_ctr9,
+                                                               colhint=_ch_auto9, n_of=_nf_auto9)
                                 _asg_old9 = st.session_state.get(_asg_key, {})   # [V49] 기존 줄수 — [V51] 상자수도 보존
                                 def _keep9(c, i, d=1):
                                     _t9k = _asg_old9.get(c) or ()
                                     return _t9k[i] if len(_t9k) > i else d
                                 st.session_state[_asg_key] = {
                                     c: (rk, sh, _keep9(c, 2),
-                                        _keep9(c, 3, (aq_std_free_of(c) or {}).get("n", 1)))   # [V58] 여과기 3×2 등 표준 상자수
+                                        _keep9(c, 3, aq_std_n_of(c)))   # [V58/V59] 여과기 3×2 등 표준 상자수
                                     for c, (rk, sh) in _asg_new.items()}
                                 st.session_state[_ver_key] += 1
                                 st.session_state[f"aq_unp_{sel_site}"] = _unp
+                                st.session_state[f"aq_xord_{sel_site}"] = {}   # [V59] 드롭 순서 초기화(표준 열 순서로)
                                 st.rerun()
                         with ca2:
                             _unp_l = st.session_state.get(f"aq_unp_{sel_site}", [])
@@ -7355,9 +7432,14 @@ elif mode == "🏪 아쿠나리스":
                                 })
                         _seq_by_shelf = {}
                         _asg_live = {}
+                        _xo5 = st.session_state.get(f"aq_xord_{sel_site}", {})   # [V59] 드롭 좌우 위치 기억
                         def _colhint5(c, rk, sh):
                             """[V58] 그 단이 품목의 표준 섹션·단이면 '열'(좌0/중1/우2), 아니면 중(1).
-                            정준 정렬·패킹 런 분할에 쓰여 V1 도면의 좌우 나란히 배치를 재현한다."""
+                            [V59] 드래그 드롭한 좌우 위치(aq_xord)가 있으면 그것이 최우선.
+                            정준 정렬·패킹 런 분할에 쓰여 도면 재현·드롭 위치를 함께 존중한다."""
+                            _e5 = _xo5.get(c)
+                            if _e5 and str(_e5[0]) == rk and int(_e5[1]) == sh:
+                                return float(_e5[2])
                             _r = _aq_by_code.get(c, {}) or {}
                             _sec = str(_r.get("섹션", "") or "").strip()
                             try: _sd = int(float(_r.get("단") or 0))
@@ -7447,11 +7529,13 @@ elif mode == "🏪 아쿠나리스":
                                     _rd9 = st.session_state.setdefault(f"aq_redo_{sel_site}", [])
                                     _rd9.append({"asg": dict(st.session_state.get(_asg_key, {})),
                                                  "boxov": dict(st.session_state.get(f"aq_boxov_{sel_site}", {})),
-                                                 "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or [])})
+                                                 "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or []),
+                                                 "xord": dict(st.session_state.get(f"aq_xord_{sel_site}", {}))})
                                     _sn9 = _un_st9.pop()
                                     st.session_state[_asg_key] = _sn9["asg"]
                                     st.session_state[f"aq_boxov_{sel_site}"] = _sn9["boxov"]
                                     st.session_state[f"aq_rkord_{sel_site}"] = _sn9["rkord"]
+                                    st.session_state[f"aq_xord_{sel_site}"] = dict(_sn9.get("xord", {}))
                                     st.session_state[_ver_key] += 1
                                     st.rerun()
                             with _cbR:
@@ -7461,11 +7545,13 @@ elif mode == "🏪 아쿠나리스":
                                     _un9b = st.session_state.setdefault(f"aq_undo_{sel_site}", [])
                                     _un9b.append({"asg": dict(st.session_state.get(_asg_key, {})),
                                                   "boxov": dict(st.session_state.get(f"aq_boxov_{sel_site}", {})),
-                                                  "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or [])})
+                                                  "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or []),
+                                                  "xord": dict(st.session_state.get(f"aq_xord_{sel_site}", {}))})
                                     _sn9 = _rd_st9.pop()
                                     st.session_state[_asg_key] = _sn9["asg"]
                                     st.session_state[f"aq_boxov_{sel_site}"] = _sn9["boxov"]
                                     st.session_state[f"aq_rkord_{sel_site}"] = _sn9["rkord"]
+                                    st.session_state[f"aq_xord_{sel_site}"] = dict(_sn9.get("xord", {}))
                                     st.session_state[_ver_key] += 1
                                     st.rerun()
                             with _cb2:
@@ -7474,7 +7560,7 @@ elif mode == "🏪 아쿠나리스":
                                     st.session_state["aq_ops_bump"] = True   # [V55] 다음 턴에 브리지 재평가
                                     st.rerun()
                         _leg = " ".join(
-                            f'<span style="display:inline-block;width:10px;height:10px;background:{AQ_GROUP_COLORS.get(g, "#9AA0A6")};margin-right:4px;"></span>'
+                            f'<span style="display:inline-block;width:10px;height:10px;background:{AQ_GROUP_COLORS.get(aq_grp_norm(g), "#9AA0A6")};margin-right:4px;"></span>'
                             f'<span style="font-size:12px;margin-right:10px;">{g}</span>' for g in _pg)
                         st.markdown(_leg, unsafe_allow_html=True)
                         _virt_cnt = sum(1 for _t in _asg_live.values() if _t and _t[0] == AQ_VIRT)   # [V51]
@@ -7670,9 +7756,16 @@ elif mode == "🏪 아쿠나리스":
                         # [V45] 단 중심 배정 저장 (있을 때만) — [V49] 줄수(rows) 포함
                         _asg_sv = st.session_state.get(f"aq_asg_{sel_site}", {})
                         if _asg_sv:
-                            _new_plan["assign"] = {c: {"rack": t[0], "shelf": t[1],
-                                                       "rows": (t[2] if len(t) > 2 else 1),
-                                                       "n": (t[3] if len(t) > 3 else 1)}   # [V51] 전면 상자수
+                            _xo_sv = st.session_state.get(f"aq_xord_{sel_site}", {})   # [V59] 드롭 순서 영속
+                            def _asg_d9(c, t):
+                                _d9 = {"rack": t[0], "shelf": t[1],
+                                       "rows": (t[2] if len(t) > 2 else 1),
+                                       "n": (t[3] if len(t) > 3 else 1)}   # [V51] 전면 상자수
+                                _e9 = _xo_sv.get(c)
+                                if _e9 and str(_e9[0]) == str(t[0]) and int(_e9[1]) == int(t[1]):
+                                    _d9["ord"] = float(_e9[2])
+                                return _d9
+                            _new_plan["assign"] = {c: _asg_d9(c, t)
                                                    for c, t in _asg_sv.items() if t and t[0] and t[1]}
                         _ord_sv = st.session_state.get(f"aq_rkord_{sel_site}")   # [V55] 랙 순서 저장
                         if _ord_sv:

@@ -1528,7 +1528,7 @@ def aq_shelf_top_svg(rack_name, shelf_no, inner, shelf_h, depth, seq, rows_by_co
     return (f'<svg width="{pw + pad*2:.0f}" height="{ph + pad*2:.0f}" xmlns="http://www.w3.org/2000/svg">'
             + "".join(out) + '</svg>')
 
-def aq_svg_hover_html(svg, interactive=False, nonce="", boxes=None):
+def aq_svg_hover_html(svg, interactive=False, nonce="", boxes=None, committed_ts=0):
     """[V49] SVG를 호버 툴팁(품목명 크게·규격·상자·최대수량)과 함께 iframe HTML로 래핑.
     반환: (html, 권장 iframe 높이px). components.html로 렌더해야 JS 툴팁이 동작.
     [V51] interactive=True → 드래그 이동(같은 품목 묶음)·더블클릭 복제/삭제·전체화면/줌 툴바.
@@ -1554,6 +1554,7 @@ def aq_svg_hover_html(svg, interactive=False, nonce="", boxes=None):
         js_int = """
 <script>
 var AQN="__NONCE__", AQB=__BOXES__, aqOps=[], aqZ=1, aqDrag=null, aqMenu=null, aqSeq=0;
+var AQCT=__COMMITTED_TS__;   /* [V63] 서버가 마지막으로 반영한 조작 payload의 ts — 자가치유 기준 */
 var aqSel=[], aqBand=null;   /* [V58] 다중선택(러버밴드+Shift) */
 var aqBoxes=[].slice.call(document.querySelectorAll('.aqbox[data-code]'));
 var aqZones=[].slice.call(document.querySelectorAll('.aqshelf'));
@@ -1801,7 +1802,25 @@ document.addEventListener('mouseup',function(ev){if(!aqRDrag)return;
  if(best){aqPush({t:'rord',rack:d.rack,target:best.g.getAttribute('data-rack'),after:ev.clientX>best.cx});}
  else if(d.g){d.g.removeAttribute('transform');}
 });
+/* [V63] 자가치유 — iframe이 재생성될 때 localStorage에 '서버가 아직 반영 안 한' 조작(ts>AQCT)이
+   남아 있으면 재반영을 예약한다. 비동기 브리지 읽기 레이스(bump 리런의 빈 읽기 → 편집前 재생성)로
+   조작이 유실·초기화되던 것을 복구한다. move는 목적 단 위로 시각 이동해 스냅백(깜빡임)도 줄인다. */
+(function(){try{
+ var _p=JSON.parse(window.parent.localStorage.getItem('AQ_OPS')||'{}');
+ if(_p&&_p.nonce===AQN&&_p.ops&&_p.ops.length&&((+_p.ts||0)>(+AQCT||0))){
+  aqOps=_p.ops.slice(); aqSeq=aqOps.length;
+  _p.ops.forEach(function(op){try{if(op.t==='move'&&op.track){
+    var bx=document.querySelector('.aqbox[data-code="'+op.code+'"]');
+    var zn=document.querySelector('.aqshelf[data-rack="'+op.track+'"][data-shelf="'+op.tshelf+'"]');
+    if(bx&&zn){var br=bx.getBoundingClientRect(),zr=zn.getBoundingClientRect();
+     aqSvg.appendChild(bx);
+     aqSetT(bx,(zr.left+zr.width/2)-(br.left+br.width/2),(zr.top+zr.height*0.72)-(br.top+br.height/2));}
+  }}catch(e){}});
+  clearTimeout(window.__aqap); window.__aqap=setTimeout(aqApply,700);
+  aqStat('미반영 '+aqOps.length+'건 — 재반영 중');
+ }}catch(e){}})();
 </script>""".replace("__NONCE__", str(nonce).replace('"', '')).replace(
+            "__COMMITTED_TS__", str(int(float(committed_ts or 0)))).replace(
             "__BOXES__", json.dumps([str(b) for b in (boxes or [])], ensure_ascii=False))
     html = (
         '<div id="aqwrap" style="position:relative;font-family:sans-serif;background:#FFFFFF;overflow:auto;">'
@@ -7478,6 +7497,10 @@ elif mode == "🏪 아쿠나리스":
                                     if len(_done_ids) > 400:   # 세션 메모리 상한
                                         st.session_state[f"aq_ops_ids_{sel_site}"] = set(list(_done_ids)[-200:])
                                     st.session_state[_asg_key] = _asg9
+                                    try:  # [V63] 자가치유 기준 — 이 payload의 ts까지 반영 완료로 기록
+                                        st.session_state[f"aq_applied_ts_{sel_site}"] = int(float(_ops_pl.get("ts") or 0))
+                                    except Exception:
+                                        pass
                                     st.session_state[_ver_key] += 1
                                     st.rerun()
                         # [V55] 랙 순서 적용 (세션 → 없으면 저장된 rack_order) — 표시·자동배치·편집표 공통
@@ -7716,8 +7739,9 @@ elif mode == "🏪 아쿠나리스":
                         _svg_all9 = aq_racks_svg_all(_rk_show, _seq_by_shelf, info=_info_map)
                         if _svg_all9:
                             _nonce9 = f"{st.session_state['aq_ops_salt']}|{sel_site}"   # [V53] ver 제외 — 늦은 조작 유실 방지(op id 중복 차단)
+                            _ct9 = st.session_state.get(f"aq_applied_ts_{sel_site}", 0)   # [V63] 자가치유 기준 ts
                             _html9, _hpx9 = aq_svg_hover_html(_svg_all9, interactive=True, nonce=_nonce9,
-                                                              boxes=_box_opts4)   # [V51] — [V54] 더블클릭 상자 변경
+                                                              boxes=_box_opts4, committed_ts=_ct9)   # [V51/V54/V63]
                             _components9.html(_html9, height=min(_hpx9 + 34, 960), scrolling=True)
                             _cb1, _cbU, _cbR, _cb2 = st.columns([3.4, 1, 1, 1.5])
                             with _cb1:

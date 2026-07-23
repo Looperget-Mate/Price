@@ -1019,6 +1019,24 @@ AQ_STD_RACK_H = {
     "09": [292, 292, 292, 255, 638], "10": [292, 292, 292, 255, 638],
     "11": [292, 292, 292, 255, 638], "12": [292, 292, 292, 255, 638],
 }
+# [V58] V1 도면의 랙 나열 순서 재현 — 도면 윗줄 = 섹션12→07(우측 벽 반전), 아랫줄 = 섹션01→06
+AQ_STD_RACK_ORDER = [f"섹션{s}" for s in ("12", "11", "10", "09", "08", "07",
+                                          "01", "02", "03", "04", "05", "06")]
+# [V58] 표준 자유배치 존 — V1 도면 섹션01 랙: 위 단(727)=여과기 3×2 적층, 아래 단(1042)=지주대 3분할
+#  (개별 지주대를 그리지 않고 '영역+수량'으로만 표시 — 대표님 지시 2026-07-23. 수량 기본값=AQ_Items 기본수량)
+AQ_STD_FREE = {
+    "00527": {"shape": "사각", "w": 380, "h": 340,  "qty": 6,  "rack": "섹션01", "shelf": 2, "n": 6},
+    "01016": {"shape": "사각", "w": 380, "h": 1000, "qty": 10, "rack": "섹션01", "shelf": 1, "n": 1},
+    "01889": {"shape": "사각", "w": 380, "h": 1000, "qty": 10, "rack": "섹션01", "shelf": 1, "n": 1},
+    "01854": {"shape": "사각", "w": 380, "h": 1000, "qty": 10, "rack": "섹션01", "shelf": 1, "n": 1},
+    # 연결호스 코일(도면 섹션02 단4 좌측 호스 뭉치) — 원형 3단 적층 영역
+    "01547": {"shape": "원", "w": 405, "h": 160, "qty": 6, "rack": "섹션02", "shelf": 4, "n": 3},
+}
+
+def aq_std_free_of(code):
+    """[V58] 코드의 표준 자유배치 정의 (5자리 패딩 양쪽 매칭)."""
+    c = str(code or "").strip()
+    return AQ_STD_FREE.get(c) or AQ_STD_FREE.get(c.zfill(5))
 
 def aq_box_dims_map(boxes):
     """AQ_Boxes → {상자종류: (폭mm, 높이mm)} (치수 있는 것만)."""
@@ -1088,7 +1106,16 @@ def aq_std_payload(aq_items):
         racks.append({"명칭": f"섹션{s}", "폭mm": 1200, "깊이mm": 450, "단수": len(AQ_STD_RACK_H[s]),   # [V55] 실측 1200
                       "단높이mm(콤마구분)": ",".join(str(x) for x in AQ_STD_RACK_H[s]),
                       "단깊이mm(콤마구분)": "", "비고": "표준(V1 역산)"})
+    # [V58] 표준 자유배치 존(섹션01 여과기·지주대) + 도면 랙 순서를 배치JSON에 포함
+    free_std, assign_std = {}, {}
+    for r in aq_items:
+        c = str(r.get("품목코드", "")).strip()
+        fd = aq_std_free_of(c)
+        if not fd: continue
+        free_std[c] = {"shape": fd["shape"], "w": fd["w"], "h": fd["h"], "qty": fd["qty"]}
+        assign_std[c] = {"rack": fd["rack"], "shelf": fd["shelf"], "rows": 1, "n": fd.get("n", 1)}
     plan = {"groups": sorted(groups), "items": plan_items,
+            "free": free_std, "assign": assign_std, "rack_order": list(AQ_STD_RACK_ORDER),
             "updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M") + " (표준)"}
     return racks, plan
 
@@ -1104,11 +1131,18 @@ AQ_GROUP_COLORS = {
     "여과기·스프링클러지주": "#A1A2A2", "(미지정)": "#9AA0A6",
 }
 
-def aq_canon_seq(seq, group_order=None):
-    """단 패킹의 정준 정렬: (분류 군집순, 높이↓, 폭↓, 상자, 코드) — 편집표 순서와 무관하게 동일 결과 보장.
-    [V49] 상자명 정렬 추가 — 같은 상자끼리 인접해야 스택(동일상자 적층) 열을 공유한다."""
+AQ_COL_ORD = {"좌": 0, "중": 1, "우": 2}   # [V58] AQ_Items '열' → 단 내 좌우 순서 (V1 도면 재현)
+
+def aq_canon_seq(seq, group_order=None, colmap=None):
+    """단 패킹의 정준 정렬: ([V58]열힌트, 분류 군집순, 높이↓, 폭↓, 상자, 코드) — 편집표 순서와 무관하게 동일 결과.
+    [V49] 상자명 정렬 추가 — 같은 상자끼리 인접해야 스택(동일상자 적층) 열을 공유한다.
+    [V58] colmap={코드: 0|1|2} — 표준 위치(그 단이 품목의 표준 섹션·단일 때)의 '열'(좌0/중1/우2)을
+    최우선 정렬 키로 써서 V1 도면의 좌우 배치 순서를 재현한다. 힌트 없는 품목은 중(1) 취급."""
     gp = {g: i for i, g in enumerate(group_order or [])}
-    return sorted(seq, key=lambda t: (gp.get(t[1], 99), -t[4], -t[3], t[2], t[0]))
+    cm = colmap or {}
+    def _col(t):   # 열 힌트: colmap > 튜플 6번째 원소(있으면) > 중(1)
+        return cm.get(t[0], t[5] if len(t) > 5 else 1)
+    return sorted(seq, key=lambda t: (_col(t), gp.get(t[1], 99), -t[4], -t[3], t[2], t[0]))
 
 def aq_pack_shelf_stacks(box_seq, inner, shelf_h, max_layers=3):
     """[V49] 단 내부 스택(열) 패킹 — 플라스틱 상자 물리 규칙(박 대표님 지시 2026-07-21):
@@ -1121,7 +1155,8 @@ def aq_pack_shelf_stacks(box_seq, inner, shelf_h, max_layers=3):
     x = 0
     runs = []
     for it in box_seq:
-        key = (it[1], it[2], it[3], it[4])
+        # [V58] 열 힌트(튜플 6번째, 좌0/중1/우2)가 다르면 다른 열 — V1 도면의 나란히 배치 재현
+        key = (it[1], it[2], it[3], it[4], it[5] if len(it) > 5 else 1)
         if runs and runs[-1][0] == key:
             runs[-1][1].append(it)
         else:
@@ -1470,8 +1505,27 @@ def aq_svg_hover_html(svg, interactive=False, nonce="", boxes=None):
         js_int = """
 <script>
 var AQN="__NONCE__", AQB=__BOXES__, aqOps=[], aqZ=1, aqDrag=null, aqMenu=null, aqSeq=0;
+var aqSel=[], aqBand=null;   /* [V58] 다중선택(러버밴드+Shift) */
 var aqBoxes=[].slice.call(document.querySelectorAll('.aqbox[data-code]'));
 var aqZones=[].slice.call(document.querySelectorAll('.aqshelf'));
+var aqSvg=document.querySelector('#aqzoom svg');
+function aqTexts(el){var r=[],n=el.nextElementSibling;   /* 상자에 딸린 라벨 텍스트들 */
+ while(n&&n.tagName==='text'){r.push(n);n=n.nextElementSibling;}return r;}
+function aqOff(el){return {x:parseFloat(el.dataset.ox||0),y:parseFloat(el.dataset.oy||0)};}
+function aqSetT(el,x,y){el.dataset.ox=x;el.dataset.oy=y;   /* 누적 오프셋 — 미반영 이동 위에 추가 이동 가능 */
+ if(x||y)el.setAttribute('transform','translate('+x+','+y+')');else el.removeAttribute('transform');}
+function aqSelHas(el){return aqSel.indexOf(el)>-1;}
+function aqSelMark(el,on){
+ if(on){el.setAttribute('stroke','#F4D624');el.setAttribute('stroke-width','2.6');}
+ else{el.setAttribute('stroke','#191414');el.setAttribute('stroke-width','0.6');}}
+function aqSelSet(arr){aqSel.forEach(function(b){aqSelMark(b,false);});
+ aqSel=arr.slice();aqSel.forEach(function(b){aqSelMark(b,true);});aqStat();}
+function aqSelClear(){aqSelSet([]);}
+function aqStat(txt){var s=document.getElementById('aqst');if(!s)return;
+ if(txt!==undefined){s.textContent=txt;return;}
+ var p=[];if(aqSel.length)p.push('✓ 선택 '+aqSel.length+'상자 (Delete=삭제 · 드래그=이동)');
+ if(aqOps.length)p.push('미반영 '+aqOps.length+'건');
+ s.textContent=p.join(' · ');}
 function aqZoom(f){aqZ=Math.max(0.3,Math.min(4,aqZ*f));document.getElementById('aqzoom').style.transform='scale('+aqZ+')';}
 function aqZreset(){aqZ=1;document.getElementById('aqzoom').style.transform='';}
 function aqFull(){var w=document.getElementById('aqwrap');
@@ -1496,27 +1550,57 @@ document.addEventListener('fullscreenchange',function(){
  [].slice.call(document.querySelectorAll('.aqtag')).forEach(function(x){x.style.display=on?'none':'block';});
  var zw=document.getElementById('aqzoom');
  if(on){aqZpre=aqZ;aqFitZoom();}
- else{aqZ=(aqZpre==null?1:aqZpre);aqZpre=null;zw.style.transform=(aqZ===1?'':'scale('+aqZ+')');}});
+ else{aqZ=(aqZpre==null?1:aqZpre);aqZpre=null;zw.style.transform=(aqZ===1?'':'scale('+aqZ+')');
+  if(aqOps.length){clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,400);}}});   /* [V58] 종료 시 일괄 반영 */
 function aqGrp(el){return aqBoxes.filter(function(b){return b.dataset.code===el.dataset.code
  &&b.dataset.rack===el.dataset.rack&&b.dataset.shelf===el.dataset.shelf;});}
 function aqPush(op){op.id=Date.now()+'-'+(++aqSeq);aqOps.push(op);
  try{window.parent.localStorage.setItem('AQ_OPS',JSON.stringify({nonce:AQN,ts:Date.now(),ops:aqOps}));}catch(e){}
- var s=document.getElementById('aqst');if(s)s.textContent='조작 '+aqOps.length+'건 — 자동 반영 중…';
- clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,350);
- clearTimeout(window.__aqap2);window.__aqap2=setTimeout(aqApply,2500);}
-function aqApply(){try{var bs=window.parent.document.querySelectorAll('button');
- for(var i=0;i<bs.length;i++){if((bs[i].innerText||'').indexOf('배치 조작 반영')>-1){bs[i].click();return;}}}catch(e){}}
+ aqSchedule();}
+/* [V58] 버퍼링 개선 — 조작마다 리런하지 않고 그림에 즉시(낙관) 반영해 두고,
+   4초간 추가 조작이 없을 때 한 번에 서버 반영. 전체화면 중에는 종료 시 일괄 반영. */
+function aqSchedule(){clearTimeout(window.__aqap);
+ if(document.fullscreenElement){aqStat('미반영 '+aqOps.length+'건 — 전체화면 종료 시 일괄 반영');return;}
+ window.__aqap=setTimeout(aqApply,4000);
+ aqStat('미반영 '+aqOps.length+'건 — 4초 뒤 일괄 반영(계속 조작하면 연장)');}
+function aqApply(){if(!aqOps.length)return;
+ if(document.fullscreenElement)return;
+ if(aqDrag||aqRDrag||aqBand){clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,1500);return;}
+ aqStat('반영 중… ('+aqOps.length+'건)');
+ try{var bs=window.parent.document.querySelectorAll('button');
+ for(var i=0;i<bs.length;i++){if((bs[i].innerText||'').indexOf('배치 조작 반영')>-1){bs[i].click();
+  clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,3000);return;}}}catch(e){}
+ clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,3000);}   /* 실패 시 재시도(성공하면 iframe 교체됨) */
 function aqZoneAt(x,y){for(var i=0;i<aqZones.length;i++){var r=aqZones[i].getBoundingClientRect();
  if(x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom)return aqZones[i];}return null;}
+function aqDragStart(el,ev){   /* [V58] 선택된 상자를 잡으면 선택 전체가 함께 이동 */
+ var els;
+ if(aqSelHas(el)&&aqSel.length>1){els=aqSel.slice();}
+ else{aqSelClear();els=aqGrp(el);}
+ aqDrag={items:els.map(function(b){
+   var o=aqOff(b);
+   return {b:b,bx:o.x,by:o.y,ts:aqTexts(b).map(function(t){var q=aqOff(t);return {n:t,bx:q.x,by:q.y};})};}),
+  el:el,sx:ev.clientX,sy:ev.clientY,moved:false,raised:false};}
+function aqDragRaise(d){if(d.raised)return;d.raised=true;   /* z-order: 실제 이동 시작 때만 랙 <g> 밖으로
+ (mousedown에서 재부모화하면 크롬이 dblclick을 만들지 않음) */
+ d.items.forEach(function(it){aqSvg.appendChild(it.b);
+  it.ts.forEach(function(t){aqSvg.appendChild(t.n);});});}
 aqBoxes.forEach(function(el){
  el.addEventListener('mousedown',function(ev){if(ev.button!==0)return;
-  aqDrag={els:aqGrp(el),el:el,sx:ev.clientX,sy:ev.clientY,moved:false};ev.preventDefault();});
+  ev.preventDefault();ev.stopPropagation();
+  if(ev.shiftKey){   /* Shift+클릭 = (같은 품목 묶음) 선택 토글 — PPT 방식 */
+   var g=aqGrp(el);
+   if(g.some(aqSelHas)){aqSelSet(aqSel.filter(function(b){return g.indexOf(b)<0;}));}
+   else{aqSelSet(aqSel.concat(g));}
+   return;}
+  aqDragStart(el,ev);});
  el.addEventListener('dblclick',function(ev){aqMenuShow(el,ev);ev.preventDefault();});
 });
 document.addEventListener('mousemove',function(ev){if(!aqDrag)return;
  var dx=(ev.clientX-aqDrag.sx)/aqZ,dy=(ev.clientY-aqDrag.sy)/aqZ;
- if(Math.abs(dx)+Math.abs(dy)>3)aqDrag.moved=true;
- aqDrag.els.forEach(function(b){b.setAttribute('transform','translate('+dx+','+dy+')');});
+ if(Math.abs(dx)+Math.abs(dy)>3){aqDrag.moved=true;aqDragRaise(aqDrag);}
+ aqDrag.items.forEach(function(it){aqSetT(it.b,it.bx+dx,it.by+dy);
+  it.ts.forEach(function(t){aqSetT(t.n,t.bx+dx,t.by+dy);});});
  if(typeof tip!=='undefined')tip.style.display='none';
  var z=aqZoneAt(ev.clientX,ev.clientY);
  aqZones.forEach(function(r){var on=(r===z);
@@ -1526,15 +1610,24 @@ document.addEventListener('mousemove',function(ev){if(!aqDrag)return;
 document.addEventListener('mouseup',function(ev){if(!aqDrag)return;
  var d=aqDrag;aqDrag=null;
  aqZones.forEach(function(r){r.setAttribute('stroke','none');r.setAttribute('fill','none');});
- if(!d.moved){d.els.forEach(function(b){b.removeAttribute('transform');});return;}
+ function rev(it){aqSetT(it.b,it.bx,it.by);it.ts.forEach(function(t){aqSetT(t.n,t.bx,t.by);});}
+ if(!d.moved){d.items.forEach(rev);return;}
  var z=aqZoneAt(ev.clientX,ev.clientY);
- if(z&&(z.dataset.rack!==d.el.dataset.rack||z.dataset.shelf!==d.el.dataset.shelf)){
-  aqPush({t:'move',code:d.el.dataset.code,rack:d.el.dataset.rack,shelf:parseInt(d.el.dataset.shelf),
-          track:z.dataset.rack,tshelf:parseInt(z.dataset.shelf)});
- }else{d.els.forEach(function(b){b.removeAttribute('transform');});}
+ if(!z){d.items.forEach(rev);return;}
+ var done={};
+ d.items.forEach(function(it){var b=it.b;
+  if(z.dataset.rack===b.dataset.rack&&z.dataset.shelf===b.dataset.shelf){rev(it);return;}   /* 같은 단 → 제자리 */
+  var k=b.dataset.code+'|'+b.dataset.rack+'|'+b.dataset.shelf;
+  if(!done[k]){done[k]=true;
+   aqPush({t:'move',code:b.dataset.code,rack:b.dataset.rack,shelf:parseInt(b.dataset.shelf),
+           track:z.dataset.rack,tshelf:parseInt(z.dataset.shelf)});}
+  b.dataset.rack=z.dataset.rack;b.dataset.shelf=z.dataset.shelf;});   /* 후속 조작이 새 위치를 참조 */
 });
+function aqDelOne(b){aqPush({t:'del',code:b.dataset.code,rack:b.dataset.rack,shelf:parseInt(b.dataset.shelf)});
+ b.style.display='none';aqTexts(b).forEach(function(t){t.style.display='none';});}
+function aqSelDel(){var sel=aqSel.slice();aqSelClear();sel.forEach(aqDelOne);}   /* [V58] 선택 일괄 삭제 */
 function aqMenuShow(el,ev){aqMenuHide();
- var m=document.createElement('div');aqMenu=m;
+ var m=document.createElement('div');aqMenu=m;m.id='aqmenu';
  m.style.cssText='position:fixed;z-index:120;background:#191414;border:2px solid #F4D624;'
   +'border-radius:8px;padding:8px;font-family:sans-serif;left:'+(ev.clientX+6)+'px;top:'+(ev.clientY+6)+'px;';
  var nm=el.getAttribute('data-name')||el.dataset.code;
@@ -1544,13 +1637,21 @@ function aqMenuShow(el,ev){aqMenuHide();
  var b1=document.createElement('button');b1.textContent='⧉ 복제(+1상자)';
  var b2=document.createElement('button');b2.textContent='🗑 삭제(−1상자)';
  var b3=document.createElement('button');b3.textContent='✕';
- [b1,b2,b3].forEach(function(b){b.style.cssText='margin-right:6px;padding:4px 8px;border:1px solid #F4D624;'
+ var bs4=[b1,b2,b3];
+ var b4=null;
+ if(aqSel.length>1&&aqSelHas(el)){b4=document.createElement('button');
+  b4.textContent='🗑 선택 '+aqSel.length+'상자 삭제';bs4=[b1,b2,b4,b3];}
+ bs4.forEach(function(b){b.style.cssText='margin-right:6px;padding:4px 8px;border:1px solid #F4D624;'
   +'background:#191414;color:#FFFFFF;border-radius:6px;cursor:pointer;font-size:12px;';m.appendChild(b);});
  b1.onclick=function(){aqPush({t:'dup',code:el.dataset.code,rack:el.dataset.rack,
-  shelf:parseInt(el.dataset.shelf)});aqMenuHide();};
- b2.onclick=function(){aqPush({t:'del',code:el.dataset.code,rack:el.dataset.rack,
   shelf:parseInt(el.dataset.shelf)});
-  var g=aqGrp(el);if(g.length>0){g[g.length-1].style.display='none';}aqMenuHide();};
+  var g=aqGrp(el),last=g[g.length-1];   /* [V58] 반영 전에도 보이게 유령 복제 */
+  try{var c=last.cloneNode(false);c.removeAttribute('class');c.setAttribute('pointer-events','none');
+   var o=aqOff(last),hh=(last.getBBox?last.getBBox().height:12)||12;
+   aqSvg.appendChild(c);aqSetT(c,o.x,o.y-hh);}catch(e){}
+  aqMenuHide();};
+ b2.onclick=function(){var g=aqGrp(el);aqDelOne(g[g.length-1]||el);aqMenuHide();};
+ if(b4)b4.onclick=function(){aqSelDel();aqMenuHide();};
  b3.onclick=aqMenuHide;
  if(AQB&&AQB.length){var bt=document.createElement('div');
   bt.style.cssText='color:#CFC9C3;font-size:10px;margin:7px 0 3px 0;';bt.textContent='📦 상자 변경';m.appendChild(bt);
@@ -1563,9 +1664,38 @@ function aqMenuShow(el,ev){aqMenuHide();
     shelf:parseInt(el.dataset.shelf),box:bn});aqMenuHide();};
    bw.appendChild(bb);});
   m.appendChild(bw);}
- document.body.appendChild(m);}
+ document.getElementById('aqwrap').appendChild(m);}   /* [V58] 전체화면(#aqwrap) 안에서도 메뉴 표시 */
 function aqMenuHide(){if(aqMenu&&aqMenu.parentNode)aqMenu.parentNode.removeChild(aqMenu);aqMenu=null;}
 document.addEventListener('mousedown',function(ev){if(aqMenu&&!aqMenu.contains(ev.target))aqMenuHide();},true);
+/* [V58] 러버밴드 다중선택 — 빈 곳 드래그로 영역 안 상자 전부 선택(랙은 선택 안 됨), Shift=추가 */
+document.addEventListener('mousedown',function(ev){
+ if(ev.button!==0||aqDrag||aqRDrag||aqBand)return;
+ var t=ev.target;
+ if(t.closest&&(t.closest('#aqmenu')||t.closest('button')||t.closest('#aqtip')))return;
+ if(t.classList&&(t.classList.contains('aqbox')||t.classList.contains('aqrackhandle')))return;
+ aqBand={x:ev.clientX,y:ev.clientY,add:ev.shiftKey,el:null,rect:null};});
+document.addEventListener('mousemove',function(ev){if(!aqBand)return;
+ if(!aqBand.el){var dv=document.createElement('div');aqBand.el=dv;
+  dv.style.cssText='position:fixed;z-index:110;border:1.5px dashed #C7A500;'
+   +'background:rgba(244,214,36,0.12);pointer-events:none;';
+  document.getElementById('aqwrap').appendChild(dv);}
+ var x1=Math.min(ev.clientX,aqBand.x),y1=Math.min(ev.clientY,aqBand.y);
+ var w=Math.abs(ev.clientX-aqBand.x),h=Math.abs(ev.clientY-aqBand.y);
+ var s=aqBand.el.style;s.left=x1+'px';s.top=y1+'px';s.width=w+'px';s.height=h+'px';
+ aqBand.rect={l:x1,t:y1,r:x1+w,b:y1+h};
+ if(typeof tip!=='undefined')tip.style.display='none';});
+document.addEventListener('mouseup',function(ev){if(!aqBand)return;
+ var b=aqBand;aqBand=null;
+ if(b.el&&b.el.parentNode)b.el.parentNode.removeChild(b.el);
+ if(!b.rect||(b.rect.r-b.rect.l)+(b.rect.b-b.rect.t)<8){if(!b.add)aqSelClear();return;}
+ var hit=aqBoxes.filter(function(x){
+  if(x.style.display==='none')return false;
+  var r=x.getBoundingClientRect();
+  return r.left<b.rect.r&&r.right>b.rect.l&&r.top<b.rect.b&&r.bottom>b.rect.t;});
+ aqSelSet(b.add?aqSel.concat(hit.filter(function(x){return !aqSelHas(x);})):hit);});
+document.addEventListener('keydown',function(ev){
+ if((ev.key==='Delete'||ev.key==='Backspace')&&aqSel.length){aqSelDel();ev.preventDefault();}
+ else if(ev.key==='Escape'&&aqSel.length){aqSelClear();}});
 var aqRDrag=null;
 [].slice.call(document.querySelectorAll('.aqrackhandle')).forEach(function(h){
  h.style.cursor='grab';
@@ -1763,7 +1893,7 @@ class _AqPrintPDF(FPDF):
         except Exception:
             pass
 
-    def ean13(self, code, x, y, w, h, digits_pt=6.5):
+    def ean13(self, code, x, y, w, h, digits_pt=6.5, digits_room=None):
         bits = aq_ean13_bits(code)
         if not bits:
             self.txt(x, y + h / 2, w, 4, f"바코드 확인 필요: {code}", 6, color=(180, 60, 60), align="C")
@@ -1774,7 +1904,18 @@ class _AqPrintPDF(FPDF):
             if b == "1":
                 guard = i < 3 or i >= 92 or 45 <= i < 50
                 self.rect(x + i * mw, y, mw, h + (1.4 if guard else 0), "F")
-        self.txt(x, y + h + 1.6, w, digits_pt * 0.5, code, digits_pt, align="C", mono=True)   # [V53] 데이터=모노
+        # [V58] 하단 숫자 = 가능한 최대 크기(굵게) — 리더기 없는 농협은 눈으로 숫자를 읽음(대표님 요청).
+        #  폭은 실측(get_string_width)으로, 세로는 digits_room(mm, 바 아래 여유)으로 제한.
+        pt = float(digits_pt)
+        try:
+            self.fmono(pt, True)
+            while pt > 4.0 and self.get_string_width(str(code)) > w - 0.8:
+                pt -= 0.5; self.fmono(pt, True)
+        except Exception:
+            pass
+        if digits_room:
+            pt = min(pt, max(4.0, (digits_room - 1.2) / 0.3528))   # 1.2=바-숫자 간격, 1pt=0.3528mm
+        self.txt(x, y + h + 1.2, w, pt * 0.42, code, pt, bold=True, align="C", mono=True)   # [V53] 데이터=모노
         return True
 
     def qr(self, data, x, y, size, label=""):
@@ -1880,7 +2021,7 @@ def _aq_sticker_card(pdf, s, x, y, it, rgb, bc, img):
         pdf.lbox(cx, r2y, 40, r2h); pdf.img_fit(img, cx + 1.5, r2y + 1.5, 37, r2h - 3)
         pdf.qr(it["qr"], cx + 44, r2y + 1.5, 27, label="영상 보기")
         bx = cx + 44 + 27 + 6; bw = cx + cw - bx - 2
-        if bc: pdf.ean13(bc, bx, r2y + 4, bw, 17, digits_pt=8)
+        if bc: pdf.ean13(bc, bx, r2y + 4, bw, 17, digits_pt=18, digits_room=r2h - 22.6)   # [V58] 숫자 최대 확대
         else: pdf.txt(bx, r2y + 12, bw, 5, "바코드 없음", 9, color=(180, 60, 60), align="C")
         r3y = r2y + r2h + 1.6; r3h = y + H - FT - 4.2 - r3y
         pdf.lbox(cx, r3y, cw, r3h)
@@ -1903,7 +2044,7 @@ def _aq_sticker_card(pdf, s, x, y, it, rgb, bc, img):
         pdf.lbox(cx, r2y, 18, r2h); pdf.img_fit(img, cx + 0.8, r2y + 0.8, 16.4, r2h - 1.6)
         pdf.qr(it["qr"], cx + 19.4, r2y + 2, 15)   # §5-1 QR 최소 15mm
         bx = cx + 19.4 + 15 + 2; bw = cx + cw - bx - 0.5
-        if bc: pdf.ean13(bc, bx, r2y + 2.5, bw, 11.5, digits_pt=5.5)
+        if bc: pdf.ean13(bc, bx, r2y + 2.5, bw, 9.0, digits_pt=14, digits_room=r2h - 12.9)   # [V58] 숫자 최대 확대(바 11.5→9.0)
         else: pdf.txt(bx, r2y + 8, bw, 4, "바코드 없음", 6.5, color=(180, 60, 60), align="C")
         r3y = r2y + r2h + 1.0; r3h = y + H - FT - 3.4 - r3y
         pdf.lbox(cx, r3y, cw, r3h)
@@ -1928,8 +2069,8 @@ def _aq_sticker_card(pdf, s, x, y, it, rgb, bc, img):
         pdf.lbox(cx, r2y, 16.5, r2h); pdf.img_fit(img, cx + 0.8, r2y + 0.8, 14.9, r2h - 1.6)
         qs = 15.0   # §5-1 QR 최소 15mm
         pdf.qr(it["qr"], cx + 18, r2y + max(0.5, (r2h - qs) / 2), qs)
-        bx = cx + 18 + qs + 2; bw = 26
-        if bc: pdf.ean13(bc, bx, r2y + 1.8, bw, 10.5, digits_pt=5.2)
+        bx = cx + 18 + qs + 2; bw = 30   # [V58] 바코드 폭 26→30 — 숫자 확대
+        if bc: pdf.ean13(bc, bx, r2y + 1.8, bw, 11, digits_pt=11, digits_room=r2h - 13.7)   # [V58] 숫자 최대 확대
         else: pdf.txt(bx, r2y + 6, bw, 4, "바코드 없음", 6.2, color=(180, 60, 60), align="C")
         dx = bx + bw + 2; dw = cx + cw - dx
         pdf.lbox(dx, r2y, dw, r2h)
@@ -6907,13 +7048,15 @@ elif mode == "🏪 아쿠나리스":
                         _boxf = str((_plan_items.get(_cf, {}) or {}).get("box") or r.get("기본상자") or "").strip()
                         if _boxf: continue   # 상자가 있는 품목은 대상 아님
                         _fc = _free_cur.get(_cf, {}) if isinstance(_free_cur.get(_cf, {}), dict) else {}
+                        if not _fc and aq_std_free_of(_cf):   # [V58] 표준 자유배치 존(여과기·지주대) 기본 제공
+                            _fc = dict(aq_std_free_of(_cf))
                         _has_iso = bool(str(r.get("이미지ISO", "") or "").strip())
                         try: _wdef = int(_fc.get("w") or 0) or int(float(str(r.get("가로") or 0))) or None
                         except Exception: _wdef = None
                         try: _hdef = int(_fc.get("h") or 0) or int(float(str(r.get("높이") or 0))) or None
                         except Exception: _hdef = None
                         _rows_free.append({
-                            "사용": _cf in _free_cur,
+                            "사용": (_cf in _free_cur) or bool(aq_std_free_of(_cf)),   # [V58] 표준 존 기본 사용
                             "품목코드": _cf, "품목명": str(r.get("품목명_AQ", "") or ""), "규격": str(r.get("규격_AQ", "") or ""),
                             "형태": str(_fc.get("shape") or ("이미지" if _has_iso else "사각")),
                             "폭mm": _wdef, "높이mm": _hdef,
@@ -7144,7 +7287,8 @@ elif mode == "🏪 아쿠나리스":
                                     _t9k = _asg_old9.get(c) or ()
                                     return _t9k[i] if len(_t9k) > i else d
                                 st.session_state[_asg_key] = {
-                                    c: (rk, sh, _keep9(c, 2), _keep9(c, 3))
+                                    c: (rk, sh, _keep9(c, 2),
+                                        _keep9(c, 3, (aq_std_free_of(c) or {}).get("n", 1)))   # [V58] 여과기 3×2 등 표준 상자수
                                     for c, (rk, sh) in _asg_new.items()}
                                 st.session_state[_ver_key] += 1
                                 st.session_state[f"aq_unp_{sel_site}"] = _unp
@@ -7211,6 +7355,16 @@ elif mode == "🏪 아쿠나리스":
                                 })
                         _seq_by_shelf = {}
                         _asg_live = {}
+                        def _colhint5(c, rk, sh):
+                            """[V58] 그 단이 품목의 표준 섹션·단이면 '열'(좌0/중1/우2), 아니면 중(1).
+                            정준 정렬·패킹 런 분할에 쓰여 V1 도면의 좌우 나란히 배치를 재현한다."""
+                            _r = _aq_by_code.get(c, {}) or {}
+                            _sec = str(_r.get("섹션", "") or "").strip()
+                            try: _sd = int(float(_r.get("단") or 0))
+                            except Exception: _sd = 0
+                            if _sec and _sd == sh and rk in (f"섹션{_sec}", _sec):
+                                return AQ_COL_ORD.get(str(_r.get("열", "") or "").strip(), 1)
+                            return 1
                         for _, _row4 in df_asg.iterrows():
                             _rk5 = str(_row4["랙"] or "").strip()
                             try: _sh5 = int(_row4["단"] or 0)
@@ -7228,15 +7382,18 @@ elif mode == "🏪 아쿠나리스":
                                 if not _fc5: continue
                                 for _ in range(_n5):
                                     _seq_by_shelf.setdefault((_rk5, _sh5), []).append(
-                                        (_c5, str(_row4["분류"]), "자유:" + _c5, _fc5["w"], _fc5["h"]))
+                                        (_c5, str(_row4["분류"]), "자유:" + _c5, _fc5["w"], _fc5["h"],
+                                         _colhint5(_c5, _rk5, _sh5)))   # [V58] 열 힌트
                                 continue
                             _wh5 = _dims_p.get(_b5)
                             if not _wh5: continue
                             for _ in range(_n5):
                                 _seq_by_shelf.setdefault((_rk5, _sh5), []).append(
-                                    (_c5, str(_row4["분류"]), _b5, _wh5[0], _wh5[1]))
+                                    (_c5, str(_row4["분류"]), _b5, _wh5[0], _wh5[1],
+                                     _colhint5(_c5, _rk5, _sh5)))   # [V58] 열 힌트
                         st.session_state[_asg_key] = _asg_live   # 편집 상태 동기화(저장 시 사용)
                         for _k7 in _seq_by_shelf:                 # 정준 정렬 — 편집 순서와 무관하게 동일 패킹
+                            # [V58] 열 힌트는 튜플 6번째 원소로 포함(정렬·패킹 런 분할 공통 사용)
                             _seq_by_shelf[_k7] = aq_canon_seq(_seq_by_shelf[_k7], _pg)
                         # [V49] 호버 툴팁 정보(품목명·규격·상자·최대수량) + 자유 배치 도형/이미지
                         _info_map = {}
@@ -7278,9 +7435,9 @@ elif mode == "🏪 아쿠나리스":
                             _components9.html(_html9, height=min(_hpx9 + 34, 960), scrolling=True)
                             _cb1, _cbU, _cbR, _cb2 = st.columns([3.4, 1, 1, 1.5])
                             with _cb1:
-                                st.caption("🖱️ 호버=정보 · **드래그=이동**(상자·랙 이름≡) · **더블클릭=복제/삭제/상자 변경** · "
-                                           "**⛶ 전체화면=화면에 꽉 차게 확대 + 모든 상자에 품명·규격 표시**(상자보다 길면 괄호 생략·자동 축소). "
-                                           "조작은 1~3초 내 자동 반영 — 안 되면 🔄.")
+                                st.caption("🖱️ 호버=정보 · **드래그=이동**(상자·랙 이름≡) · **빈 곳 드래그=영역 다중선택 · Shift+클릭=추가 선택**(선택 후 드래그=일괄 이동, Delete=일괄 삭제) · "
+                                           "**더블클릭=복제/삭제/상자 변경** · **⛶ 전체화면=꽉 차게 확대+전 상자 품명·규격**(전체화면에서도 이동·삭제 가능). "
+                                           "조작은 그림에 즉시 표시되고 **4초 뒤(전체화면은 종료 시) 일괄 반영** — 바로 반영하려면 🔄.")
                             _un_st9 = st.session_state.get(f"aq_undo_{sel_site}") or []
                             _rd_st9 = st.session_state.get(f"aq_redo_{sel_site}") or []
                             with _cbU:

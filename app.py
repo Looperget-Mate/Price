@@ -1122,23 +1122,16 @@ def aq_std_payload(aq_items):
                       "단높이mm(콤마구분)": ",".join(str(x) for x in AQ_STD_RACK_H[s]),
                       "단깊이mm(콤마구분)": "", "비고": "표준(실측 2026-07-23)"})
     # [V58] 표준 자유배치 존(섹션01 여과기·지주대) + 도면 랙 순서를 배치JSON에 포함
-    free_std, assign_std = {}, {}
+    #  [V61] assign은 넣지 않는다 — 불러오기 = 빈 랙, ⚡자동배치 한 번으로 전 품목(여과기·루퍼젯 포함) 배치
+    #  (여과기 존은 free 기본값+표준 위치(pre)+표준 상자수(aq_std_n_of)로 자동 재현됨)
+    free_std = {}
     for r in aq_items:
         c = str(r.get("품목코드", "")).strip()
         fd = aq_std_free_of(c)
         if fd:
             free_std[c] = {"shape": fd["shape"], "w": fd["w"], "h": fd["h"], "qty": fd["qty"]}
-            assign_std[c] = {"rack": fd["rack"], "shelf": fd["shelf"], "rows": 1, "n": fd.get("n", 1)}
-            continue
-        if str(c).zfill(5) in AQ_STD_N:   # [V59] 루퍼젯팩 표준 수량 — 위치는 AQ_Items 섹션·단
-            _sec9p = str(r.get("섹션", "") or "").strip()
-            try: _sh9p = int(float(r.get("단") or 0))
-            except Exception: _sh9p = 0
-            if _sec9p and _sh9p > 0:
-                assign_std[c] = {"rack": f"섹션{_sec9p}", "shelf": _sh9p, "rows": 1,
-                                 "n": AQ_STD_N[str(c).zfill(5)]}
     plan = {"groups": sorted(groups), "items": plan_items,
-            "free": free_std, "assign": assign_std, "rack_order": list(AQ_STD_RACK_ORDER),
+            "free": free_std, "rack_order": list(AQ_STD_RACK_ORDER),
             "updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M") + " (표준)"}
     return racks, plan
 
@@ -1204,6 +1197,8 @@ def aq_pack_shelf_stacks(box_seq, inner, shelf_h, max_layers=3):
     for _key, items in runs:
         w, h = items[0][3], items[0][4]
         layers = min(max_layers, int(shelf_h // h)) if h > 0 else 0
+        if items[0][2] == "루퍼젯팩":   # [V61] 팩 제품은 적층하지 않고 나란히(도면 실측·낱개 이동)
+            layers = min(layers, 1)
         if layers < 1 or w > inner:
             rejected.extend(items); continue
         cur = None
@@ -1622,11 +1617,12 @@ function aqApply(){if(!aqOps.length)return;
  clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,3000);}   /* 실패 시 재시도(성공하면 iframe 교체됨) */
 function aqZoneAt(x,y){for(var i=0;i<aqZones.length;i++){var r=aqZones[i].getBoundingClientRect();
  if(x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom)return aqZones[i];}return null;}
-function aqDragStart(el,ev){   /* [V58] 선택된 상자를 잡으면 선택 전체가 함께 이동 */
- var els;
+function aqDragStart(el,ev){   /* [V58] 선택된 상자를 잡으면 선택 전체가 함께 이동
+   [V61] 선택이 없으면 잡은 상자 1개만(낱개) — 루퍼젯 2팩 등도 하나씩 옮긴다 */
+ var els,one=false;
  if(aqSelHas(el)&&aqSel.length>1){els=aqSel.slice();}
- else{aqSelClear();els=aqGrp(el);}
- aqDrag={items:els.map(function(b){
+ else{aqSelClear();els=[el];one=(aqGrp(el).length>1);}
+ aqDrag={one:one,items:els.map(function(b){
    var o=aqOff(b);
    return {b:b,bx:o.x,by:o.y,ts:aqTexts(b).map(function(t){var q=aqOff(t);return {n:t,bx:q.x,by:q.y};})};}),
   el:el,sx:ev.clientX,sy:ev.clientY,moved:false,raised:false};}
@@ -1691,8 +1687,10 @@ document.addEventListener('mouseup',function(ev){if(!aqDrag)return;
   var k=b.dataset.code+'|'+b.dataset.rack+'|'+b.dataset.shelf;
   if(!done[k]){done[k]=true;
    if(z.dataset.rack!==b.dataset.rack||z.dataset.shelf!==b.dataset.shelf||d.moved){
-    aqPush({t:'move',code:b.dataset.code,rack:b.dataset.rack,shelf:parseInt(b.dataset.shelf),
-            track:z.dataset.rack,tshelf:parseInt(z.dataset.shelf),xr:Math.round(xr*1000)/1000});}}
+    var op={t:'move',code:b.dataset.code,rack:b.dataset.rack,shelf:parseInt(b.dataset.shelf),
+            track:z.dataset.rack,tshelf:parseInt(z.dataset.shelf),xr:Math.round(xr*1000)/1000};
+    if(d.one)op.one=1;   /* [V61] 낱개 이동 → 서버가 분할 진열로 처리 */
+    aqPush(op);}}
   b.dataset.rack=z.dataset.rack;b.dataset.shelf=z.dataset.shelf;});
  var rem=d.items.map(function(it){return it.b;});   /* [V60] 드롭 즉시 스냅 — 먼저 놓인 것부터 이웃이 됨 */
  d.items.forEach(function(it){rem.shift();aqSnapBox(it.b,z,rem.slice());});
@@ -6569,6 +6567,51 @@ elif mode == "🏪 아쿠나리스":
                        + " · 매입가 미표시 · 수용기록=축적된 상자별 수용량 데이터 수")
             st.dataframe(pd.DataFrame(rows_view), hide_index=True, height=480)
 
+            # ── [V61] Looperget_DB 절대값(대표님 승인 2026-07-23) — Products에서 진열 품목 추가(흡수 1단계) ──
+            with st.expander("➕ 진열 품목 추가 — Looperget_DB(Products)에서", expanded=False):
+                st.caption("품목 정본은 **Looperget_DB(Products)** 입니다. 여기서 고른 품목이 진열 속성(AQ_Items)에 등재되어 "
+                           "부속군 색·사이트 배치·스티커 대상이 됩니다. 상자·수용량은 등재 후 📦 상자·수용량 탭에서 보강하세요.")
+                _ex_codes61 = {str(r.get("품목코드", "")).strip().zfill(5) for r in aq_items}
+                _cand61 = [p for p in st.session_state.db.get("products", [])
+                           if str(p.get("code", "")).strip()
+                           and str(p.get("code", "")).strip().zfill(5) not in _ex_codes61]
+                _kw61 = st.text_input("Products 검색 (코드/이름/규격)", key="aq_addp_kw")
+                if _kw61.strip():
+                    _k61 = _kw61.strip().lower()
+                    _cand61 = [p for p in _cand61
+                               if _k61 in f"{p.get('code', '')} {p.get('name', '')} {p.get('spec', '')}".lower()]
+                st.caption(f"추가 가능 {len(_cand61)}개 (이미 등재된 {len(_ex_codes61)}개 제외 · 표시 최대 300)")
+                _by61 = {str(p.get("code", "")).zfill(5): p for p in _cand61}
+                _opts61 = [f"{str(p.get('code', '')).zfill(5)} | {p.get('name', '')} {p.get('spec', '')}".strip()
+                           for p in _cand61[:300]]
+                _sel61 = st.multiselect("추가할 품목", _opts61, key="aq_addp_sel")
+                _c61a, _c61b = st.columns(2)
+                with _c61a:
+                    _grp61 = st.selectbox("부속군(진열분류)", [g for g in AQ_GROUP_COLORS if g != "(미지정)"],
+                                          key="aq_addp_grp")
+                with _c61b:
+                    _box61 = st.selectbox("기본상자 (빈칸 = 자유배치로 진열)", [""] + [b for b in aq_box_names if b],
+                                          key="aq_addp_box")
+                if _sel61 and st.button(f"➕ {len(_sel61)}개 품목 등재", key="aq_addp_go", type="primary"):
+                    try:
+                        ws61 = _aq_sh().worksheet("AQ_Items")
+                        hdr61 = ws61.row_values(1)
+                        _rows61 = []
+                        for _s61 in _sel61:
+                            _cd61 = _s61.split("|")[0].strip()
+                            _p61 = _by61.get(_cd61, {})
+                            _d61 = {"품목코드": _cd61, "품목명_AQ": str(_p61.get("name", "") or ""),
+                                    "규격_AQ": str(_p61.get("spec", "") or ""), "진열분류": _grp61,
+                                    "기본상자": _box61,
+                                    "비고": f"Products에서 추가 {datetime.date.today().isoformat()}"}
+                            _rows61.append([str(_d61.get(h, "")) for h in hdr61])
+                        ws61.append_rows(_rows61, value_input_option="RAW")
+                        aq_load_all.clear()
+                        st.success(f"{len(_rows61)}개 등재 완료 — 부속군 '{_grp61}'")
+                        time.sleep(0.5); st.rerun()
+                    except Exception as _e61:
+                        st.error(f"등재 실패: {aq_err_str(_e61)}")
+
             # ── [V48] 품목 이미지 2종 체계 — 빌더용(기존 유지)과 등각(ISO: 현장 시연·가이드북·스티커용) ──
             with st.expander("🖼️ 품목 이미지 관리 — 등각(ISO) 등록·미리보기", expanded=False):
                 st.caption("빌더용 이미지(2D 배치용)는 기존 관리자 모드에서 그대로 관리합니다. 여기서는 현장 시연·가이드북·스티커 자동생성용 **등각(isometric) 이미지**를 품목별로 추가 등록합니다. (드라이브 파일명 `코드_iso` — 기존 이미지 해석과 충돌 없음)")
@@ -7259,6 +7302,12 @@ elif mode == "🏪 아쿠나리스":
                                     str(k): [str(v.get("rack", "")), int(v.get("shelf", 0)), float(v["ord"])]
                                     for k, v in _saved_asg.items()
                                     if isinstance(v, dict) and v.get("ord") is not None}
+                            _saved_sp = _plan_cur.get("splits", {}) if isinstance(_plan_cur, dict) else {}
+                            if isinstance(_saved_sp, dict):   # [V61] 분할 진열 복원
+                                st.session_state[f"aq_split_{sel_site}"] = {
+                                    str(k): [[str(e[0]), int(e[1]), int(e[2])] for e in v
+                                             if isinstance(e, (list, tuple)) and len(e) >= 3]
+                                    for k, v in _saved_sp.items() if isinstance(v, list)}
                         # ── [V51] 가상랙(임시 보관 공간) + 배치 그림 드래그/더블클릭 조작 브리지 ──
                         AQ_VIRT = "🅥 가상랙"
                         if "aq_ops_salt" not in st.session_state:   # 세션 고유 논스 — 이전 세션 조작 재적용 방지
@@ -7314,7 +7363,9 @@ elif mode == "🏪 아쿠나리스":
                                     _un9.append({"asg": dict(st.session_state.get(_asg_key, {})),
                                                  "boxov": dict(st.session_state.get(f"aq_boxov_{sel_site}", {})),
                                                  "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or []),
-                                                 "xord": dict(st.session_state.get(f"aq_xord_{sel_site}", {}))})
+                                                 "xord": dict(st.session_state.get(f"aq_xord_{sel_site}", {})),
+                                                 "split": {k: [list(e) for e in v] for k, v in
+                                                           st.session_state.get(f"aq_split_{sel_site}", {}).items()}})
                                     if len(_un9) > 20:
                                         del _un9[0]
                                     st.session_state[f"aq_redo_{sel_site}"] = []
@@ -7326,16 +7377,76 @@ elif mode == "🏪 아쿠나리스":
                                             _rw9 = (_cur9[2] if _cur9 and len(_cur9) > 2 else 1)
                                             _n9 = (_cur9[3] if _cur9 and len(_cur9) > 3 else 1)
                                             if _op9.get("t") == "move" and _op9.get("track"):
-                                                _asg9[_c9o] = (str(_op9["track"]), int(_op9["tshelf"]), _rw9, _n9)
+                                                # [V61] 분할 진열 — 낱개(one) 이동은 본 자리/분할 자리 간 1상자 단위로
+                                                _spm9 = st.session_state.setdefault(f"aq_split_{sel_site}", {})
+                                                _lsp9 = _spm9.get(_c9o) or []
+                                                _src9 = (str(_op9.get("rack") or ""), int(_op9.get("shelf") or 0))
+                                                _tgt9 = (str(_op9["track"]), int(_op9["tshelf"]))
+                                                _mn9 = (_cur9[0], _cur9[1]) if _cur9 else None
+                                                def _sp_find9(loc):
+                                                    for _e9 in _lsp9:
+                                                        if (str(_e9[0]), int(_e9[1])) == loc: return _e9
+                                                    return None
+                                                def _sp_add9(loc, k=1):
+                                                    _e9 = _sp_find9(loc)
+                                                    if _e9: _e9[2] = int(_e9[2]) + k
+                                                    else: _lsp9.append([loc[0], loc[1], k])
+                                                if _op9.get("one") and _src9 == _tgt9:
+                                                    pass                        # 같은 단 재배치 → 아래 xord만
+                                                elif _op9.get("one") and _cur9 and _mn9 == _src9 and _n9 > 1:
+                                                    _asg9[_c9o] = (_cur9[0], _cur9[1], _rw9, _n9 - 1)
+                                                    _sp_add9(_tgt9); _spm9[_c9o] = _lsp9
+                                                elif _op9.get("one") and _sp_find9(_src9):
+                                                    _e9s = _sp_find9(_src9)
+                                                    _e9s[2] = int(_e9s[2]) - 1
+                                                    if _e9s[2] <= 0: _lsp9.remove(_e9s)
+                                                    if _cur9 and _mn9 == _tgt9:
+                                                        _asg9[_c9o] = (_cur9[0], _cur9[1], _rw9, _n9 + 1)
+                                                    else:
+                                                        _sp_add9(_tgt9)
+                                                    _spm9[_c9o] = _lsp9
+                                                elif _cur9 and _mn9 != _src9 and _sp_find9(_src9):
+                                                    _e9s = _sp_find9(_src9)   # 분할 묶음 통째 이동
+                                                    _lsp9.remove(_e9s)
+                                                    if _mn9 == _tgt9:
+                                                        _asg9[_c9o] = (_cur9[0], _cur9[1], _rw9, _n9 + int(_e9s[2]))
+                                                    else:
+                                                        _sp_add9(_tgt9, int(_e9s[2]))
+                                                    _spm9[_c9o] = _lsp9
+                                                else:
+                                                    _asg9[_c9o] = (_tgt9[0], _tgt9[1], _rw9, _n9)
                                                 if _op9.get("xr") is not None:   # [V59] 드롭 좌우 위치 → 단 내 순서
                                                     st.session_state.setdefault(f"aq_xord_{sel_site}", {})[_c9o] = [
                                                         str(_op9["track"]), int(_op9["tshelf"]),
                                                         round(-0.2 + 2.4 * max(0.0, min(1.0, float(_op9["xr"]))), 3)]
                                             elif _op9.get("t") == "dup" and _cur9:
-                                                _asg9[_c9o] = (_cur9[0], _cur9[1], _rw9, min(_n9 + 1, 8))
+                                                # [V61] 분할 자리에서 복제하면 그 자리 수량 증가
+                                                _spm9 = st.session_state.setdefault(f"aq_split_{sel_site}", {})
+                                                _lsp9 = _spm9.get(_c9o) or []
+                                                _src9 = (str(_op9.get("rack") or ""), int(_op9.get("shelf") or 0))
+                                                _hit9 = next((_e9 for _e9 in _lsp9
+                                                              if (str(_e9[0]), int(_e9[1])) == _src9), None)
+                                                if _hit9 and _src9 != (_cur9[0], _cur9[1]):
+                                                    _hit9[2] = min(int(_hit9[2]) + 1, 8); _spm9[_c9o] = _lsp9
+                                                else:
+                                                    _asg9[_c9o] = (_cur9[0], _cur9[1], _rw9, min(_n9 + 1, 8))
                                             elif _op9.get("t") == "del" and _cur9:
-                                                if _n9 > 1:
+                                                # [V61] 분할 자리 삭제는 그 자리만 — 본 자리 소진 시 분할 승격
+                                                _spm9 = st.session_state.setdefault(f"aq_split_{sel_site}", {})
+                                                _lsp9 = _spm9.get(_c9o) or []
+                                                _src9 = (str(_op9.get("rack") or ""), int(_op9.get("shelf") or 0))
+                                                _hit9 = next((_e9 for _e9 in _lsp9
+                                                              if (str(_e9[0]), int(_e9[1])) == _src9), None)
+                                                if _hit9 and _src9 != (_cur9[0], _cur9[1]):
+                                                    _hit9[2] = int(_hit9[2]) - 1
+                                                    if _hit9[2] <= 0: _lsp9.remove(_hit9)
+                                                    _spm9[_c9o] = _lsp9
+                                                elif _n9 > 1:
                                                     _asg9[_c9o] = (_cur9[0], _cur9[1], _rw9, _n9 - 1)
+                                                elif _lsp9:
+                                                    _e9p = _lsp9.pop(0)   # 본 자리 소진 → 첫 분할 승격
+                                                    _asg9[_c9o] = (str(_e9p[0]), int(_e9p[1]), _rw9, int(_e9p[2]))
+                                                    _spm9[_c9o] = _lsp9
                                                 else:
                                                     _asg9.pop(_c9o, None)
                                             elif _op9.get("t") == "box" and _op9.get("box"):   # [V54] 상자 변경
@@ -7433,6 +7544,7 @@ elif mode == "🏪 아쿠나리스":
                                 st.session_state[_ver_key] += 1
                                 st.session_state[f"aq_unp_{sel_site}"] = _unp
                                 st.session_state[f"aq_xord_{sel_site}"] = {}   # [V59] 드롭 순서 초기화(표준 열 순서로)
+                                st.session_state[f"aq_split_{sel_site}"] = {}   # [V61] 분할 진열도 초기화
                                 st.rerun()
                         with ca2:
                             _unp_l = st.session_state.get(f"aq_unp_{sel_site}", [])
@@ -7496,6 +7608,7 @@ elif mode == "🏪 아쿠나리스":
                                 })
                         _seq_by_shelf = {}
                         _asg_live = {}
+                        _bof5 = {}   # [V61] 코드→(분류,상자,폭,높이) — 분할 자리 렌더용
                         _xo5 = st.session_state.get(f"aq_xord_{sel_site}", {})   # [V59] 드롭 좌우 위치 기억
                         def _colhint5(c, rk, sh):
                             """[V58] 그 단이 품목의 표준 섹션·단이면 '열'(좌0/중1/우2), 아니면 중(1).
@@ -7526,6 +7639,7 @@ elif mode == "🏪 아쿠나리스":
                             if _b5 == "(자유)":                             # [V49] 자유 배치 품목
                                 _fc5 = _free_live.get(_c5)
                                 if not _fc5: continue
+                                _bof5[_c5] = (str(_row4["분류"]), "자유:" + _c5, _fc5["w"], _fc5["h"])
                                 for _ in range(_n5):
                                     _seq_by_shelf.setdefault((_rk5, _sh5), []).append(
                                         (_c5, str(_row4["분류"]), "자유:" + _c5, _fc5["w"], _fc5["h"],
@@ -7533,10 +7647,26 @@ elif mode == "🏪 아쿠나리스":
                                 continue
                             _wh5 = _dims_p.get(_b5)
                             if not _wh5: continue
+                            _bof5[_c5] = (str(_row4["분류"]), _b5, _wh5[0], _wh5[1])
                             for _ in range(_n5):
                                 _seq_by_shelf.setdefault((_rk5, _sh5), []).append(
                                     (_c5, str(_row4["분류"]), _b5, _wh5[0], _wh5[1],
                                      _colhint5(_c5, _rk5, _sh5)))   # [V58] 열 힌트
+                        # [V61] 분할 진열(낱개 이동 결과) 렌더 — 본 자리 외 추가 자리
+                        _sp_live5 = st.session_state.get(f"aq_split_{sel_site}", {})
+                        for _c5s, _lst5 in list(_sp_live5.items()):
+                            _bi5 = _bof5.get(_c5s)
+                            if not _bi5: continue
+                            for _r5s in _lst5:
+                                try:
+                                    _rk5s, _sh5s = str(_r5s[0]), int(_r5s[1])
+                                    _n5s = max(1, int(_r5s[2]))
+                                except Exception:
+                                    continue
+                                for _ in range(_n5s):
+                                    _seq_by_shelf.setdefault((_rk5s, _sh5s), []).append(
+                                        (_c5s, _bi5[0], _bi5[1], _bi5[2], _bi5[3],
+                                         _colhint5(_c5s, _rk5s, _sh5s)))
                         st.session_state[_asg_key] = _asg_live   # 편집 상태 동기화(저장 시 사용)
                         for _k7 in _seq_by_shelf:                 # 정준 정렬 — 편집 순서와 무관하게 동일 패킹
                             # [V58] 열 힌트는 튜플 6번째 원소로 포함(정렬·패킹 런 분할 공통 사용)
@@ -7581,7 +7711,7 @@ elif mode == "🏪 아쿠나리스":
                             _components9.html(_html9, height=min(_hpx9 + 34, 960), scrolling=True)
                             _cb1, _cbU, _cbR, _cb2 = st.columns([3.4, 1, 1, 1.5])
                             with _cb1:
-                                st.caption("🖱️ 호버=정보 · **드래그=이동**(상자·랙 이름≡) · **빈 곳 드래그=영역 다중선택 · Shift+클릭=추가 선택**(선택 후 드래그=일괄 이동, Delete=일괄 삭제) · "
+                                st.caption("🖱️ 호버=정보 · **드래그=상자 1개 이동**(여러 개 자리엔 낱개 분할 — 루퍼젯 팩도 하나씩) · **빈 곳 드래그=영역 다중선택 · Shift+클릭=추가 선택**(선택 후 드래그=일괄 이동, Delete=일괄 삭제) · "
                                            "**더블클릭=복제/삭제/상자 변경** · **⛶ 전체화면=꽉 차게 확대+전 상자 품명·규격**(전체화면에서도 이동·삭제 가능). "
                                            "조작은 그림에 즉시 표시되고 **4초 뒤(전체화면은 종료 시) 일괄 반영** — 바로 반영하려면 🔄.")
                             _un_st9 = st.session_state.get(f"aq_undo_{sel_site}") or []
@@ -7594,12 +7724,16 @@ elif mode == "🏪 아쿠나리스":
                                     _rd9.append({"asg": dict(st.session_state.get(_asg_key, {})),
                                                  "boxov": dict(st.session_state.get(f"aq_boxov_{sel_site}", {})),
                                                  "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or []),
-                                                 "xord": dict(st.session_state.get(f"aq_xord_{sel_site}", {}))})
+                                                 "xord": dict(st.session_state.get(f"aq_xord_{sel_site}", {})),
+                                                 "split": {k: [list(e) for e in v] for k, v in
+                                                           st.session_state.get(f"aq_split_{sel_site}", {}).items()}})
                                     _sn9 = _un_st9.pop()
                                     st.session_state[_asg_key] = _sn9["asg"]
                                     st.session_state[f"aq_boxov_{sel_site}"] = _sn9["boxov"]
                                     st.session_state[f"aq_rkord_{sel_site}"] = _sn9["rkord"]
                                     st.session_state[f"aq_xord_{sel_site}"] = dict(_sn9.get("xord", {}))
+                                    st.session_state[f"aq_split_{sel_site}"] = {k: [list(e) for e in v]
+                                                                                for k, v in _sn9.get("split", {}).items()}
                                     st.session_state[_ver_key] += 1
                                     st.rerun()
                             with _cbR:
@@ -7610,12 +7744,16 @@ elif mode == "🏪 아쿠나리스":
                                     _un9b.append({"asg": dict(st.session_state.get(_asg_key, {})),
                                                   "boxov": dict(st.session_state.get(f"aq_boxov_{sel_site}", {})),
                                                   "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or []),
-                                                  "xord": dict(st.session_state.get(f"aq_xord_{sel_site}", {}))})
+                                                  "xord": dict(st.session_state.get(f"aq_xord_{sel_site}", {})),
+                                                  "split": {k: [list(e) for e in v] for k, v in
+                                                            st.session_state.get(f"aq_split_{sel_site}", {}).items()}})
                                     _sn9 = _rd_st9.pop()
                                     st.session_state[_asg_key] = _sn9["asg"]
                                     st.session_state[f"aq_boxov_{sel_site}"] = _sn9["boxov"]
                                     st.session_state[f"aq_rkord_{sel_site}"] = _sn9["rkord"]
                                     st.session_state[f"aq_xord_{sel_site}"] = dict(_sn9.get("xord", {}))
+                                    st.session_state[f"aq_split_{sel_site}"] = {k: [list(e) for e in v]
+                                                                                for k, v in _sn9.get("split", {}).items()}
                                     st.session_state[_ver_key] += 1
                                     st.rerun()
                             with _cb2:
@@ -7831,6 +7969,11 @@ elif mode == "🏪 아쿠나리스":
                                 return _d9
                             _new_plan["assign"] = {c: _asg_d9(c, t)
                                                    for c, t in _asg_sv.items() if t and t[0] and t[1]}
+                        _sp_sv = st.session_state.get(f"aq_split_{sel_site}", {})   # [V61] 분할 진열 저장
+                        _sp_out = {c: [[str(e[0]), int(e[1]), int(e[2])] for e in v]
+                                   for c, v in _sp_sv.items() if v}
+                        if _sp_out:
+                            _new_plan["splits"] = _sp_out
                         _ord_sv = st.session_state.get(f"aq_rkord_{sel_site}")   # [V55] 랙 순서 저장
                         if _ord_sv:
                             _new_plan["rack_order"] = _ord_sv

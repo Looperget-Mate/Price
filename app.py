@@ -6472,44 +6472,14 @@ elif mode == "🏪 아쿠나리스":
                         st.info("상자 치수가 필요합니다 — 📦 상자·수용량 탭에서 폭·높이를 등록하세요.")
                     else:
                         _pg = plan_groups if plan_groups else aq_groups
-                        _asg_key = f"aq_asg_{sel_site}"
+                        # [V67] 상자 인스턴스 모델(2단계) — 정본 상태 = 인스턴스 리스트(각 상자가 좌표 소유).
+                        #  구 assign/split/xord/mstack 4중 모델 폐기(로드는 아래에서 1회 마이그레이션).
+                        _inst_key = f"aq_inst_{sel_site}"   # [{"id","code","box","rack","shelf","col","layer"}]
+                        _rows_key = f"aq_rows_{sel_site}"   # {코드: 깊이 줄수} — 탑뷰 표시용 메타
                         _ver_key = f"aq_asg_ver_{sel_site}"
                         if _ver_key not in st.session_state: st.session_state[_ver_key] = 0
-                        if _asg_key not in st.session_state:
-                            _saved_asg = _plan_cur.get("assign", {}) if isinstance(_plan_cur, dict) else {}
-                            st.session_state[_asg_key] = ({str(k): (str(v.get("rack", "")), int(v.get("shelf", 0)),
-                                                                    int(v.get("rows", 1) or 1),   # [V49] 줄수(깊이)
-                                                                    int(v.get("n", 1) or 1))      # [V51] 전면 상자수
-                                                           for k, v in _saved_asg.items() if isinstance(v, dict)}
-                                                          if isinstance(_saved_asg, dict) else {})
-                            if isinstance(_saved_asg, dict):   # [V59] 저장된 드롭 순서(ord) 복원
-                                st.session_state[f"aq_xord_{sel_site}"] = {
-                                    str(k): [str(v.get("rack", "")), int(v.get("shelf", 0)), float(v["ord"])]
-                                    for k, v in _saved_asg.items()
-                                    if isinstance(v, dict) and v.get("ord") is not None}
-                            _saved_sp = _plan_cur.get("splits", {}) if isinstance(_plan_cur, dict) else {}
-                            if isinstance(_saved_sp, dict):   # [V61] 분할 진열 복원
-                                st.session_state[f"aq_split_{sel_site}"] = {
-                                    str(k): [[str(e[0]), int(e[1]), int(e[2])] for e in v
-                                             if isinstance(e, (list, tuple)) and len(e) >= 3]
-                                    for k, v in _saved_sp.items() if isinstance(v, list)}
-                            _saved_mst = _plan_cur.get("mstack") if isinstance(_plan_cur, dict) else None   # [V64] 수동 적층 고정 복원
-                            if isinstance(_saved_mst, dict):
-                                st.session_state[f"aq_mstack_{sel_site}"] = {str(k): str(v) for k, v in _saved_mst.items()}
-                            elif isinstance(_saved_mst, list):   # 구 형태(코드 리스트) 하위호환
-                                st.session_state[f"aq_mstack_{sel_site}"] = {str(c): str(c) for c in _saved_mst}
-                            else:
-                                st.session_state[f"aq_mstack_{sel_site}"] = {}
                         # ── [V51] 가상랙(임시 보관 공간) + 배치 그림 드래그/더블클릭 조작 브리지 ──
                         AQ_VIRT = "🅥 가상랙"
-                        # [V64] aq_mstack 정규화 — 이전 세션(v1)에서 set으로 남아 있으면 dict로 변환.
-                        #  (없으면 dict(set) 변환이 ValueError → 커밋 무한 실패·되돌리기 불가·드래그 크래시)
-                        _mstk_k9 = f"aq_mstack_{sel_site}"
-                        _mstk_v9 = st.session_state.get(_mstk_k9)
-                        if isinstance(_mstk_v9, set):
-                            st.session_state[_mstk_k9] = {str(c): str(c) for c in _mstk_v9}
-                        elif not isinstance(_mstk_v9, dict):
-                            st.session_state[_mstk_k9] = {}
                         if "aq_ops_salt" not in st.session_state:   # 세션 고유 논스 — 이전 세션 조작 재적용 방지
                             st.session_state["aq_ops_salt"] = str(int(time.time() * 1000))
                         _vc1, _vc2 = st.columns([3, 1.4])
@@ -6530,6 +6500,79 @@ elif mode == "🏪 아쿠나리스":
                                       "단깊이": [], "깊이": 450}]
                         _rk_all = (((_virt_rk9 if _virt_pos == "맨 앞" else []) + _rk_list
                                     + (_virt_rk9 if _virt_pos == "맨 뒤" else [])) if _virt_on else _rk_list)
+                        # ── [V67] 인스턴스 상태 로드 — schema 2는 좌표 그대로, v1 레거시는 1회 마이그레이션 ──
+                        if _inst_key not in st.session_state:
+                            _rows0 = {}
+                            _sv_asg0 = _plan_cur.get("assign", {}) if isinstance(_plan_cur.get("assign", {}), dict) else {}
+                            for _c0, _d0 in _sv_asg0.items():
+                                if isinstance(_d0, dict):
+                                    try: _rows0[str(_c0)] = max(1, int(_d0.get("rows") or 1))
+                                    except Exception: pass
+                            _insts0 = _plan_cur.get("instances")
+                            if isinstance(_insts0, list):
+                                # schema 2 — 저장된 좌표를 그대로 신뢰(재계산 없음)
+                                _ld0 = []
+                                for _x0 in _insts0:
+                                    if not isinstance(_x0, dict): continue
+                                    try:
+                                        _e0 = {"id": str(_x0.get("id") or ""), "code": str(_x0.get("code") or ""),
+                                               "box": str(_x0.get("box") or ""), "rack": str(_x0.get("rack") or ""),
+                                               "shelf": int(_x0.get("shelf") or 0),
+                                               "col": float(_x0.get("col") or 0), "layer": float(_x0.get("layer") or 0)}
+                                    except Exception:
+                                        continue
+                                    if _e0["id"] and _e0["code"] and _e0["rack"] and _e0["shelf"] > 0:
+                                        _ld0.append(_e0)
+                                aq_inst_normalize(_ld0)
+                                st.session_state[_inst_key] = _ld0
+                            else:
+                                # v1 → 종전 패킹 규칙을 마지막 1회 재현해 좌표 확정(이후 리런·조작은 재계산 없음)
+                                def _mig_box0(c):
+                                    _r0 = _aq_by_code.get(c, {}) or {}
+                                    _b0 = str((_plan_items.get(c, {}) or {}).get("box") or _r0.get("기본상자") or "").strip()
+                                    if not _b0 and c in _free_live: _b0 = "자유:" + c
+                                    return _b0
+                                _sv_sp0 = _plan_cur.get("splits", {}) if isinstance(_plan_cur.get("splits", {}), dict) else {}
+                                _sv_mst0 = _plan_cur.get("mstack")
+                                if isinstance(_sv_mst0, dict): _sv_mst0 = {str(k): str(v) for k, v in _sv_mst0.items()}
+                                elif isinstance(_sv_mst0, (list, set)): _sv_mst0 = {str(c): str(c) for c in _sv_mst0}
+                                else: _sv_mst0 = {}
+                                _mig_seqs0 = {}
+                                def _mig_add0(c, rack, shelf, n, ordv):
+                                    _b0 = _mig_box0(c)
+                                    _wh0 = _dims_p.get(_b0)
+                                    if not _wh0: return
+                                    _r0 = _aq_by_code.get(c, {}) or {}
+                                    _g0 = str(_r0.get("진열분류") or "(미지정)")
+                                    if ordv is not None:
+                                        try: _h0 = float(ordv)
+                                        except Exception: _h0 = 1
+                                    else:
+                                        _se0 = str(_r0.get("섹션", "") or "").strip()
+                                        try: _sd0 = int(float(_r0.get("단") or 0))
+                                        except Exception: _sd0 = 0
+                                        _h0 = AQ_COL_ORD.get(str(_r0.get("열", "") or "").strip(), 1) \
+                                            if (_se0 and _sd0 == shelf and rack in (f"섹션{_se0}", _se0)) else 1
+                                    for _ in range(max(1, int(n or 1))):
+                                        _mig_seqs0.setdefault((rack, shelf), []).append(
+                                            (c, _g0, _b0, _wh0[0], _wh0[1], _h0))
+                                for _c0, _d0 in _sv_asg0.items():
+                                    if not isinstance(_d0, dict): continue
+                                    _rk0 = str(_d0.get("rack") or "")
+                                    try: _sh0 = int(_d0.get("shelf") or 0)
+                                    except Exception: _sh0 = 0
+                                    if not _rk0 or _sh0 <= 0: continue
+                                    _mig_add0(str(_c0), _rk0, _sh0, _d0.get("n") or 1, _d0.get("ord"))
+                                for _c0, _lst0 in _sv_sp0.items():
+                                    if not isinstance(_lst0, list): continue
+                                    for _e0 in _lst0:
+                                        try: _mig_add0(str(_c0), str(_e0[0]), int(_e0[1]), int(_e0[2]), None)
+                                        except Exception: continue
+                                for _k0 in _mig_seqs0:
+                                    _mig_seqs0[_k0] = aq_canon_seq(_mig_seqs0[_k0], _pg)
+                                st.session_state[_inst_key] = aq_instances_from_seqs(
+                                    _mig_seqs0, _rk_all + ([] if _virt_on else _virt_rk9), mstack=_sv_mst0)
+                            st.session_state[_rows_key] = _rows0
                         if _HAS_JS_EVAL:
                             # [V55] 근본 수정: streamlit_js_eval 프론트는 js_expressions "문자열이 바뀔 때만"
                             #  재평가한다(index.html: if (new_value !== data_from_streamlit)). 고정 문자열이라
@@ -6549,121 +6592,76 @@ elif mode == "🏪 아쿠나리스":
                             if _ops_raw:
                                 try: _ops_pl = json.loads(_ops_raw)
                                 except Exception: _ops_pl = None
-                            # [V53] 논스에서 버전 제외 + 조작별 고유 id 중복적용 방지 —
-                            #  리런 타이밍에 늦게 도착한 조작도 유실 없이 순서대로 반영된다.
+                            # [V67] 배치(batch) 단위 1회 적용 — 처리된 배치는 재적용 금지, 적용 후 ACK를
+                            #  iframe에 주입해 localStorage를 정리시킨다(누적 재전송·무한 버퍼링 근본 차단).
+                            #  op id 디둡은 유지 — 전송 중 배치가 합쳐져도 같은 조작이 두 번 반영되지 않게.
                             _nonce_cur = f"{st.session_state['aq_ops_salt']}|{sel_site}"
+                            _done_b9 = st.session_state.setdefault(f"aq_done_b_{sel_site}", set())
                             _done_ids = st.session_state.setdefault(f"aq_ops_ids_{sel_site}", set())
-                            if (isinstance(_ops_pl, dict) and _ops_pl.get("ops")
-                                    and _ops_pl.get("nonce") == _nonce_cur):
+                            _batch9 = str(_ops_pl.get("batch") or "") if isinstance(_ops_pl, dict) else ""
+                            if (isinstance(_ops_pl, dict) and _ops_pl.get("ops") and _batch9
+                                    and _ops_pl.get("nonce") == _nonce_cur and _batch9 not in _done_b9):
+                                _done_b9.add(_batch9)
+                                if len(_done_b9) > 60:
+                                    st.session_state[f"aq_done_b_{sel_site}"] = set(list(_done_b9)[-30:])
                                 _new_ops = [o for o in _ops_pl["ops"]
                                             if isinstance(o, dict) and o.get("id") and o["id"] not in _done_ids]
                                 if _new_ops:
                                     # [V56] 조작 전 상태 스냅샷 → ↩️ 되돌리기 스택(최근 20건), 새 조작 시 redo 비움
                                     _un9 = st.session_state.setdefault(f"aq_undo_{sel_site}", [])
-                                    _un9.append({"asg": dict(st.session_state.get(_asg_key, {})),
+                                    _un9.append({"inst": [dict(x) for x in st.session_state.get(_inst_key, [])],
                                                  "boxov": dict(st.session_state.get(f"aq_boxov_{sel_site}", {})),
                                                  "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or []),
-                                                 "xord": dict(st.session_state.get(f"aq_xord_{sel_site}", {})),
-                                                 "mstack": dict(st.session_state.get(f"aq_mstack_{sel_site}", {}) or {}),   # [V64]
-                                                 "split": {k: [list(e) for e in v] for k, v in
-                                                           st.session_state.get(f"aq_split_{sel_site}", {}).items()}})
+                                                 "rows": dict(st.session_state.get(_rows_key, {}) or {})})
                                     if len(_un9) > 20:
                                         del _un9[0]
                                     st.session_state[f"aq_redo_{sel_site}"] = []
-                                    _asg9 = dict(st.session_state.get(_asg_key, {}))
-                                    _op_errs9 = []   # [V65] 조작 처리 실패를 삼키지 않고 화면에 표시
+                                    # [V67] 인스턴스(iid) 단위 적용 — 각 상자가 좌표를 소유하므로
+                                    #  이동/복제/삭제가 그 상자에만 영향(품목 전체 재배치 없음).
+                                    #  실패는 삼키지 않고 수집해 화면에 노출(무한 재시도 방지 위해 done은 유지).
+                                    _ins9s = st.session_state.setdefault(_inst_key, [])
+                                    _op_errs9 = []
+                                    _rk_by9 = {rk["명칭"]: rk for rk in _rk_all}
+                                    def _shelf_h9(rk, sh):
+                                        _r9h = _rk_by9.get(str(rk))
+                                        try:
+                                            return _r9h["단높이"][int(sh) - 1] \
+                                                if _r9h and 0 < int(sh) <= len(_r9h["단높이"]) else 0
+                                        except Exception:
+                                            return 0
                                     for _op9 in _new_ops:
                                         try:
+                                            _t9 = _op9.get("t")
                                             _c9o = str(_op9.get("code") or "")
-                                            _cur9 = _asg9.get(_c9o)
-                                            _rw9 = (_cur9[2] if _cur9 and len(_cur9) > 2 else 1)
-                                            _n9 = (_cur9[3] if _cur9 and len(_cur9) > 3 else 1)
-                                            if _op9.get("t") == "move" and _op9.get("track"):
-                                                _msk9 = st.session_state.setdefault(f"aq_mstack_{sel_site}", {})   # [V64] 수동 적층 고정 {코드:열그룹키}
-                                                if isinstance(_msk9, set):   # 구 set 형태 마이그레이션
-                                                    _msk9 = {c: c for c in _msk9}; st.session_state[f"aq_mstack_{sel_site}"] = _msk9
-                                                if _op9.get("stack"):          # 상자 위 드롭 → 대상의 열그룹에 합쳐 고정
-                                                    _onto9 = str(_op9.get("onto") or "")
-                                                    _ck9 = _msk9.get(_onto9) or (_onto9 or _c9o)
-                                                    _msk9[_c9o] = _ck9
-                                                    if _onto9: _msk9[_onto9] = _ck9
+                                            if _t9 == "move" and _op9.get("track") and _op9.get("iid"):
+                                                _trk9 = str(_op9["track"]); _tsh9 = int(_op9.get("tshelf") or 0)
+                                                _e9m = aq_inst_move(
+                                                    _ins9s, str(_op9["iid"]), _trk9, _tsh9,
+                                                    xr=_op9.get("xr"), onto=_op9.get("onto"),
+                                                    dims=_dims_p, shelf_h=_shelf_h9(_trk9, _tsh9),
+                                                    inner=(_rk_by9.get(_trk9) or {}).get("내측폭") or 0)
+                                                if _e9m: _op_errs9.append(_e9m)
+                                            elif _t9 == "dup" and _op9.get("iid"):
+                                                _sd9 = next((x for x in _ins9s
+                                                             if str(x.get("id")) == str(_op9["iid"])), None)
+                                                _e9m = aq_inst_dup(
+                                                    _ins9s, str(_op9["iid"]), dims=_dims_p,
+                                                    shelf_h=(_shelf_h9(_sd9.get("rack"), _sd9.get("shelf"))
+                                                             if _sd9 else 0))
+                                                if _e9m: _op_errs9.append(_e9m)
+                                            elif _t9 == "del" and _op9.get("iid"):
+                                                _e9m = aq_inst_del(_ins9s, str(_op9["iid"]))
+                                                if _e9m: _op_errs9.append(_e9m)
+                                            elif _t9 == "box" and _op9.get("box") and _c9o:   # [V54] 상자 변경(코드 단위)
+                                                _bx9o = str(_op9["box"])
+                                                if _bx9o not in _dims_p:
+                                                    _op_errs9.append(f"{_c9o}: 상자 '{_bx9o}' 치수 미등록 — 변경 불가")
                                                 else:
-                                                    _msk9.pop(_c9o, None)       # 바닥 드롭 → 고정 해제
-                                                # [V61] 분할 진열 — 낱개(one) 이동은 본 자리/분할 자리 간 1상자 단위로
-                                                _spm9 = st.session_state.setdefault(f"aq_split_{sel_site}", {})
-                                                _lsp9 = _spm9.get(_c9o) or []
-                                                _src9 = (str(_op9.get("rack") or ""), int(_op9.get("shelf") or 0))
-                                                _tgt9 = (str(_op9["track"]), int(_op9["tshelf"]))
-                                                _mn9 = (_cur9[0], _cur9[1]) if _cur9 else None
-                                                def _sp_find9(loc):
-                                                    for _e9 in _lsp9:
-                                                        if (str(_e9[0]), int(_e9[1])) == loc: return _e9
-                                                    return None
-                                                def _sp_add9(loc, k=1):
-                                                    _e9 = _sp_find9(loc)
-                                                    if _e9: _e9[2] = int(_e9[2]) + k
-                                                    else: _lsp9.append([loc[0], loc[1], k])
-                                                if _op9.get("one") and _src9 == _tgt9:
-                                                    pass                        # 같은 단 재배치 → 아래 xord만
-                                                elif _op9.get("one") and _cur9 and _mn9 == _src9 and _n9 > 1:
-                                                    _asg9[_c9o] = (_cur9[0], _cur9[1], _rw9, _n9 - 1)
-                                                    _sp_add9(_tgt9); _spm9[_c9o] = _lsp9
-                                                elif _op9.get("one") and _sp_find9(_src9):
-                                                    _e9s = _sp_find9(_src9)
-                                                    _e9s[2] = int(_e9s[2]) - 1
-                                                    if _e9s[2] <= 0: _lsp9.remove(_e9s)
-                                                    if _cur9 and _mn9 == _tgt9:
-                                                        _asg9[_c9o] = (_cur9[0], _cur9[1], _rw9, _n9 + 1)
-                                                    else:
-                                                        _sp_add9(_tgt9)
-                                                    _spm9[_c9o] = _lsp9
-                                                elif _cur9 and _mn9 != _src9 and _sp_find9(_src9):
-                                                    _e9s = _sp_find9(_src9)   # 분할 묶음 통째 이동
-                                                    _lsp9.remove(_e9s)
-                                                    if _mn9 == _tgt9:
-                                                        _asg9[_c9o] = (_cur9[0], _cur9[1], _rw9, _n9 + int(_e9s[2]))
-                                                    else:
-                                                        _sp_add9(_tgt9, int(_e9s[2]))
-                                                    _spm9[_c9o] = _lsp9
-                                                else:
-                                                    _asg9[_c9o] = (_tgt9[0], _tgt9[1], _rw9, _n9)
-                                                if _op9.get("xr") is not None:   # [V59] 드롭 좌우 위치 → 단 내 순서
-                                                    st.session_state.setdefault(f"aq_xord_{sel_site}", {})[_c9o] = [
-                                                        str(_op9["track"]), int(_op9["tshelf"]),
-                                                        round(-0.2 + 2.4 * max(0.0, min(1.0, float(_op9["xr"]))), 3)]
-                                            elif _op9.get("t") == "dup" and _cur9:
-                                                # [V61] 분할 자리에서 복제하면 그 자리 수량 증가
-                                                _spm9 = st.session_state.setdefault(f"aq_split_{sel_site}", {})
-                                                _lsp9 = _spm9.get(_c9o) or []
-                                                _src9 = (str(_op9.get("rack") or ""), int(_op9.get("shelf") or 0))
-                                                _hit9 = next((_e9 for _e9 in _lsp9
-                                                              if (str(_e9[0]), int(_e9[1])) == _src9), None)
-                                                if _hit9 and _src9 != (_cur9[0], _cur9[1]):
-                                                    _hit9[2] = min(int(_hit9[2]) + 1, 8); _spm9[_c9o] = _lsp9
-                                                else:
-                                                    _asg9[_c9o] = (_cur9[0], _cur9[1], _rw9, min(_n9 + 1, 8))
-                                            elif _op9.get("t") == "del" and _cur9:
-                                                # [V61] 분할 자리 삭제는 그 자리만 — 본 자리 소진 시 분할 승격
-                                                _spm9 = st.session_state.setdefault(f"aq_split_{sel_site}", {})
-                                                _lsp9 = _spm9.get(_c9o) or []
-                                                _src9 = (str(_op9.get("rack") or ""), int(_op9.get("shelf") or 0))
-                                                _hit9 = next((_e9 for _e9 in _lsp9
-                                                              if (str(_e9[0]), int(_e9[1])) == _src9), None)
-                                                if _hit9 and _src9 != (_cur9[0], _cur9[1]):
-                                                    _hit9[2] = int(_hit9[2]) - 1
-                                                    if _hit9[2] <= 0: _lsp9.remove(_hit9)
-                                                    _spm9[_c9o] = _lsp9
-                                                elif _n9 > 1:
-                                                    _asg9[_c9o] = (_cur9[0], _cur9[1], _rw9, _n9 - 1)
-                                                elif _lsp9:
-                                                    _e9p = _lsp9.pop(0)   # 본 자리 소진 → 첫 분할 승격
-                                                    _asg9[_c9o] = (str(_e9p[0]), int(_e9p[1]), _rw9, int(_e9p[2]))
-                                                    _spm9[_c9o] = _lsp9
-                                                else:
-                                                    _asg9.pop(_c9o, None)
-                                            elif _op9.get("t") == "box" and _op9.get("box"):   # [V54] 상자 변경
-                                                st.session_state.setdefault(f"aq_boxov_{sel_site}", {})[_c9o] = str(_op9["box"])
-                                            elif _op9.get("t") == "rord" and _op9.get("rack") and _op9.get("target"):
+                                                    st.session_state.setdefault(f"aq_boxov_{sel_site}", {})[_c9o] = _bx9o
+                                                    for _x9 in _ins9s:
+                                                        if str(_x9.get("code")) == _c9o: _x9["box"] = _bx9o
+                                                    aq_inst_normalize(_ins9s)
+                                            elif _t9 == "rord" and _op9.get("rack") and _op9.get("target"):
                                                 # [V55] 랙 순서 변경 — 드래그한 랙을 대상 랙 앞/뒤로
                                                 _co9 = (st.session_state.get(f"aq_rkord_{sel_site}")
                                                         or [rk["명칭"] for rk in _rk_all])
@@ -6674,20 +6672,18 @@ elif mode == "🏪 아쿠나리스":
                                                     _ti9 = len(_co9)
                                                 _co9.insert(_ti9, str(_op9["rack"]))
                                                 st.session_state[f"aq_rkord_{sel_site}"] = _co9
-                                        except Exception as _oe9:   # [V65] 삼키지 말고 수집(무한 재시도 방지 위해 done은 유지)
+                                        except Exception as _oe9:
                                             _op_errs9.append(f"{_op9.get('t', '?')} {_op9.get('code', '')}: {aq_err_str(_oe9)}")
                                         _done_ids.add(_op9.get("id"))
-                                    if _op_errs9:   # [V65] 실패한 조작을 화면에 노출(조용히 사라지던 것 → 원인 가시화)
+                                    if _op_errs9:   # [V65] 실패한 조작을 화면에 노출(조용히 사라지지 않게)
                                         st.session_state["aq_op_errs"] = _op_errs9
                                     if len(_done_ids) > 400:   # 세션 메모리 상한
                                         st.session_state[f"aq_ops_ids_{sel_site}"] = set(list(_done_ids)[-200:])
-                                    st.session_state[_asg_key] = _asg9
-                                    try:  # [V63] 자가치유 기준 — 이 payload의 ts까지 반영 완료로 기록
-                                        st.session_state[f"aq_applied_ts_{sel_site}"] = int(float(_ops_pl.get("ts") or 0))
-                                    except Exception:
-                                        pass
-                                    st.session_state[_ver_key] += 1
-                                    st.rerun()
+                                # [V67] ACK — 이 배치는 처리 완료. iframe이 다음 로드에서 localStorage 삭제.
+                                #  (_new_ops가 비어도 ACK는 기록 — 이미 반영된 배치의 잔재 정리)
+                                st.session_state[f"aq_ack_{sel_site}"] = _batch9
+                                st.session_state[_ver_key] += 1
+                                st.rerun()
                         # [V55] 랙 순서 적용 (세션 → 없으면 저장된 rack_order) — 표시·자동배치·편집표 공통
                         _ord9 = st.session_state.get(f"aq_rkord_{sel_site}")
                         if not _ord9:
@@ -6701,12 +6697,14 @@ elif mode == "🏪 아쿠나리스":
                         ca1, ca0, ca2 = st.columns([2, 1, 3])
                         with ca0:
                             if st.button("🗑 배치 초기화", key=f"aq_clear_{sel_site}"):
-                                st.session_state[_asg_key] = {}
+                                st.session_state[_inst_key] = []   # [V67] 인스턴스 전부 제거
                                 st.session_state[_ver_key] += 1
                                 st.session_state[f"aq_unp_{sel_site}"] = []
                                 st.rerun()
                         with ca1:
-                            if st.button("⚡ 자동배치 (단 중심 군집)", key=f"aq_auto_{sel_site}"):
+                            if st.button("⚡ 자동배치 (단 중심 군집)", key=f"aq_auto_{sel_site}",
+                                         help="[V67] 누를 때만 실행됩니다 — 기존 수동 배치(드래그 이동·적층 포함)를 "
+                                              "전부 표준 규칙 배치로 덮어씁니다. 확정 배치는 💾 사이트 저장으로 보존하세요."):
                                 _seq = []
                                 for g in _pg:
                                     _gi = [r for r in aq_items if (r.get("진열분류") or "(미지정)") == g]
@@ -6744,66 +6742,83 @@ elif mode == "🏪 아쿠나리스":
                                     if _se0 and _sd0 == sh and rk in (f"섹션{_se0}", _se0):
                                         return AQ_COL_ORD.get(str(_r0.get("열", "") or "").strip(), 1)
                                     return 1
-                                _asg_old0 = st.session_state.get(_asg_key, {})   # [V59] 기존 상자수도 시험에 반영
+                                # [V67] 기존 상자수 보존 = 현재 인스턴스 총 개수(분할 포함) — 없으면 표준 상자수
+                                _cnt_old9 = {}
+                                for _x9 in st.session_state.get(_inst_key, []):
+                                    _cd9 = str(_x9.get("code"))
+                                    _cnt_old9[_cd9] = _cnt_old9.get(_cd9, 0) + 1
                                 def _nf_auto9(c):
-                                    _t0 = _asg_old0.get(c) or ()
-                                    return (_t0[3] if len(_t0) > 3 else 0) or aq_std_n_of(c)
+                                    return _cnt_old9.get(c, 0) or aq_std_n_of(c)
                                 _asg_new, _unp = aq_auto_place(_rk_list, _seq, _dims_p, group_order=_pg,
                                                                pre=_std_pre9, center_codes=_ctr9,
                                                                colhint=_ch_auto9, n_of=_nf_auto9)
-                                _asg_old9 = st.session_state.get(_asg_key, {})   # [V49] 기존 줄수 — [V51] 상자수도 보존
-                                def _keep9(c, i, d=1):
-                                    _t9k = _asg_old9.get(c) or ()
-                                    return _t9k[i] if len(_t9k) > i else d
-                                st.session_state[_asg_key] = {
-                                    c: (rk, sh, _keep9(c, 2),
-                                        _keep9(c, 3, aq_std_n_of(c)))   # [V58/V59] 여과기 3×2 등 표준 상자수
-                                    for c, (rk, sh) in _asg_new.items()}
+                                # [V67] 결과를 인스턴스 좌표로 확정(패킹은 지금 1회만) — 이후 리런은 재계산 없음.
+                                #  ⚠ 자동배치는 '누를 때만' 기존 수동 배치(드래그·적층 포함)를 전부 덮어쓴다.
+                                _meta9 = {c: (g, b) for c, g, b in _seq}
+                                _sq_by9 = {}
+                                for _c9a, (_rk9a, _sh9a) in _asg_new.items():
+                                    _g9a, _b9a = _meta9.get(_c9a, ("(미지정)", ""))
+                                    _wh9a = _dims_p.get(_b9a)
+                                    if not _wh9a: continue
+                                    for _ in range(max(1, int(_nf_auto9(_c9a) or 1))):
+                                        _sq_by9.setdefault((_rk9a, _sh9a), []).append(
+                                            (_c9a, _g9a, _b9a, _wh9a[0], _wh9a[1],
+                                             _ch_auto9(_c9a, _rk9a, _sh9a)))
+                                for _k9a in _sq_by9:
+                                    _sq_by9[_k9a] = aq_canon_seq(_sq_by9[_k9a], _pg)
+                                st.session_state[_inst_key] = aq_instances_from_seqs(_sq_by9, _rk_all)
                                 st.session_state[_ver_key] += 1
                                 st.session_state[f"aq_unp_{sel_site}"] = _unp
-                                st.session_state[f"aq_xord_{sel_site}"] = {}   # [V59] 드롭 순서 초기화(표준 열 순서로)
-                                st.session_state[f"aq_split_{sel_site}"] = {}   # [V61] 분할 진열도 초기화
-                                st.session_state[f"aq_mstack_{sel_site}"] = {}   # [V64] 수동 적층 고정도 초기화
                                 st.rerun()
                         with ca2:
                             _unp_l = st.session_state.get(f"aq_unp_{sel_site}", [])
                             if _unp_l:
                                 st.warning(f"미배치 {len(_unp_l)}건(상자 미지정·공간 부족): {', '.join(_unp_l[:8])}{' 외' if len(_unp_l) > 8 else ''}")
                         with st.expander("✏️ 세부 조정 — 품목별 랙·단·상자·줄 (자동배치 결과 수정)", expanded=False):
-                            _asg_cur = st.session_state.get(_asg_key, {})
+                            # [V67] 이 표는 인스턴스(상자 좌표) 상태의 요약 뷰 — 편집하면 아래 diff가
+                            #  그 품목의 본 자리 상자들만 외과적으로 재배치한다(그림 드래그 배치가 정본).
+                            _ins_cur9 = st.session_state.get(_inst_key, [])
+                            _rows_meta9 = st.session_state.setdefault(_rows_key, {})
+                            _bov4 = st.session_state.get(f"aq_boxov_{sel_site}", {})
+                            _agg9, _spl9 = aq_inst_derive_assign(_ins_cur9, _rows_meta9)
+                            _ibox9 = {}
+                            for _x9 in _ins_cur9:   # 코드→배치된 상자(인스턴스가 정본)
+                                _ibox9.setdefault(str(_x9.get("code")), str(_x9.get("box") or ""))
                             _rows_asg = []
                             for g in _pg:
                                 for r in aq_items:
                                     if (r.get("진열분류") or "(미지정)") != g: continue
                                     if not _aq_use(r["품목코드"]): continue   # [V48] 공급 제외 반영
                                     _c4 = r["품목코드"]
-                                    _b4 = ""
-                                    _bov4 = st.session_state.get(f"aq_boxov_{sel_site}", {})
-                                    if _c4 in _bov4: _b4 = str(_bov4[_c4])    # [V54] 그림 더블클릭 상자 변경 최우선
-                                    if not _b4 and edited_plan is not None:   # [V49] 진열 계획 편집값 우선
+                                    _b4 = _ibox9.get(_c4, "")
+                                    if _b4.startswith("자유:"): _b4 = "(자유)"
+                                    if not _b4 and _c4 in _bov4: _b4 = str(_bov4[_c4])   # [V54] 더블클릭 상자 변경
+                                    if not _b4 and edited_plan is not None:   # [V49] 진열 계획 편집값
                                         _mb4 = edited_plan.loc[edited_plan["품목코드"] == _c4, "상자"]
                                         if len(_mb4): _b4 = str(_mb4.iloc[0] or "").strip()
                                     if not _b4:
                                         _b4 = str((_plan_items.get(_c4, {}) or {}).get("box") or r.get("기본상자") or "")
                                     if not _b4 and _c4 in _free_live: _b4 = "(자유)"   # [V49] 자유 배치 표시
-                                    _a4 = _asg_cur.get(_c4, ("", 0, 1))
-                                    _rk4, _sh4 = _a4[0], _a4[1]
-                                    _rw4 = _a4[2] if len(_a4) > 2 else 1
-                                    _n4 = _a4[3] if len(_a4) > 3 else 1   # [V51] 전면 상자수
+                                    _d4 = _agg9.get(_c4) or {}
                                     _rows_asg.append({"품목코드": _c4, "품목명": str(r.get("품목명_AQ", "") or ""), "분류": g,
-                                                      "상자": _b4, "랙": _rk4, "단": int(_sh4 or 0), "줄": int(_rw4 or 1),
-                                                      "상자수": int(_n4 or 1)})
+                                                      "상자": _b4, "랙": str(_d4.get("rack") or ""),
+                                                      "단": int(_d4.get("shelf") or 0),
+                                                      "줄": int(_rows_meta9.get(_c4, 1) or 1),
+                                                      "상자수": int(_d4.get("n") or 1)})
                             # [V54] 자유 배치 등록 품목은 분류 미선택/미지정이어도 표에 포함 — 랙·단 지정 가능해야 배치됨
                             _added4 = {rp["품목코드"] for rp in _rows_asg}
                             for _cf4 in _free_live:
                                 if _cf4 in _added4: continue
                                 _rf4 = _aq_by_code.get(_cf4, {}) or {}
-                                _af4 = _asg_cur.get(_cf4, ("", 0, 1))
+                                _df4 = _agg9.get(_cf4) or {}
                                 _rows_asg.append({"품목코드": _cf4, "품목명": str(_rf4.get("품목명_AQ", "") or _cf4),
                                                   "분류": str(_rf4.get("진열분류", "") or "(미지정)"),
-                                                  "상자": "(자유)", "랙": _af4[0], "단": int(_af4[1] or 0),
-                                                  "줄": int((_af4[2] if len(_af4) > 2 else 1) or 1),
-                                                  "상자수": int((_af4[3] if len(_af4) > 3 else 1) or 1)})
+                                                  "상자": "(자유)", "랙": str(_df4.get("rack") or ""),
+                                                  "단": int(_df4.get("shelf") or 0),
+                                                  "줄": int(_rows_meta9.get(_cf4, 1) or 1),
+                                                  "상자수": int(_df4.get("n") or 1)})
+                            _base9 = {rp["품목코드"]: (rp["랙"], rp["단"], rp["줄"], rp["상자수"], rp["상자"])
+                                      for rp in _rows_asg}   # [V67] 표 diff 기준선(이 리런의 뷰 원본)
                             _rk_names = [rk["명칭"] for rk in _rk_all]   # [V51] 가상랙 포함
                             _box_opts4 = sorted(set(aq_box_names) | {rp["상자"] for rp in _rows_asg if rp["상자"] and rp["상자"] != "(자유)"})
                             df_asg = st.data_editor(
@@ -6825,130 +6840,118 @@ elif mode == "🏪 아쿠나리스":
                                         "상자수", options=[1, 2, 3, 4, 5, 6, 7, 8],
                                         help="정면(전면)에 놓는 상자 수 — 그림 더블클릭 복제/삭제와 연동"),
                                 })
-                        _seq_by_shelf = {}
-                        _asg_live = {}
-                        _bof5 = {}   # [V61] 코드→(분류,상자,폭,높이) — 분할 자리 렌더용
-                        _xo5 = st.session_state.get(f"aq_xord_{sel_site}", {})   # [V59] 드롭 좌우 위치 기억
-                        def _colhint5(c, rk, sh):
-                            """[V58] 그 단이 품목의 표준 섹션·단이면 '열'(좌0/중1/우2), 아니면 중(1).
-                            [V59] 드래그 드롭한 좌우 위치(aq_xord)가 있으면 그것이 최우선.
-                            정준 정렬·패킹 런 분할에 쓰여 도면 재현·드롭 위치를 함께 존중한다."""
-                            _e5 = _xo5.get(c)
-                            if _e5 and str(_e5[0]) == rk and int(_e5[1]) == sh:
-                                return float(_e5[2])
-                            _r = _aq_by_code.get(c, {}) or {}
-                            _sec = str(_r.get("섹션", "") or "").strip()
-                            try: _sd = int(float(_r.get("단") or 0))
-                            except Exception: _sd = 0
-                            if _sec and _sd == sh and rk in (f"섹션{_sec}", _sec):
-                                return AQ_COL_ORD.get(str(_r.get("열", "") or "").strip(), 1)
-                            return 1
+                        # ── [V67] 표 편집 diff → 인스턴스 외과 적용 (표는 뷰 — 리런마다 재계산하지 않음) ──
+                        _rk_by9v = {rk["명칭"]: rk for rk in _rk_all}
+                        def _shelfh9v(rk, sh):
+                            _r9v = _rk_by9v.get(str(rk))
+                            try:
+                                return _r9v["단높이"][int(sh) - 1] \
+                                    if _r9v and 0 < int(sh) <= len(_r9v["단높이"]) else 0
+                            except Exception:
+                                return 0
+                        _tbl_chg9 = False
+                        _tbl_errs9 = []
                         for _, _row4 in df_asg.iterrows():
+                            _c5 = str(_row4["품목코드"])
+                            _bl5 = _base9.get(_c5)
+                            if _bl5 is None: continue
                             _rk5 = str(_row4["랙"] or "").strip()
                             try: _sh5 = int(_row4["단"] or 0)
                             except Exception: _sh5 = 0
-                            if not _rk5 or _sh5 <= 0: continue
-                            _c5 = str(_row4["품목코드"])
-                            try: _rw5 = max(1, int(_row4.get("줄") or 1))   # [V49] 줄수(깊이)
+                            try: _rw5 = max(1, int(_row4.get("줄") or 1))
                             except Exception: _rw5 = 1
-                            try: _n5 = max(1, int(_row4.get("상자수") or 1))   # [V51] 전면 상자수
+                            try: _n5 = max(0, int(_row4.get("상자수") or 0))
                             except Exception: _n5 = 1
-                            _asg_live[_c5] = (_rk5, _sh5, _rw5, _n5)
                             _b5 = str(_row4["상자"] or "").strip()
-                            if _b5 == "(자유)":                             # [V49] 자유 배치 품목
-                                _fc5 = _free_live.get(_c5)
-                                if not _fc5: continue
-                                _bof5[_c5] = (str(_row4["분류"]), "자유:" + _c5, _fc5["w"], _fc5["h"])
-                                for _ in range(_n5):
-                                    _seq_by_shelf.setdefault((_rk5, _sh5), []).append(
-                                        (_c5, str(_row4["분류"]), "자유:" + _c5, _fc5["w"], _fc5["h"],
-                                         _colhint5(_c5, _rk5, _sh5)))   # [V58] 열 힌트
-                                continue
-                            _wh5 = _dims_p.get(_b5)
-                            if not _wh5: continue
-                            _bof5[_c5] = (str(_row4["분류"]), _b5, _wh5[0], _wh5[1])
-                            for _ in range(_n5):
-                                _seq_by_shelf.setdefault((_rk5, _sh5), []).append(
-                                    (_c5, str(_row4["분류"]), _b5, _wh5[0], _wh5[1],
-                                     _colhint5(_c5, _rk5, _sh5)))   # [V58] 열 힌트
-                        # [V61] 분할 진열(낱개 이동 결과) 렌더 — 본 자리 외 추가 자리
-                        _sp_live5 = st.session_state.get(f"aq_split_{sel_site}", {})
-                        for _c5s, _lst5 in list(_sp_live5.items()):
-                            _bi5 = _bof5.get(_c5s)
-                            if not _bi5: continue
-                            for _r5s in _lst5:
-                                try:
-                                    _rk5s, _sh5s = str(_r5s[0]), int(_r5s[1])
-                                    _n5s = max(1, int(_r5s[2]))
-                                except Exception:
-                                    continue
-                                for _ in range(_n5s):
-                                    _seq_by_shelf.setdefault((_rk5s, _sh5s), []).append(
-                                        (_c5s, _bi5[0], _bi5[1], _bi5[2], _bi5[3],
-                                         _colhint5(_c5s, _rk5s, _sh5s)))
-                        st.session_state[_asg_key] = _asg_live   # 편집 상태 동기화(저장 시 사용)
-                        for _k7 in _seq_by_shelf:                 # 정준 정렬 — 편집 순서와 무관하게 동일 패킹
-                            # [V58] 열 힌트는 튜플 6번째 원소로 포함(정렬·패킹 런 분할 공통 사용)
-                            _seq_by_shelf[_k7] = aq_canon_seq(_seq_by_shelf[_k7], _pg)
-                        # [V49] 호버 툴팁 정보(품목명·규격·상자·최대수량) + 자유 배치 도형/이미지
-                        _info_map = {}
-                        for _seqs9 in _seq_by_shelf.values():
-                            for _t9 in _seqs9:
-                                _c9 = _t9[0]
-                                if _c9 in _info_map: continue
-                                _r9 = _aq_by_code.get(_c9, {})
-                                _m9 = {"name": str(_r9.get("품목명_AQ", "") or _c9),
-                                       "spec": str(_r9.get("규격_AQ", "") or "")}
-                                _fc9 = _free_live.get(_c9)
-                                if _fc9 and _t9[2].startswith("자유:"):
-                                    _m9["box"] = "자유 배치"
-                                    _m9["cap"] = str(_fc9.get("qty") or "")
-                                    _m9["shape"] = _fc9.get("shape") or "사각"
-                                    if _m9["shape"] == "이미지":
-                                        _iso9 = str(_r9.get("이미지ISO", "") or "").strip()
-                                        _uri9 = aq_iso_data_uri(_iso9) if _iso9 else ""
-                                        if _uri9: _m9["img"] = _uri9
-                                        else: _m9["shape"] = "사각"
+                            if (_rk5, _sh5, _rw5, _n5, _b5) == _bl5: continue
+                            _tbl_chg9 = True
+                            if _rw5 != _bl5[2]:   # 줄수(깊이) — 탑뷰 표시 메타
+                                _rows_meta9[_c5] = _rw5
+                            if _b5 != _bl5[4] and _b5 and _b5 != "(자유)":   # 상자 변경(코드 단위 속성)
+                                if _b5 not in _dims_p:
+                                    _tbl_errs9.append(f"{_c5}: 상자 '{_b5}' 치수 미등록 — 변경 불가")
                                 else:
-                                    _m9["box"] = _t9[2]
-                                    try: _m9["cap"] = str(aq_caps.get(_c9, {}).get(_t9[2], ("", ""))[0] or "")
-                                    except Exception: _m9["cap"] = ""
-                                    if not _m9["cap"]:
-                                        _m9["cap"] = "없음"   # [V54] 상자 수용량 기록 없음 → '수량정보 없음' 표기
-                                    if _t9[2] == "루퍼젯팩":   # [V53] 루퍼젯 본품 — 박스 전면에 뒷표기 노출
-                                        _nm_t9 = str(_r9.get("품목명_AQ", "") or "").split()
-                                        _m9["tag"] = _nm_t9[-1] if _nm_t9 else ""
-                                _info_map[_c9] = _m9
+                                    st.session_state.setdefault(f"aq_boxov_{sel_site}", {})[_c5] = _b5
+                                    for _x5 in _ins_cur9:
+                                        if str(_x5.get("code")) == _c5 and not str(_x5.get("box") or "").startswith("자유:"):
+                                            _x5["box"] = _b5
+                                    aq_inst_normalize(_ins_cur9)
+                            if (_rk5, _sh5) != (_bl5[0], _bl5[1]) or _n5 != _bl5[3]:
+                                # 본 자리(구 랙·단) 인스턴스만 제거 후 새 자리에 n개 재배치 — 분할 자리는 유지
+                                _eff5 = _b5 or _bl5[4]
+                                if _eff5 == "(자유)" or (not _eff5 and _c5 in _free_live):
+                                    _eff5 = "자유:" + _c5
+                                _old5 = [x for x in _ins_cur9 if str(x.get("code")) == _c5
+                                         and (str(x.get("rack")), int(x.get("shelf") or 0)) == (_bl5[0], _bl5[1])]
+                                if _rk5 and _sh5 > 0 and _n5 > 0:
+                                    if _eff5 not in _dims_p:
+                                        _tbl_errs9.append(f"{_c5}: 상자 '{_eff5 or '(미지정)'}' 치수 미등록 — 배치 불가")
+                                    else:
+                                        for _x5 in _old5: _ins_cur9.remove(_x5)
+                                        aq_inst_place_code(_ins_cur9, _c5, _eff5, _rk5, _sh5, _n5,
+                                                           dims=_dims_p, shelf_h=_shelfh9v(_rk5, _sh5))
+                                else:   # 랙 비움·단 0·상자수 0 → 본 자리 제거(미배치)
+                                    for _x5 in _old5: _ins_cur9.remove(_x5)
+                                    aq_inst_normalize(_ins_cur9)
+                        if _tbl_errs9:
+                            st.session_state["aq_op_errs"] = (st.session_state.get("aq_op_errs") or []) + _tbl_errs9
+                        if _tbl_chg9:
+                            st.session_state[_inst_key] = _ins_cur9
+                            st.session_state[_ver_key] += 1
+                            st.rerun()
+                        # ── [V67] 렌더 준비 — 저장된 좌표 그대로 그린다(패킹·재계산 없음) ──
+                        _ins_eff9 = st.session_state.get(_inst_key, [])
+                        # [V49] 호버 툴팁 정보(품목명·규격·상자·최대수량) + [V67] 분류(색)·자유 도형 메타
+                        _info_map = {}
+                        for _x9 in _ins_eff9:
+                            _c9 = str(_x9.get("code"))
+                            if _c9 in _info_map: continue
+                            _r9 = _aq_by_code.get(_c9, {})
+                            _bx9i = str(_x9.get("box") or "")
+                            _m9 = {"name": str(_r9.get("품목명_AQ", "") or _c9),
+                                   "spec": str(_r9.get("규격_AQ", "") or ""),
+                                   "grp": str(_r9.get("진열분류") or "(미지정)")}
+                            _fc9 = _free_live.get(_c9)
+                            if _fc9 and _bx9i.startswith("자유:"):
+                                _m9["box"] = "자유 배치"
+                                _m9["cap"] = str(_fc9.get("qty") or "")
+                                _m9["shape"] = _fc9.get("shape") or "사각"
+                                if _m9["shape"] == "이미지":
+                                    _iso9 = str(_r9.get("이미지ISO", "") or "").strip()
+                                    _uri9 = aq_iso_data_uri(_iso9) if _iso9 else ""
+                                    if _uri9: _m9["img"] = _uri9
+                                    else: _m9["shape"] = "사각"
+                            else:
+                                _m9["box"] = _bx9i
+                                try: _m9["cap"] = str(aq_caps.get(_c9, {}).get(_bx9i, ("", ""))[0] or "")
+                                except Exception: _m9["cap"] = ""
+                                if not _m9["cap"]:
+                                    _m9["cap"] = "없음"   # [V54] 상자 수용량 기록 없음 → '수량정보 없음' 표기
+                                if _bx9i == "루퍼젯팩":   # [V53] 루퍼젯 본품 — 박스 전면에 뒷표기 노출
+                                    _nm_t9 = str(_r9.get("품목명_AQ", "") or "").split()
+                                    _m9["tag"] = _nm_t9[-1] if _nm_t9 else ""
+                            _info_map[_c9] = _m9
                         if st.session_state.get("aq_op_errs"):   # [V65] 조작 반영 중 실패한 것 노출(조용히 사라지지 않게)
                             _oe = st.session_state.pop("aq_op_errs")
                             st.error("⚠️ 일부 배치 조작이 반영되지 않았습니다(무시되고 넘어감) — 아래 확인:\n- " + "\n- ".join(_oe[:8]))
                         _view_rks = st.multiselect("표시할 랙 (기본 전체 — V1 도면처럼 나란히)", _rk_names, default=_rk_names, key=f"aq_rk_view_{sel_site}")
                         _rk_show = [rk for rk in _rk_all if rk["명칭"] in (_view_rks or _rk_names)]   # [V51] 가상랙 포함
                         import streamlit.components.v1 as _components9   # [V49] 호버 툴팁은 iframe에서만 동작
-                        _mst9 = st.session_state.get(f"aq_mstack_{sel_site}", {})   # [V64] 수동 적층 고정 {코드:열그룹키}
-                        if isinstance(_mst9, set): _mst9 = {c: c for c in _mst9}   # 구 형태 하위호환
-                        _svg_all9 = aq_racks_svg_all(_rk_show, _seq_by_shelf, info=_info_map, mstack=_mst9)
+                        # [V67] 렌더 = 인스턴스 좌표 그대로 (mstack·seq 패킹 경로 폐기)
+                        _svg_all9 = aq_racks_svg_all(_rk_show, {}, info=_info_map,
+                                                     instances=_ins_eff9, dims=_dims_p)
                         if _svg_all9:
                             _nonce9 = f"{st.session_state['aq_ops_salt']}|{sel_site}"   # [V53] ver 제외 — 늦은 조작 유실 방지(op id 중복 차단)
-                            _ct9 = st.session_state.get(f"aq_applied_ts_{sel_site}", 0)   # [V63] 자가치유 기준 ts
+                            _ack9 = str(st.session_state.get(f"aq_ack_{sel_site}", "") or "")   # [V67] 마지막 ACK 배치 id
                             _html9, _hpx9 = aq_svg_hover_html(_svg_all9, interactive=True, nonce=_nonce9,
-                                                              boxes=_box_opts4, committed_ts=_ct9)   # [V51/V54/V63]
+                                                              boxes=_box_opts4, ack=_ack9)   # [V51/V54/V67]
                             _components9.html(_html9, height=min(_hpx9 + 34, 960), scrolling=True)
                             _cb1, _cbU, _cbR, _cb2 = st.columns([3.4, 1, 1, 1.5])
                             with _cb1:
-                                st.caption("🖱️ 호버=정보 · **드래그=상자 1개 이동**(여러 개 자리엔 낱개 분할 — 루퍼젯 팩도 하나씩) · **빈 곳 드래그=영역 다중선택 · Shift+클릭=추가 선택**(선택 후 드래그=일괄 이동, Delete=일괄 삭제) · "
+                                st.caption("🖱️ 호버=정보 · **드래그=상자 1개 이동**(각 상자가 자기 좌표를 기억 — 반영 후에도 그 자리 유지) · **빈 곳 드래그=영역 다중선택 · Shift+클릭=추가 선택**(선택 후 드래그=일괄 이동, Delete=일괄 삭제) · "
                                            "**더블클릭=복제/삭제/상자 변경** · **⛶ 전체화면=꽉 차게 확대+전 상자 품명·규격**(전체화면에서도 이동·삭제 가능). "
-                                           "🧱 **다른 상자 위에 올려 놓으면 = 수동 적층 고정**(자동배치를 덮어써 그대로 유지 · 빈 단 바닥에 다시 놓으면 해제). "
+                                           "🧱 **다른 상자 위에 올려 놓으면 그 열 위에 적층**(좌표로 저장되어 유지 · 단높이 초과 시 오류로 알려줌). "
                                            "조작은 그림에 즉시 표시되고 **4초 뒤(전체화면은 종료 시) 일괄 반영** — 바로 반영하려면 🔄.")
-                                if _mst9:
-                                    _mc1, _mc2 = st.columns([3, 1])
-                                    with _mc1:
-                                        st.caption(f"🧱 수동 적층 고정 {len(_mst9)}개 품목 — 저장 시 유지됩니다.")
-                                    with _mc2:
-                                        if st.button("🧹 적층 고정 해제(전체)", key=f"aq_mst_clear_{sel_site}"):
-                                            st.session_state[f"aq_mstack_{sel_site}"] = {}
-                                            st.session_state[_ver_key] = st.session_state.get(_ver_key, 0) + 1
-                                            st.rerun()
                             _un_st9 = st.session_state.get(f"aq_undo_{sel_site}") or []
                             _rd_st9 = st.session_state.get(f"aq_redo_{sel_site}") or []
                             with _cbU:
@@ -6956,21 +6959,15 @@ elif mode == "🏪 아쿠나리스":
                                              disabled=not _un_st9,
                                              help="그림 조작(이동·복제·삭제·상자 변경·랙 순서)을 한 단계 되돌립니다."):
                                     _rd9 = st.session_state.setdefault(f"aq_redo_{sel_site}", [])
-                                    _rd9.append({"asg": dict(st.session_state.get(_asg_key, {})),
+                                    _rd9.append({"inst": [dict(x) for x in st.session_state.get(_inst_key, [])],
                                                  "boxov": dict(st.session_state.get(f"aq_boxov_{sel_site}", {})),
                                                  "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or []),
-                                                 "xord": dict(st.session_state.get(f"aq_xord_{sel_site}", {})),
-                                                 "mstack": dict(st.session_state.get(f"aq_mstack_{sel_site}", {}) or {}),   # [V64]
-                                                 "split": {k: [list(e) for e in v] for k, v in
-                                                           st.session_state.get(f"aq_split_{sel_site}", {}).items()}})
+                                                 "rows": dict(st.session_state.get(_rows_key, {}) or {})})   # [V67]
                                     _sn9 = _un_st9.pop()
-                                    st.session_state[_asg_key] = _sn9["asg"]
+                                    st.session_state[_inst_key] = [dict(x) for x in _sn9.get("inst", [])]
                                     st.session_state[f"aq_boxov_{sel_site}"] = _sn9["boxov"]
                                     st.session_state[f"aq_rkord_{sel_site}"] = _sn9["rkord"]
-                                    st.session_state[f"aq_xord_{sel_site}"] = dict(_sn9.get("xord", {}))
-                                    st.session_state[f"aq_mstack_{sel_site}"] = dict(_sn9.get("mstack", {}) or {})   # [V64]
-                                    st.session_state[f"aq_split_{sel_site}"] = {k: [list(e) for e in v]
-                                                                                for k, v in _sn9.get("split", {}).items()}
+                                    st.session_state[_rows_key] = dict(_sn9.get("rows", {}) or {})
                                     st.session_state[_ver_key] += 1
                                     st.rerun()
                             with _cbR:
@@ -6978,21 +6975,15 @@ elif mode == "🏪 아쿠나리스":
                                              disabled=not _rd_st9,
                                              help="되돌린 조작을 다시 적용합니다."):
                                     _un9b = st.session_state.setdefault(f"aq_undo_{sel_site}", [])
-                                    _un9b.append({"asg": dict(st.session_state.get(_asg_key, {})),
+                                    _un9b.append({"inst": [dict(x) for x in st.session_state.get(_inst_key, [])],
                                                   "boxov": dict(st.session_state.get(f"aq_boxov_{sel_site}", {})),
                                                   "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or []),
-                                                  "xord": dict(st.session_state.get(f"aq_xord_{sel_site}", {})),
-                                                  "mstack": dict(st.session_state.get(f"aq_mstack_{sel_site}", {}) or {}),   # [V64]
-                                                  "split": {k: [list(e) for e in v] for k, v in
-                                                            st.session_state.get(f"aq_split_{sel_site}", {}).items()}})
+                                                  "rows": dict(st.session_state.get(_rows_key, {}) or {})})   # [V67]
                                     _sn9 = _rd_st9.pop()
-                                    st.session_state[_asg_key] = _sn9["asg"]
+                                    st.session_state[_inst_key] = [dict(x) for x in _sn9.get("inst", [])]
                                     st.session_state[f"aq_boxov_{sel_site}"] = _sn9["boxov"]
                                     st.session_state[f"aq_rkord_{sel_site}"] = _sn9["rkord"]
-                                    st.session_state[f"aq_xord_{sel_site}"] = dict(_sn9.get("xord", {}))
-                                    st.session_state[f"aq_mstack_{sel_site}"] = dict(_sn9.get("mstack", {}) or {})   # [V64]
-                                    st.session_state[f"aq_split_{sel_site}"] = {k: [list(e) for e in v]
-                                                                                for k, v in _sn9.get("split", {}).items()}
+                                    st.session_state[_rows_key] = dict(_sn9.get("rows", {}) or {})
                                     st.session_state[_ver_key] += 1
                                     st.rerun()
                             with _cb2:
@@ -7004,41 +6995,48 @@ elif mode == "🏪 아쿠나리스":
                             f'<span style="display:inline-block;width:10px;height:10px;background:{AQ_GROUP_COLORS.get(aq_grp_norm(g), "#9AA0A6")};margin-right:4px;"></span>'
                             f'<span style="font-size:12px;margin-right:10px;">{g}</span>' for g in _pg)
                         st.markdown(_leg, unsafe_allow_html=True)
-                        _virt_cnt = sum(1 for _t in _asg_live.values() if _t and _t[0] == AQ_VIRT)   # [V51]
+                        _virt_cnt = len({str(x.get("code")) for x in _ins_eff9 if str(x.get("rack")) == AQ_VIRT})   # [V51/V67]
                         if _virt_cnt:
                             st.info(f"🅥 가상랙 보관 {_virt_cnt}건 — 실제 랙이 아닙니다. 설치 확정 전에 실제 랙으로 옮기거나 단 0(미배치)으로 정리하세요.")
-                        _over = []
-                        for (rk6, sh6), seq6 in sorted(_seq_by_shelf.items()):
-                            if rk6 == AQ_VIRT: continue   # [V51] 가상랙은 적합 판정 제외
-                            _rko = next((x for x in _rk_list if x["명칭"] == rk6), None)
-                            if not _rko or sh6 > len(_rko["단높이"]):
-                                _over.append(f"{rk6} 단{sh6}: 단 번호 범위 초과"); continue
-                            _r6, _f6, _j6 = aq_pack_shelf_stacks(seq6, _rko["내측폭"], _rko["단높이"][sh6 - 1])   # [V49]
-                            if _j6:
-                                _over.append(f"{rk6} 단{sh6}: {len(_j6)}건 안 들어감({', '.join(x[0] for x in _j6[:4])})")
+                        # [V67] 좌표 기반 검증 — 렌더와 동일한 좌표로 폭·적층높이·치수미상을 판정(숨김 없음)
+                        _over = aq_inst_validate([x for x in _ins_eff9 if str(x.get("rack")) != AQ_VIRT],
+                                                 _rk_list, _dims_p)
                         if _over:
-                            st.warning("⚠ 단 높이·폭 초과 — 단높이 조정 또는 상자 변경 필요: " + " / ".join(_over[:6]))
-                        elif _seq_by_shelf:
-                            st.success("✅ 배치된 모든 단이 실척 패킹 기준 적합합니다. (동일 상자만 적층 · 적층 높이 ≤ 단높이)")
+                            st.warning("⚠ 배치 검증 — 단높이 조정·상자 변경·자리 이동 필요: " + " / ".join(_over[:6])
+                                       + (f" 외 {len(_over) - 6}건" if len(_over) > 6 else ""))
+                        elif _ins_eff9:
+                            st.success("✅ 배치된 모든 단이 실척 좌표 기준 적합합니다. (열폭 합 ≤ 내측폭 · 적층 높이 ≤ 단높이)")
 
                         # ── [V49] 탑뷰 — 단 위에서 내려다보기 (깊이 방향 줄 배치) ──
                         with st.expander("🔝 탑뷰 — 단 위에서 내려다보기 (깊이 방향 줄 배치)", expanded=False):
-                            if not _seq_by_shelf:
+                            _tv_keys = sorted({(str(x.get("rack")), int(x.get("shelf") or 0)) for x in _ins_eff9})
+                            if not _tv_keys:
                                 st.info("배치된 단이 없습니다 — ⚡ 자동배치 또는 세부 조정에서 랙·단을 지정하세요.")
                             else:
                                 _bdep9 = aq_box_depth_map(aq_boxes)
-                                _tv_keys = sorted(_seq_by_shelf.keys())
                                 _tv_sel = st.selectbox("단 선택", _tv_keys,
                                                        format_func=lambda k: f"{k[0]} · 단{k[1]}", key=f"aq_tv_{sel_site}")
                                 _rk_tv = next((x for x in _rk_all if x["명칭"] == _tv_sel[0]), None)   # [V51] 가상랙 포함
                                 if _rk_tv and 0 < _tv_sel[1] <= len(_rk_tv["단높이"]):
                                     _dlist9 = _rk_tv.get("단깊이") or []
                                     _dp9 = _dlist9[_tv_sel[1] - 1] if 0 < _tv_sel[1] <= len(_dlist9) else _rk_tv.get("깊이", 450)
-                                    _rows_map9 = {c: (t[2] if len(t) > 2 else 1) for c, t in _asg_live.items()}
+                                    _rows_map9 = {c: int(v or 1) for c, v in
+                                                  (st.session_state.get(_rows_key) or {}).items()}   # [V67] 줄수 메타
+                                    # [V67] 정면과 동일한 인스턴스 좌표 열을 탑뷰에 그대로 사용(재패킹 없음)
+                                    _ins_tv9 = [x for x in _ins_eff9
+                                                if (str(x.get("rack")), int(x.get("shelf") or 0)) == _tv_sel]
+                                    _colsTV, _unkTV = aq_inst_cols(_ins_tv9, _dims_p)
+                                    _cols_tv9 = [(_cx9, _cw9,
+                                                  [(str(i9.get("code")),
+                                                    str((_info_map.get(str(i9.get("code")), {}) or {}).get("grp") or "(미지정)"),
+                                                    str(i9.get("box") or ""), wh9[0], wh9[1])
+                                                   for i9, wh9 in _st9])
+                                                 for _cx9, _cw9, _st9 in _colsTV]
                                     _svg_tv = aq_shelf_top_svg(_tv_sel[0], _tv_sel[1], _rk_tv["내측폭"],
                                                                _rk_tv["단높이"][_tv_sel[1] - 1], _dp9,
-                                                               _seq_by_shelf[_tv_sel], rows_by_code=_rows_map9,
-                                                               box_depths=_bdep9, info=_info_map)
+                                                               [], rows_by_code=_rows_map9,
+                                                               box_depths=_bdep9, info=_info_map,
+                                                               cols=_cols_tv9)
                                     _html_tv, _h_tv = aq_svg_hover_html(_svg_tv)
                                     _components9.html(_html_tv, height=min(_h_tv, 500), scrolling=True)
                                     st.caption("정면도는 맨 앞줄만 보입니다 — 깊이 방향 **줄수**는 세부 조정 표의 '줄' 컬럼으로 지정 "
@@ -7194,29 +7192,22 @@ elif mode == "🏪 아쿠나리스":
                                      "updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M")}
                         # [V49] 자유 배치 저장 (편집표가 없던 리런에서는 기존값 보존)
                         _new_plan["free"] = _free_live if df_free is not None else _free_cur
-                        # [V45] 단 중심 배정 저장 (있을 때만) — [V49] 줄수(rows) 포함
-                        _asg_sv = st.session_state.get(f"aq_asg_{sel_site}", {})
-                        if _asg_sv:
-                            _xo_sv = st.session_state.get(f"aq_xord_{sel_site}", {})   # [V59] 드롭 순서 영속
-                            def _asg_d9(c, t):
-                                _d9 = {"rack": t[0], "shelf": t[1],
-                                       "rows": (t[2] if len(t) > 2 else 1),
-                                       "n": (t[3] if len(t) > 3 else 1)}   # [V51] 전면 상자수
-                                _e9 = _xo_sv.get(c)
-                                if _e9 and str(_e9[0]) == str(t[0]) and int(_e9[1]) == int(t[1]):
-                                    _d9["ord"] = float(_e9[2])
-                                return _d9
-                            _new_plan["assign"] = {c: _asg_d9(c, t)
-                                                   for c, t in _asg_sv.items() if t and t[0] and t[1]}
-                        _sp_sv = st.session_state.get(f"aq_split_{sel_site}", {})   # [V61] 분할 진열 저장
-                        _sp_out = {c: [[str(e[0]), int(e[1]), int(e[2])] for e in v]
-                                   for c, v in _sp_sv.items() if v}
-                        if _sp_out:
-                            _new_plan["splits"] = _sp_out
-                        _mst_sv = st.session_state.get(f"aq_mstack_{sel_site}", {})   # [V64] 수동 적층 고정 저장
-                        if isinstance(_mst_sv, set): _mst_sv = {c: c for c in _mst_sv}
-                        if _mst_sv:
-                            _new_plan["mstack"] = {str(k): str(v) for k, v in _mst_sv.items()}
+                        # [V67] 배치 저장 = 상자 인스턴스 좌표(schema 2) — 불러오면 저장 시점 모습 그대로.
+                        #  assign/splits는 인스턴스에서 파생해 함께 기록(진열품목 탭·인쇄물·구버전 하위호환).
+                        _ins_sv = st.session_state.get(f"aq_inst_{sel_site}", [])
+                        if _ins_sv:
+                            _new_plan["schema_version"] = AQ_SCHEMA_V
+                            _new_plan["instances"] = [
+                                {"id": str(x.get("id")), "code": str(x.get("code")),
+                                 "box": str(x.get("box") or ""), "rack": str(x.get("rack")),
+                                 "shelf": int(x.get("shelf") or 0),
+                                 "col": int(float(x.get("col") or 0)), "layer": int(float(x.get("layer") or 0))}
+                                for x in _ins_sv]
+                            _asg_dv9, _sp_dv9 = aq_inst_derive_assign(
+                                _ins_sv, st.session_state.get(f"aq_rows_{sel_site}") or {})
+                            _new_plan["assign"] = _asg_dv9
+                            if _sp_dv9:
+                                _new_plan["splits"] = _sp_dv9
                         _ord_sv = st.session_state.get(f"aq_rkord_{sel_site}")   # [V55] 랙 순서 저장
                         if _ord_sv:
                             _new_plan["rack_order"] = _ord_sv

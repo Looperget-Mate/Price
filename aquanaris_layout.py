@@ -7,7 +7,8 @@ import datetime
 
 # [V67] 모듈 버전 — app.py가 신구 짝(app.py↔이 파일)을 검증하는 데 사용.
 #  두 파일 중 하나만 배포되면 NameError 대신 친절한 안내가 뜨도록 한다.
-AQ_LAYOUT_VER = 67
+#  ⚠ 모듈에 새 함수를 추가하는 버전업마다 이 숫자와 app.py 가드 기준을 함께 올릴 것.
+AQ_LAYOUT_VER = 68   # [V68] inst2 압축 저장(시트 셀 50,000자 한도 대응)
 
 # 렌더러가 쓰는 색상 헬퍼(app.py에도 동일 정의가 있으나 순수함수라 모듈 자체 보유)
 def _aq_hexrgb(h):
@@ -544,7 +545,9 @@ def aq_inst_validate(instances, rack_list, dims):
 
 def aq_inst_derive_assign(instances, rows_meta=None):
     """인스턴스 → 구(v1) assign/splits 파생 — 저장 JSON 하위호환(진열품목 탭·인쇄물·구버전 앱).
-    본 자리 = 상자가 가장 많은 단, n = 그 단 개수, splits = 나머지 단. 반환 (assign, splits)."""
+    본 자리 = 상자가 가장 많은 단, n = 그 단 개수, splits = 나머지 단. 반환 (assign, splits).
+    [V68] 시트 셀 50,000자 한도 대응 다이어트: ord 제거·rows는 2 이상일 때만 기록
+    (소비처는 전부 .get() 기본값 방식이라 안전 — app.py 5567·5737·1394 확인)."""
     rows_meta = rows_meta or {}
     per = {}
     for it in instances:
@@ -554,15 +557,56 @@ def aq_inst_derive_assign(instances, rows_meta=None):
     assign, splits = {}, {}
     for c, locs in per.items():
         main = max(locs, key=lambda k: (len(locs[k]), -min(float(x.get("col") or 0) for x in locs[k])))
-        d = {"rack": main[0], "shelf": main[1], "rows": int(rows_meta.get(c, 1) or 1),
-             "n": len(locs[main])}
-        try: d["ord"] = float(min(float(x.get("col") or 0) for x in locs[main]))
-        except Exception: pass
+        d = {"rack": main[0], "shelf": main[1], "n": len(locs[main])}
+        try:
+            _rw = int(rows_meta.get(c, 1) or 1)
+            if _rw > 1: d["rows"] = _rw
+        except Exception:
+            pass
         assign[c] = d
         rest = [[k[0], k[1], len(v)] for k, v in locs.items() if k != main]
         if rest:
             splits[c] = rest
     return assign, splits
+
+def aq_inst_pack(instances):
+    """[V68] 인스턴스 → 압축 저장 포맷 `inst2` = {랙: {단(str): {코드: [[col,layer], ...]}}}.
+    상자명은 저장하지 않는다(로드 시 items/기본상자/자유배치에서 재해석 — 저장 시 items에 병합돼 있음).
+    시트 셀 50,000자 한도 대응: 장황한 dict 리스트 대비 약 1/5 크기."""
+    out = {}
+    for it in instances:
+        rk = str(it.get("rack") or "")
+        sh = str(int(it.get("shelf") or 0))
+        c = str(it.get("code") or "")
+        if not rk or sh == "0" or not c: continue
+        try: cl = int(float(it.get("col") or 0))
+        except Exception: cl = 0
+        try: ly = int(float(it.get("layer") or 0))
+        except Exception: ly = 0
+        out.setdefault(rk, {}).setdefault(sh, {}).setdefault(c, []).append([cl, ly])
+    return out
+
+def aq_inst_unpack(packed, box_of):
+    """[V68] `inst2` → 인스턴스 리스트(id 재발급·정규화). box_of(code)→상자명 콜러블.
+    저장 좌표를 그대로 신뢰 — 재계산 없음."""
+    out = []
+    if not isinstance(packed, dict): return out
+    for rk, shs in packed.items():
+        if not isinstance(shs, dict): continue
+        for sh, codes in shs.items():
+            try: sh_i = int(float(sh))
+            except Exception: continue
+            if sh_i <= 0 or not isinstance(codes, dict): continue
+            for c, pairs in codes.items():
+                if not isinstance(pairs, list): continue
+                b = str(box_of(str(c)) or "")
+                for e in pairs:
+                    try: cl, ly = float(e[0]), float(e[1])
+                    except Exception: continue
+                    out.append({"id": aq_inst_new_id(out, str(c)), "code": str(c), "box": b,
+                                "rack": str(rk), "shelf": sh_i, "col": cl, "layer": ly})
+    aq_inst_normalize(out)
+    return out
 
 def _aq_esc(s):
     """[V49] SVG/HTML 속성용 이스케이프."""

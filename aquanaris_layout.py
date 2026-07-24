@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
-# [V66] 아쿠나리스 배치 엔진 — app.py에서 분리(2026-07-23). 동작 불변.
+# [V66] 아쿠나리스 배치 엔진 — app.py에서 분리(2026-07-23). [V67] 상자 인스턴스 모델 추가(2026-07-24).
 #  ⚠ 배포 시 app.py와 함께 이 파일도 반드시 GitHub에 올릴 것(하나만 올리면 import 오류로 앱이 죽음).
 #  순수 모듈: streamlit 미사용, app.py 함수 미호출(표준상수·패킹·자동배치·SVG 렌더러·hover HTML).
 import json
 import datetime
+
+# [V67] 모듈 버전 — app.py가 신구 짝(app.py↔이 파일)을 검증하는 데 사용.
+#  두 파일 중 하나만 배포되면 NameError 대신 친절한 안내가 뜨도록 한다.
+AQ_LAYOUT_VER = 67
 
 # 렌더러가 쓰는 색상 헬퍼(app.py에도 동일 정의가 있으나 순수함수라 모듈 자체 보유)
 def _aq_hexrgb(h):
@@ -312,6 +316,254 @@ def aq_auto_place(rack_list, items_seq, box_dims, group_order=None, pre=None, ce
             unplaced.append(code)
     return assign, unplaced
 
+# ── [V67] 상자 인스턴스 모델 (2단계, 핸드오프 §3-68·CODEX_REVIEW) ──
+#  근본 문제: 배치를 저장하지 않고 매 리런 패커가 재계산(품목코드→(랙,단,n)만 저장) →
+#  원위치 복구·한 상자만 옮겨도 품목 전체 영향·낙관표시 vs 재계산 충돌(중첩·떠오름·버퍼링).
+#  새 모델: 각 물리 상자가 좌표를 소유 — {"id":"코드:일련","code","box","rack","shelf","col","layer"}.
+#  렌더러는 좌표대로 그리기만(재계산 X), 자동배치는 누를 때만 좌표 부여, 드롭 = 그 상자 좌표 확정.
+#  (진열분류·치수는 저장하지 않고 렌더 시점에 AQ_Items/AQ_Boxes에서 해석 — 정본 우선)
+AQ_SCHEMA_V = 2
+
+def aq_inst_new_id(instances, code):
+    """새 인스턴스 id — "코드:일련"(현 목록 최대 일련+1)."""
+    mx = 0
+    pre = f"{code}:"
+    for it in instances:
+        sid = str(it.get("id") or "")
+        if sid.startswith(pre):
+            try: mx = max(mx, int(sid.split(":")[-1]))
+            except Exception: pass
+    return f"{code}:{mx + 1}"
+
+def aq_inst_normalize(instances):
+    """좌표 정규화(제자리) — 단별 col을 0..k-1 연속 번호로, 열 안 layer를 0..m-1(바닥부터)로.
+    상자를 빼면 위 상자가 내려앉고(붕 뜸 구조적 불가), 빈 열 번호가 사라진다. 삽입은 col=x.5 후 호출."""
+    by_shelf = {}
+    for it in instances:
+        by_shelf.setdefault((str(it.get("rack") or ""), int(it.get("shelf") or 0)), []).append(it)
+    for _loc, lst in by_shelf.items():
+        cols = {}
+        for it in lst:
+            try: cv = float(it.get("col") or 0)
+            except Exception: cv = 0.0
+            cols.setdefault(cv, []).append(it)
+        for ci, cv in enumerate(sorted(cols)):
+            def _ly(t):
+                try: return float(t.get("layer") or 0)
+                except Exception: return 0.0
+            for li, it in enumerate(sorted(cols[cv], key=_ly)):
+                it["col"] = ci; it["layer"] = li
+    return instances
+
+def aq_inst_cols(shelf_insts, dims):
+    """단 위 인스턴스 → 렌더 열 목록. 반환: (cols, unknown)
+    cols=[(x0mm, 열폭mm, [(인스턴스, (폭,높이)) 아래→위])] — x = 왼쪽 열 최대폭 누적(겹침 불가).
+    unknown = 상자 치수 미등록 인스턴스(그리지 못함 — 검증이 문장으로 노출, 조용히 숨기지 않음)."""
+    cols, unknown = {}, []
+    for it in shelf_insts:
+        wh = dims.get(str(it.get("box") or ""))
+        if not wh:
+            unknown.append(it); continue
+        try: cv = float(it.get("col") or 0)
+        except Exception: cv = 0.0
+        cols.setdefault(cv, []).append((it, wh))
+    out, x = [], 0
+    for cv in sorted(cols):
+        def _ly(p):
+            try: return float(p[0].get("layer") or 0)
+            except Exception: return 0.0
+        stack = sorted(cols[cv], key=_ly)
+        cw = max(wh[0] for _it, wh in stack)
+        out.append((x, cw, stack))
+        x += cw
+    return out, unknown
+
+def _aq_inst_find(instances, iid):
+    for it in instances:
+        if str(it.get("id")) == str(iid): return it
+    return None
+
+def _aq_inst_shelf(instances, rack, shelf, but=None):
+    return [it for it in instances if it is not but
+            and str(it.get("rack") or "") == str(rack) and int(it.get("shelf") or 0) == int(shelf)]
+
+def aq_inst_move(instances, iid, track, tshelf, xr=None, onto=None, dims=None, shelf_h=0, inner=0):
+    """iid 상자를 (track,tshelf)로 이동(제자리 수정). onto=아래 상자 인스턴스 id → 그 열 맨 위 적층
+    (Σ열높이 ≤ 단높이 검증 — 초과 시 이동하지 않고 오류 문장 반환), 아니면 xr(0~1) 위치에 새 열 삽입(layer 0).
+    반환: "" = 성공, 그 외 = 오류 메시지(호출부가 화면에 노출)."""
+    dims = dims or {}
+    tgt = _aq_inst_find(instances, iid)
+    if tgt is None:
+        return f"이동 실패: 상자 {iid}를 찾을 수 없음(이미 삭제되었거나 다른 세션 조작)"
+    if onto:
+        base = _aq_inst_find(instances, onto)
+        if base is not None and base is not tgt and str(base.get("rack")) == str(track) \
+                and int(base.get("shelf") or 0) == int(tshelf):
+            try: col_v = float(base.get("col") or 0)
+            except Exception: col_v = 0.0
+            stack = [it for it in _aq_inst_shelf(instances, track, tshelf, but=tgt)
+                     if float(it.get("col") or 0) == col_v]
+            hsum = sum((dims.get(str(it.get("box") or "")) or (0, 0))[1] for it in stack)
+            h_t = (dims.get(str(tgt.get("box") or "")) or (0, 0))[1]
+            if shelf_h and h_t and hsum + h_t > shelf_h:
+                return (f"적층 불가: {tgt.get('code')} — 열 높이 {hsum}+{h_t} > 단높이 {shelf_h}mm"
+                        f" (단높이를 늘리거나 옆에 놓으세요)")
+            tgt["rack"], tgt["shelf"] = str(track), int(tshelf)
+            tgt["col"] = col_v
+            tgt["layer"] = max([float(it.get("layer") or 0) for it in stack] or [-1.0]) + 1.0
+            aq_inst_normalize(instances)
+            return ""
+        # onto 대상이 사라졌으면 새 열 삽입으로 폴백(조작 자체는 유실시키지 않음)
+    others = _aq_inst_shelf(instances, track, tshelf, but=tgt)
+    cols, _unk = aq_inst_cols(others, dims)
+    total_w = (cols[-1][0] + cols[-1][1]) if cols else 0
+    try: _xr = max(0.0, min(1.0, float(1.0 if xr is None else xr)))
+    except Exception: _xr = 1.0
+    xmm = _xr * float(inner or total_w or 1)
+    idx = len(cols)
+    for i, (x0c, cw, _st) in enumerate(cols):
+        if xmm < x0c + cw / 2.0:
+            idx = i; break
+    for i, (_x, _w, stck) in enumerate(cols):   # 기존 열을 정수 인덱스로 재부여 후 그 사이에 삽입
+        for _it, _wh in stck: _it["col"] = i
+    tgt["rack"], tgt["shelf"] = str(track), int(tshelf)
+    tgt["col"] = idx - 0.5
+    tgt["layer"] = 0
+    aq_inst_normalize(instances)
+    return ""
+
+def aq_inst_dup(instances, iid, dims=None, shelf_h=0):
+    """iid 상자 1개 복제 — 열 높이가 허용하면 같은 열 맨 위, 아니면 바로 옆 새 열. 반환 오류 문장/""."""
+    dims = dims or {}
+    src = _aq_inst_find(instances, iid)
+    if src is None:
+        return f"복제 실패: 상자 {iid}를 찾을 수 없음"
+    try: col_v = float(src.get("col") or 0)
+    except Exception: col_v = 0.0
+    rack, shelf = str(src.get("rack")), int(src.get("shelf") or 0)
+    stack = [it for it in _aq_inst_shelf(instances, rack, shelf) if float(it.get("col") or 0) == col_v]
+    h_s = (dims.get(str(src.get("box") or "")) or (0, 0))[1]
+    hsum = sum((dims.get(str(it.get("box") or "")) or (0, 0))[1] for it in stack)
+    new = {"id": aq_inst_new_id(instances, str(src.get("code"))), "code": str(src.get("code")),
+           "box": str(src.get("box") or ""), "rack": rack, "shelf": shelf}
+    if shelf_h and h_s and hsum + h_s <= shelf_h and str(src.get("box")) != "루퍼젯팩":
+        new["col"] = col_v
+        new["layer"] = max([float(it.get("layer") or 0) for it in stack] or [-1.0]) + 1.0
+    else:
+        new["col"] = col_v + 0.5
+        new["layer"] = 0
+    instances.append(new)
+    aq_inst_normalize(instances)
+    return ""
+
+def aq_inst_del(instances, iid):
+    """iid 상자 제거 — 위 상자는 정규화로 내려앉음. 반환 오류 문장/""."""
+    tgt = _aq_inst_find(instances, iid)
+    if tgt is None:
+        return f"삭제 실패: 상자 {iid}를 찾을 수 없음"
+    instances.remove(tgt)
+    aq_inst_normalize(instances)
+    return ""
+
+def aq_inst_place_code(instances, code, box, rack, shelf, count, dims=None, shelf_h=0, max_layers=3):
+    """코드의 상자 count개를 (rack,shelf) 오른쪽 끝에 추가 — 패커와 같은 물리 규칙
+    (같은 상자 적층 층수 = min(max_layers, 단높이//상자높이), 루퍼젯팩은 1층). 세부조정 표 편집용."""
+    dims = dims or {}
+    wh = dims.get(str(box))
+    h = wh[1] if wh else 0
+    layers = min(max_layers, int(shelf_h // h)) if (h and shelf_h) else 1
+    if str(box) == "루퍼젯팩": layers = 1
+    layers = max(1, layers)
+    on = _aq_inst_shelf(instances, rack, shelf)
+    col = max([float(it.get("col") or 0) for it in on] or [-1.0]) + 1.0
+    li = 0
+    for _k in range(max(0, int(count))):
+        if li >= layers:
+            li = 0; col += 1
+        instances.append({"id": aq_inst_new_id(instances, str(code)), "code": str(code),
+                          "box": str(box or ""), "rack": str(rack), "shelf": int(shelf),
+                          "col": col, "layer": li})
+        li += 1
+    aq_inst_normalize(instances)
+    return instances
+
+def aq_instances_from_seqs(seq_by_shelf, rack_list, mstack=None):
+    """[마이그레이션·자동배치 전용] 패킹 1회 실행으로 (rack,shelf)별 시퀀스에 좌표를 부여해
+    인스턴스 리스트 생성. seq 튜플 = (코드,분류,상자,폭,높이[,열힌트]).
+    rejected(안 들어가는 상자)도 버리지 않고 오른쪽 끝 열로 보존 — 검증이 문장으로 노출."""
+    rk_by = {rk["명칭"]: rk for rk in rack_list}
+    out = []
+    for (rack, shelf), seq in sorted(seq_by_shelf.items()):
+        rk = rk_by.get(rack)
+        try: _sh_i = int(shelf)
+        except Exception: _sh_i = 0
+        if rk is not None and 0 < _sh_i <= len(rk["단높이"]):
+            inner, sh = rk["내측폭"], rk["단높이"][_sh_i - 1]
+        else:
+            inner, sh = 10 ** 9, 10 ** 9   # 미지의 랙/단 — 그래도 보존(한 층 나란히)
+        cols_p, _fit, rej = aq_pack_shelf_stacks(seq, inner, sh, force=mstack)
+        ci = -1
+        for ci, (_x, _w, stack) in enumerate(cols_p):
+            for li, t in enumerate(stack):
+                out.append({"id": aq_inst_new_id(out, str(t[0])), "code": str(t[0]),
+                            "box": str(t[2]), "rack": str(rack), "shelf": _sh_i,
+                            "col": ci, "layer": li})
+        for j, t in enumerate(rej):
+            out.append({"id": aq_inst_new_id(out, str(t[0])), "code": str(t[0]),
+                        "box": str(t[2]), "rack": str(rack), "shelf": _sh_i,
+                        "col": ci + 1 + j, "layer": 0})
+    return out
+
+def aq_inst_validate(instances, rack_list, dims):
+    """좌표 기반 물리 검증 — 문제를 조용히 숨기지 않고 문장 리스트로 반환.
+    ① 열폭 합 > 내측폭 ② 열 적층높이 합 > 단높이 ③ 치수 미상 상자 ④ 없는 랙/단 번호."""
+    msgs = []
+    rk_by = {rk["명칭"]: rk for rk in rack_list}
+    by_shelf = {}
+    for it in instances:
+        by_shelf.setdefault((str(it.get("rack") or ""), int(it.get("shelf") or 0)), []).append(it)
+    for (rack, shelf), lst in sorted(by_shelf.items()):
+        rk = rk_by.get(rack)
+        if rk is None:
+            msgs.append(f"{rack} 단{shelf}: 랙 구성에 없는 랙({len(lst)}상자)"); continue
+        if not (0 < shelf <= len(rk["단높이"])):
+            msgs.append(f"{rack} 단{shelf}: 단 번호 범위 초과({len(lst)}상자)"); continue
+        cols, unknown = aq_inst_cols(lst, dims)
+        if unknown:
+            msgs.append(f"{rack} 단{shelf}: 상자 치수 미등록 {len(unknown)}건"
+                        f"({', '.join(str(u.get('code')) for u in unknown[:4])})")
+        used = sum(cw for _x, cw, _s in cols)
+        if used > rk["내측폭"]:
+            msgs.append(f"{rack} 단{shelf}: 폭 초과 — 사용 {used} > 내측 {rk['내측폭']}mm")
+        sh = rk["단높이"][shelf - 1]
+        for _x, _cw, stack in cols:
+            hsum = sum(wh[1] for _it, wh in stack)
+            if hsum > sh:
+                msgs.append(f"{rack} 단{shelf}: 적층 높이 초과 — {stack[0][0].get('code')} 열 {hsum} > {sh}mm")
+    return msgs
+
+def aq_inst_derive_assign(instances, rows_meta=None):
+    """인스턴스 → 구(v1) assign/splits 파생 — 저장 JSON 하위호환(진열품목 탭·인쇄물·구버전 앱).
+    본 자리 = 상자가 가장 많은 단, n = 그 단 개수, splits = 나머지 단. 반환 (assign, splits)."""
+    rows_meta = rows_meta or {}
+    per = {}
+    for it in instances:
+        c = str(it.get("code"))
+        loc = (str(it.get("rack") or ""), int(it.get("shelf") or 0))
+        per.setdefault(c, {}).setdefault(loc, []).append(it)
+    assign, splits = {}, {}
+    for c, locs in per.items():
+        main = max(locs, key=lambda k: (len(locs[k]), -min(float(x.get("col") or 0) for x in locs[k])))
+        d = {"rack": main[0], "shelf": main[1], "rows": int(rows_meta.get(c, 1) or 1),
+             "n": len(locs[main])}
+        try: d["ord"] = float(min(float(x.get("col") or 0) for x in locs[main]))
+        except Exception: pass
+        assign[c] = d
+        rest = [[k[0], k[1], len(v)] for k, v in locs.items() if k != main]
+        if rest:
+            splits[c] = rest
+    return assign, splits
+
 def _aq_esc(s):
     """[V49] SVG/HTML 속성용 이스케이프."""
     return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
@@ -374,11 +626,13 @@ def _aq_hover_attrs(it, info):
             f' data-box="{_aq_esc(meta.get("box") or it[2])}"'
             f' data-cap="{_aq_esc(meta.get("cap") or "")}"')
 
-def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=19, scale=0.22, show_dims=True, info=None, shelf_t=0, force=None):
+def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=19, scale=0.22, show_dims=True, info=None, shelf_t=0, force=None, inst_by_shelf=None, dims=None):
     """(x0,y0) 기준으로 랙 1대의 SVG 요소들을 out 리스트에 추가. 반환: (폭px, 높이px).
     [V49] 스택 패킹 렌더(동일상자 열 적층) + info 있으면 호버 데이터 속성 + 도형/이미지(자유 배치) 지원.
     [V62] shelf_t = 단(선반 판) 두께 — 단높이(개구부)는 총높이−단두께×(단수−1)이라, 판 두께를
-          높이·단 바닥 y에 더해야 단수가 달라도 랙 총높이가 동일하게(=실제) 그려진다."""
+          높이·단 바닥 y에 더해야 단수가 달라도 랙 총높이가 동일하게(=실제) 그려진다.
+    [V67] inst_by_shelf={(랙명,단):[인스턴스]} + dims={상자:(폭,높이)} — 주어지면 패킹하지 않고
+          저장된 좌표(col·layer) 그대로 그린다(인스턴스 모델). 상자에 data-iid 부여."""
     W = inner + frame_t * 2
     _nsh = len(shelf_hs)
     H = sum(shelf_hs) + shelf_t * max(0, _nsh - 1) + frame_t   # [V62] 단두께 반영
@@ -403,19 +657,38 @@ def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=
                    f'x="{x0 + frame_t*scale:.1f}" y="{y_px:.1f}" width="{inner*scale:.1f}" height="{sh*scale:.1f}" '
                    f'fill="none" stroke="none"/>')
         y_real += shelf_t                          # [V62] 다음 단은 선반 판 두께만큼 위 (빈 단도 누적되도록 continue 앞)
-        seq = shelf_seqs.get((rack_name, si)) or shelf_seqs.get(si) or []
-        if not seq: continue
-        cols_p, fitted, rej = aq_pack_shelf_stacks(seq, inner, sh, force=force)   # [V64] 수동 적층 고정
+        if inst_by_shelf is not None:   # [V67] 인스턴스 좌표 렌더 — 패킹(재계산) 없음
+            _ins9 = inst_by_shelf.get((rack_name, si)) or []
+            if not _ins9: continue
+            _colsI, _unkI = aq_inst_cols(_ins9, dims or {})
+            cols_p = []
+            for _cxI, _cwI, _stI in _colsI:
+                _stk9 = []
+                for _itI, _whI in _stI:
+                    _cI = str(_itI.get("code") or "")
+                    _gI = str(((info or {}).get(_cI) or {}).get("grp") or "(미지정)")
+                    _stk9.append(((_cI, _gI, str(_itI.get("box") or ""), _whI[0], _whI[1]),
+                                  str(_itI.get("id") or "")))
+                cols_p.append((_cxI, _cwI, _stk9))
+        else:
+            seq = shelf_seqs.get((rack_name, si)) or shelf_seqs.get(si) or []
+            if not seq: continue
+            _cp9, _fit9, _rej9 = aq_pack_shelf_stacks(seq, inner, sh, force=force)   # [V64] 수동 적층 고정
+            cols_p = [(cx, cw, [(it, "") for it in stack]) for cx, cw, stack in _cp9]
         tape = []
         for cx, cw, stack in cols_p:
-            for li, it in enumerate(stack):
+            _ycum9 = 0.0   # [V67] 열 안 누적 높이 — 서로 다른 상자 적층(수동)도 정확히 그려짐
+            for li, (it, _iid9) in enumerate(stack):
                 bw, bh = it[3], it[4]
                 col = AQ_GROUP_COLORS.get(aq_grp_norm(it[1]), "#9AA0A6")
                 bx = x0 + frame_t * scale + cx * scale
-                by = base - (li + 1) * bh * scale
+                _ycum9 += bh
+                by = base - _ycum9 * scale
                 attrs = _aq_hover_attrs(it, info)
                 if attrs:   # [V51] 드래그·더블클릭용 위치 데이터
                     attrs += f' data-code="{_aq_esc(it[0])}" data-rack="{_aq_esc(rack_name)}" data-shelf="{si}"'
+                    if _iid9:   # [V67] 상자 인스턴스 id — 조작(op)의 단위
+                        attrs += f' data-iid="{_aq_esc(_iid9)}"'
                 meta = (info or {}).get(it[0]) or {}
                 shape = meta.get("shape") or ""
                 if shape == "원":
@@ -479,7 +752,7 @@ def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=
                         out.append(f'<text class="aqlbl" x="{_cx9:.1f}" y="{_y19 + _gap9 + _l2f9:.1f}" '
                                    f'font-size="{_l2f9:.1f}" text-anchor="middle" fill="{_lfill9}" '
                                    f'pointer-events="none" style="display:none">{_aq_esc(_l2t9)}</text>')
-            tape.append((cx, cx + cw, AQ_GROUP_COLORS.get(aq_grp_norm(stack[0][1]), "#9AA0A6")))
+            tape.append((cx, cx + cw, AQ_GROUP_COLORS.get(aq_grp_norm(stack[0][0][1]), "#9AA0A6")))   # [V67] (it,iid) 구조
         for tx0, tx1, col in tape:   # 색상 자석테이프(단 전면 하단 밴드)
             out.append(f'<rect class="aqtape" x="{x0 + frame_t*scale + tx0*scale:.1f}" y="{base - 3:.1f}" width="{(tx1-tx0)*scale:.1f}" height="3.4" fill="{col}"/>')
     return pw, ph
@@ -492,11 +765,17 @@ def aq_rack_svg(rack_name, inner, shelf_hs, shelf_seqs, frame_t=19, scale=0.22, 
     return (f'<svg width="{pw + pad*2:.0f}" height="{ph + pad*2 + 14:.0f}" xmlns="http://www.w3.org/2000/svg">'
             + "".join(out) + '</svg>')
 
-def aq_racks_svg_all(rack_list, seq_by_shelf, per_row=6, scale=None, info=None, mstack=None):
+def aq_racks_svg_all(rack_list, seq_by_shelf, per_row=6, scale=None, info=None, mstack=None, instances=None, dims=None):
     """[V47] 전체 배치 뷰 — V1 도면처럼 랙들을 줄당 per_row대씩 나란히 렌더.
     rack_list=[{명칭,내측폭,단높이}], seq_by_shelf={(랙명,단):[...]}. [V49] info=호버 툴팁 데이터.
-    [V64] mstack=수동 적층 고정 코드 집합(렌더 전용 — 검증·견적 패킹엔 미적용)."""
+    [V64] mstack=수동 적층 고정 코드 집합(렌더 전용 — 검증·견적 패킹엔 미적용).
+    [V67] instances(인스턴스 리스트)+dims 주어지면 패킹 없이 저장 좌표대로 렌더(seq_by_shelf 무시)."""
     if not rack_list: return ""
+    _iby9 = None
+    if instances is not None:
+        _iby9 = {}
+        for _it9 in instances:
+            _iby9.setdefault((str(_it9.get("rack") or ""), int(_it9.get("shelf") or 0)), []).append(_it9)
     if scale is None:
         n = len(rack_list)
         scale = 0.22 if n <= 2 else (0.16 if n <= 4 else 0.105)
@@ -512,7 +791,8 @@ def aq_racks_svg_all(rack_list, seq_by_shelf, per_row=6, scale=None, info=None, 
             pw, ph = _aq_rack_parts(_parts9, x, y + 10, rk["명칭"], rk["내측폭"], rk["단높이"], seq_by_shelf,
                                     scale=scale, show_dims=(scale >= 0.15), info=info,
                                     shelf_t=int(rk.get("단두께") or 0),   # [V62] 단 판 두께 반영
-                                    force=mstack)   # [V64] 수동 적층 고정
+                                    force=mstack,   # [V64] 수동 적층 고정(구 경로)
+                                    inst_by_shelf=_iby9, dims=dims)   # [V67] 인스턴스 좌표 렌더
             out.append(f'<g class="aqrackg" data-rack="{_aq_esc(rk["명칭"])}">' + "".join(_parts9) + '</g>')
             x += pw + gap_x
             row_h = max(row_h, ph)
@@ -521,12 +801,16 @@ def aq_racks_svg_all(rack_list, seq_by_shelf, per_row=6, scale=None, info=None, 
     return (f'<svg width="{total_w + pad:.0f}" height="{y + pad:.0f}" xmlns="http://www.w3.org/2000/svg">'
             + "".join(out) + '</svg>')
 
-def aq_shelf_top_svg(rack_name, shelf_no, inner, shelf_h, depth, seq, rows_by_code=None, box_depths=None, info=None, scale=0.5):
+def aq_shelf_top_svg(rack_name, shelf_no, inner, shelf_h, depth, seq, rows_by_code=None, box_depths=None, info=None, scale=0.5, cols=None):
     """[V49] 단 탑뷰 — 위에서 내려다본 배치. 전면 x좌표는 정면 패킹과 동일, 깊이 방향 줄수 표시.
     depth=단 깊이mm · rows_by_code={코드:줄수} · box_depths={상자:깊이mm}(미등록 상자는 1줄 전체깊이).
-    아래쪽 = 매장 전면(정면도에서 보이는 줄)."""
+    아래쪽 = 매장 전면(정면도에서 보이는 줄).
+    [V67] cols=[(x,폭,[it...])] 주어지면 패킹 없이 그 열 그대로(인스턴스 좌표와 정면 일치)."""
     pad = 18
-    cols_p, fitted, rej = aq_pack_shelf_stacks(seq, inner, shelf_h)
+    if cols is not None:
+        cols_p = cols
+    else:
+        cols_p, fitted, rej = aq_pack_shelf_stacks(seq, inner, shelf_h)
     pw, ph = inner * scale, depth * scale
     out = [f'<rect x="{pad}" y="{pad}" width="{pw:.1f}" height="{ph:.1f}" fill="#FAFAF7" stroke="#191414" stroke-width="1.6"/>']
     for cx, cw, stack in cols_p:
@@ -554,11 +838,14 @@ def aq_shelf_top_svg(rack_name, shelf_no, inner, shelf_h, depth, seq, rows_by_co
     return (f'<svg width="{pw + pad*2:.0f}" height="{ph + pad*2:.0f}" xmlns="http://www.w3.org/2000/svg">'
             + "".join(out) + '</svg>')
 
-def aq_svg_hover_html(svg, interactive=False, nonce="", boxes=None, committed_ts=0):
+def aq_svg_hover_html(svg, interactive=False, nonce="", boxes=None, committed_ts=0, ack=""):
     """[V49] SVG를 호버 툴팁(품목명 크게·규격·상자·최대수량)과 함께 iframe HTML로 래핑.
     반환: (html, 권장 iframe 높이px). components.html로 렌더해야 JS 툴팁이 동작.
-    [V51] interactive=True → 드래그 이동(같은 품목 묶음)·더블클릭 복제/삭제·전체화면/줌 툴바.
-    조작은 부모 localStorage 'AQ_OPS'({nonce,ts,ops})에 기록 → 파이썬 브리지가 적용."""
+    [V51] interactive=True → 드래그 이동·더블클릭 복제/삭제·전체화면/줌 툴바.
+    [V67] 조작 = 상자 인스턴스(iid) 단위. 부모 localStorage 'AQ_OPS'({nonce,batch,ts,ops})에
+    기록 → 서버 적용 후 ack(배치 id)를 iframe에 주입 → 다음 로드에서 일치하면 localStorage 삭제.
+    ACK 前 재시도는 1회만, 처리된 배치는 재전송하지 않는다(무한 버퍼링 차단).
+    (committed_ts는 V63 잔재 — 하위호환용으로만 받고 사용하지 않음)"""
     h = 400
     try:
         _i = svg.index('height="')
@@ -580,7 +867,8 @@ def aq_svg_hover_html(svg, interactive=False, nonce="", boxes=None, committed_ts
         js_int = """
 <script>
 var AQN="__NONCE__", AQB=__BOXES__, aqOps=[], aqZ=1, aqDrag=null, aqMenu=null, aqSeq=0;
-var AQCT=__COMMITTED_TS__;   /* [V63] 서버가 마지막으로 반영한 조작 payload의 ts — 자가치유 기준 */
+var AQK="__ACK__";   /* [V67] 서버가 마지막으로 반영 완료(ACK)한 배치 id — 일치하면 localStorage 삭제 */
+var aqBatch=null, aqSent=null, aqRetried=null;   /* [V67] 현재 배치 id / 전송된 배치 / 재시도한 배치(1회 한정) */
 var aqSel=[], aqBand=null;   /* [V58] 다중선택(러버밴드+Shift) */
 var aqBoxes=[].slice.call(document.querySelectorAll('.aqbox[data-code]'));
 var aqZones=[].slice.call(document.querySelectorAll('.aqshelf'));
@@ -630,8 +918,12 @@ document.addEventListener('fullscreenchange',function(){
   if(aqOps.length){clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,900);}}});   /* [V58] 종료 시 일괄 반영 — [V62] 전체화면 종료 리플로우/리사이즈가 가라앉은 뒤 커밋 */
 function aqGrp(el){return aqBoxes.filter(function(b){return b.dataset.code===el.dataset.code
  &&b.dataset.rack===el.dataset.rack&&b.dataset.shelf===el.dataset.shelf;});}
-function aqPush(op){op.id=Date.now()+'-'+(++aqSeq);aqOps.push(op);
- try{window.parent.localStorage.setItem('AQ_OPS',JSON.stringify({nonce:AQN,ts:Date.now(),ops:aqOps}));}catch(e){}
+function aqPush(op){
+ /* [V67] 배치 단위 전송 — 이미 전송(aqSent)된 배치에 추가 조작이 오면 새 배치 id를 발급.
+    ops 배열은 비우지 않는다(서버가 아직 안 읽었을 수 있음 — op id 디둡으로 중복 무해). */
+ if(aqBatch===null||aqSent===aqBatch){aqBatch=String(Date.now());}
+ op.id=aqBatch+'-'+(++aqSeq);aqOps.push(op);
+ try{window.parent.localStorage.setItem('AQ_OPS',JSON.stringify({nonce:AQN,batch:aqBatch,ts:Date.now(),ops:aqOps}));}catch(e){}
  aqSchedule();}
 /* [V58] 버퍼링 개선 — 조작마다 리런하지 않고 그림에 즉시(낙관) 반영해 두고,
    4초간 추가 조작이 없을 때 한 번에 서버 반영. 전체화면 중에는 종료 시 일괄 반영. */
@@ -642,14 +934,18 @@ function aqSchedule(){clearTimeout(window.__aqap);
 function aqApply(){if(!aqOps.length)return;
  if(document.fullscreenElement)return;
  if(aqDrag||aqRDrag||aqBand){clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,1500);return;}
- aqStat('반영 중… ('+aqOps.length+'건)');
- /* [V62] 커밋 직전 새 ts로 재기록 → streamlit_js_eval이 값 변경을 확실히 감지해 적용 리런이 반드시 발생
-    (전체화면 종료 시 옛 값 반환으로 복구 리런이 안 뜨던 경합 차단 · 중복은 op id 디둡으로 무해) */
- try{window.parent.localStorage.setItem('AQ_OPS',JSON.stringify({nonce:AQN,ts:Date.now(),ops:aqOps}));}catch(e){}
+ /* [V67] 배치 1회 전송 + ACK 前 재시도 1회 한정(처리된 배치 재전송 금지 — 무한 버퍼링 차단).
+    성공하면 서버가 iframe을 교체하므로 이 타이머는 사라진다. 3초 뒤에도 살아 있으면 1회만 재시도. */
+ var first=(aqSent!==aqBatch);
+ if(!first&&aqRetried===aqBatch){
+  aqStat('반영 지연 — 아래 🔄 배치 조작 반영 버튼을 직접 눌러주세요');return;}
+ try{window.parent.localStorage.setItem('AQ_OPS',JSON.stringify({nonce:AQN,batch:aqBatch,ts:Date.now(),ops:aqOps}));}catch(e){}
+ if(!first)aqRetried=aqBatch;
+ aqSent=aqBatch;
+ aqStat((first?'반영 중… (':'재시도 중… (')+aqOps.length+'건)');
  try{var bs=window.parent.document.querySelectorAll('button');
- for(var i=0;i<bs.length;i++){if((bs[i].innerText||'').indexOf('배치 조작 반영')>-1){bs[i].click();
-  clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,3000);return;}}}catch(e){}
- clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,3000);}   /* 실패 시 재시도(성공하면 iframe 교체됨) */
+ for(var i=0;i<bs.length;i++){if((bs[i].innerText||'').indexOf('배치 조작 반영')>-1){bs[i].click();break;}}}catch(e){}
+ clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,3000);}
 function aqZoneAt(x,y){for(var i=0;i<aqZones.length;i++){var r=aqZones[i].getBoundingClientRect();
  if(x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom)return aqZones[i];}return null;}
 function aqDragStart(el,ev){   /* [V58] 선택된 상자를 잡으면 선택 전체가 함께 이동
@@ -717,31 +1013,27 @@ document.addEventListener('mouseup',function(ev){if(!aqDrag)return;
  if(!z){d.items.forEach(rev);return;}
  var zr=z.getBoundingClientRect();   /* [V59] 드롭한 좌우 위치를 배치 순서에 반영 */
  var xr=Math.max(0,Math.min(1,(ev.clientX-zr.left)/Math.max(1,zr.width)));
- var done={};
- function aqOnBox(b,ev){   /* [V64] 대상 단에서 다른 상자 위(바닥에서 떠서)에 떨어뜨렸으면 그 상자 code 반환(적층 고정) */
+ function aqOnBox(b,ev){   /* [V67] 대상 단에서 다른 상자 위에 떨어뜨렸으면 그 상자 인스턴스 id 반환(그 열 위에 적층) */
   for(var i=0;i<aqBoxes.length;i++){var x=aqBoxes[i];
    if(x===b||x.style.display==='none')continue;
    if(d.items.some(function(it){return it.b===x;}))continue;
    if(x.dataset.rack!==z.dataset.rack||x.dataset.shelf!==z.dataset.shelf)continue;
    var r=x.getBoundingClientRect();
-   if(r.width>0&&r.left<ev.clientX&&ev.clientX<r.right&&ev.clientY<r.bottom-4)return x.dataset.code;}
+   if(r.width>0&&r.left<ev.clientX&&ev.clientX<r.right&&ev.clientY<r.bottom-4)return x.dataset.iid||null;}
   return null;}
- d.items.forEach(function(it){var b=it.b;
-  var k=b.dataset.code+'|'+b.dataset.rack+'|'+b.dataset.shelf;
-  if(!done[k]){done[k]=true;
-   if(z.dataset.rack!==b.dataset.rack||z.dataset.shelf!==b.dataset.shelf||d.moved){
-    var _onto=aqOnBox(b,ev);   /* [V64] 위에 올린 대상 상자 code(있으면 그 열그룹에 합쳐 적층) */
-    var op={t:'move',code:b.dataset.code,rack:b.dataset.rack,shelf:parseInt(b.dataset.shelf),
-            track:z.dataset.rack,tshelf:parseInt(z.dataset.shelf),xr:Math.round(xr*1000)/1000,
-            stack:_onto?1:0};   /* 1=상자 위 적층 고정 / 0=바닥 → 고정 해제 */
-    if(_onto)op.onto=_onto;
-    if(d.one)op.one=1;   /* [V61] 낱개 이동 → 서버가 분할 진열로 처리 */
-    aqPush(op);}}
+ d.items.forEach(function(it){var b=it.b;   /* [V67] 상자 인스턴스(iid) 단위 op — 상자 1개=조작 1건 */
+  if(b.dataset.iid){
+   var _onto=aqOnBox(b,ev);
+   var op={t:'move',iid:b.dataset.iid,code:b.dataset.code,
+           track:z.dataset.rack,tshelf:parseInt(z.dataset.shelf),xr:Math.round(xr*1000)/1000};
+   if(_onto)op.onto=_onto;   /* 아래 상자 인스턴스 id → 그 열 맨 위 적층(서버가 단높이 검증) */
+   aqPush(op);}
   b.dataset.rack=z.dataset.rack;b.dataset.shelf=z.dataset.shelf;});
  var rem=d.items.map(function(it){return it.b;});   /* [V60] 드롭 즉시 스냅 — 먼저 놓인 것부터 이웃이 됨 */
  d.items.forEach(function(it){rem.shift();aqSnapBox(it.b,z,rem.slice());});
 });
-function aqDelOne(b){aqPush({t:'del',code:b.dataset.code,rack:b.dataset.rack,shelf:parseInt(b.dataset.shelf)});
+function aqDelOne(b){if(!b.dataset.iid)return;
+ aqPush({t:'del',iid:b.dataset.iid,code:b.dataset.code});   /* [V67] 인스턴스 단위 삭제 */
  b.style.display='none';aqTexts(b).forEach(function(t){t.style.display='none';});}
 function aqSelDel(){var sel=aqSel.slice();aqSelClear();sel.forEach(aqDelOne);}   /* [V58] 선택 일괄 삭제 */
 function aqMenuShow(el,ev){aqMenuHide();
@@ -761,8 +1053,8 @@ function aqMenuShow(el,ev){aqMenuHide();
   b4.textContent='🗑 선택 '+aqSel.length+'상자 삭제';bs4=[b1,b2,b4,b3];}
  bs4.forEach(function(b){b.style.cssText='margin-right:6px;padding:4px 8px;border:1px solid #F4D624;'
   +'background:#191414;color:#FFFFFF;border-radius:6px;cursor:pointer;font-size:12px;';m.appendChild(b);});
- b1.onclick=function(){aqPush({t:'dup',code:el.dataset.code,rack:el.dataset.rack,
-  shelf:parseInt(el.dataset.shelf)});
+ b1.onclick=function(){if(!el.dataset.iid){aqMenuHide();return;}
+  aqPush({t:'dup',iid:el.dataset.iid,code:el.dataset.code});   /* [V67] 인스턴스 단위 복제 */
   var g=aqGrp(el),last=g[g.length-1];   /* [V58] 반영 전에도 보이게 유령 복제 */
   try{var c=last.cloneNode(false);c.removeAttribute('class');c.setAttribute('pointer-events','none');
    var o=aqOff(last),hh=(last.getBBox?last.getBBox().height:12)||12;
@@ -839,25 +1131,31 @@ document.addEventListener('mouseup',function(ev){if(!aqRDrag)return;
  if(best){aqPush({t:'rord',rack:d.rack,target:best.g.getAttribute('data-rack'),after:ev.clientX>best.cx});}
  else if(d.g){d.g.removeAttribute('transform');}
 });
-/* [V63] 자가치유 — iframe이 재생성될 때 localStorage에 '서버가 아직 반영 안 한' 조작(ts>AQCT)이
-   남아 있으면 재반영을 예약한다. 비동기 브리지 읽기 레이스(bump 리런의 빈 읽기 → 편집前 재생성)로
-   조작이 유실·초기화되던 것을 복구한다. move는 목적 단 위로 시각 이동해 스냅백(깜빡임)도 줄인다. */
+/* [V67] ACK 정리 + 자가치유 — iframe 로드 시 localStorage 상태를 딱 한 번 판정:
+   ① 다른 세션/사이트 잔재(nonce 불일치)·빈 배치 → 삭제
+   ② 서버가 ACK한 배치(batch===AQK) → 처리 완료 → 삭제(재전송 금지)
+   ③ 미반영 배치 → 시각 재적용(iid로 목적 단 위 이동) + 재무장(서버 미도달 대비, 재시도 1회 규칙은 aqApply가 지킴) */
 (function(){try{
- var _p=JSON.parse(window.parent.localStorage.getItem('AQ_OPS')||'{}');
- if(_p&&_p.nonce===AQN&&_p.ops&&_p.ops.length&&((+_p.ts||0)>(+AQCT||0))){
-  aqOps=_p.ops.slice(); aqSeq=aqOps.length;
-  _p.ops.forEach(function(op){try{if(op.t==='move'&&op.track){
-    var bx=document.querySelector('.aqbox[data-code="'+op.code+'"]');
-    var zn=document.querySelector('.aqshelf[data-rack="'+op.track+'"][data-shelf="'+op.tshelf+'"]');
-    if(bx&&zn){var br=bx.getBoundingClientRect(),zr=zn.getBoundingClientRect();
-     aqSvg.appendChild(bx);
-     aqSetT(bx,(zr.left+zr.width/2)-(br.left+br.width/2),(zr.top+zr.height*0.72)-(br.top+br.height/2));}
-  }}catch(e){}});
-  clearTimeout(window.__aqap); window.__aqap=setTimeout(aqApply,700);
-  aqStat('미반영 '+aqOps.length+'건 — 재반영 중');
- }}catch(e){}})();
+ var _raw=window.parent.localStorage.getItem('AQ_OPS');
+ if(!_raw)return;
+ var _p=JSON.parse(_raw||'{}')||{};
+ if(_p.nonce!==AQN||!_p.batch||!_p.ops||!_p.ops.length){
+  window.parent.localStorage.removeItem('AQ_OPS');return;}
+ if(String(_p.batch)===String(AQK)){
+  window.parent.localStorage.removeItem('AQ_OPS');return;}
+ aqOps=_p.ops.slice(); aqBatch=String(_p.batch); aqSeq=aqOps.length;
+ _p.ops.forEach(function(op){try{if(op.t==='move'&&op.track&&op.iid){
+   var bx=document.querySelector('.aqbox[data-iid="'+op.iid+'"]');
+   var zn=document.querySelector('.aqshelf[data-rack="'+op.track+'"][data-shelf="'+op.tshelf+'"]');
+   if(bx&&zn){var br=bx.getBoundingClientRect(),zr=zn.getBoundingClientRect();
+    aqSvg.appendChild(bx);
+    aqSetT(bx,(zr.left+zr.width/2)-(br.left+br.width/2),(zr.top+zr.height*0.72)-(br.top+br.height/2));}
+ }}catch(e){}});
+ clearTimeout(window.__aqap); window.__aqap=setTimeout(aqApply,700);
+ aqStat('미반영 '+aqOps.length+'건 — 재반영 중');
+}catch(e){}})();
 </script>""".replace("__NONCE__", str(nonce).replace('"', '')).replace(
-            "__COMMITTED_TS__", str(int(float(committed_ts or 0)))).replace(
+            "__ACK__", str(ack or "").replace('"', '')).replace(
             "__BOXES__", json.dumps([str(b) for b in (boxes or [])], ensure_ascii=False))
     html = (
         '<div id="aqwrap" style="position:relative;font-family:sans-serif;background:#FFFFFF;overflow:auto;">'

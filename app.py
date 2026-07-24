@@ -945,23 +945,38 @@ def aq_update_item_cell(code, col_name, value):
             return True
     return False
 
+def _aq_grid_precheck(grid, ws_name):
+    """[V68] clear() 前 사전 검증 — 구글시트 한도(셀 50,000자)를 넘는 셀이 있으면 시트를 건드리기 전에
+    차단한다. 2026-07-24 실사고: clear 성공 후 update가 400으로 거부되어 AQ_Sites가 통째로 지워짐
+    (리비전에서 복구). clear+update 패턴(§2-2)은 유지하되, 실패가 예정된 쓰기는 시작하지 않는다."""
+    for ri, row in enumerate(grid):
+        for ci, cell in enumerate(row):
+            if len(str(cell)) > 50000:
+                raise ValueError(
+                    f"{ws_name} 저장 중단(시트 무손상): {ri + 1}행 {ci + 1}열 셀이 "
+                    f"{len(str(cell)):,}자로 구글시트 한도(50,000자)를 초과합니다. 데이터를 줄인 뒤 다시 저장하세요.")
+
 def aq_save_sites(sites_rows):
-    """AQ_Sites 전체 재기록 (§2-2 clear+update 패턴). 헤더는 시트 현재 헤더 유지."""
+    """AQ_Sites 전체 재기록 (§2-2 clear+update 패턴). 헤더는 시트 현재 헤더 유지.
+    [V68] clear 前 셀 크기 사전 검증 — 한도 초과 시 시트 무손상 중단."""
     ws = _aq_sh().worksheet("AQ_Sites")
     cur = ws.get_all_values()
     hdrs = cur[0] if cur and any(cur[0]) else \
         ["농협ID", "농협명", "지역", "상태", "설치일", "랙구성JSON", "배치JSON", "견적ID", "담당자", "비고"]
     grid = [hdrs] + [[str(s.get(h, "")) for h in hdrs] for s in sites_rows]
+    _aq_grid_precheck(grid, "AQ_Sites")   # [V68] 검증 통과 후에만 clear
     ws.clear(); ws.update(grid, value_input_option='RAW')
 
 # ── [V50] 등록된 상자·수용량 기록 수정 — 축적 데이터도 고칠 수 있어야 한다(박 대표님 2026-07-21) ──
 def aq_save_ws(ws_name, rows):
     """[V50] AQ 시트 전체 재기록 (§2-2 clear+update). rows=list[dict] · 헤더는 시트 현재 헤더 유지.
-    ※ 편집 저장 전용 — 축적 로그의 '행 추가'는 기존대로 aq_append_row 사용."""
+    ※ 편집 저장 전용 — 축적 로그의 '행 추가'는 기존대로 aq_append_row 사용.
+    [V68] clear 前 셀 크기 사전 검증 — 한도 초과 시 시트 무손상 중단."""
     ws = _aq_sh().worksheet(ws_name)
     cur = ws.get_all_values()
     hdrs = cur[0] if cur and any(cur[0]) else (list(rows[0].keys()) if rows else [])
     grid = [hdrs] + [[str(r.get(h, "")) for h in hdrs] for r in rows]
+    _aq_grid_precheck(grid, ws_name)   # [V68] 검증 통과 후에만 clear
     ws.clear(); ws.update(grid, value_input_option='RAW')
     return len(rows)
 
@@ -1008,6 +1023,13 @@ def aq_rename_box(old, new):
     return cnt
 
 from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 — ⚠배포 시 aquanaris_layout.py도 함께 올릴 것
+# [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
+#  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
+if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 68:
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V68)와 짝이 맞지 않습니다.\n\n"
+             "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
+             "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
+    st.stop()
 
 # ══ [V52] 스티커·가이드북 인쇄물 자동 생성 — 색상 중심 디자인 v2 (대표님 스케치 2026-07-21) ══
 # 카드 = 부속군 색 프레임 + [제품명|규격] / [이미지|QR|농협 바코드] / [제품설명]. 섹션/단/열 표기 폐기.
@@ -6508,9 +6530,19 @@ elif mode == "🏪 아쿠나리스":
                                 if isinstance(_d0, dict):
                                     try: _rows0[str(_c0)] = max(1, int(_d0.get("rows") or 1))
                                     except Exception: pass
+                            def _box_of0(c):
+                                """저장본에는 상자명이 없다([V68] inst2) — items→기본상자→자유배치 순 재해석."""
+                                _r0b = _aq_by_code.get(c, {}) or {}
+                                _b0b = str((_plan_items.get(c, {}) or {}).get("box") or _r0b.get("기본상자") or "").strip()
+                                if not _b0b and c in _free_live: _b0b = "자유:" + c
+                                return _b0b
+                            _packed0 = _plan_cur.get("inst2")
                             _insts0 = _plan_cur.get("instances")
-                            if isinstance(_insts0, list):
-                                # schema 2 — 저장된 좌표를 그대로 신뢰(재계산 없음)
+                            if isinstance(_packed0, dict) and _packed0:
+                                # [V68] 압축 저장본(정식 포맷) — 좌표 그대로 복원, 재계산 없음
+                                st.session_state[_inst_key] = aq_inst_unpack(_packed0, _box_of0)
+                            elif isinstance(_insts0, list):
+                                # schema 2 초기(장황) 포맷 — 저장된 좌표를 그대로 신뢰(재계산 없음)
                                 _ld0 = []
                                 for _x0 in _insts0:
                                     if not isinstance(_x0, dict): continue
@@ -6527,11 +6559,6 @@ elif mode == "🏪 아쿠나리스":
                                 st.session_state[_inst_key] = _ld0
                             else:
                                 # v1 → 종전 패킹 규칙을 마지막 1회 재현해 좌표 확정(이후 리런·조작은 재계산 없음)
-                                def _mig_box0(c):
-                                    _r0 = _aq_by_code.get(c, {}) or {}
-                                    _b0 = str((_plan_items.get(c, {}) or {}).get("box") or _r0.get("기본상자") or "").strip()
-                                    if not _b0 and c in _free_live: _b0 = "자유:" + c
-                                    return _b0
                                 _sv_sp0 = _plan_cur.get("splits", {}) if isinstance(_plan_cur.get("splits", {}), dict) else {}
                                 _sv_mst0 = _plan_cur.get("mstack")
                                 if isinstance(_sv_mst0, dict): _sv_mst0 = {str(k): str(v) for k, v in _sv_mst0.items()}
@@ -6539,7 +6566,7 @@ elif mode == "🏪 아쿠나리스":
                                 else: _sv_mst0 = {}
                                 _mig_seqs0 = {}
                                 def _mig_add0(c, rack, shelf, n, ordv):
-                                    _b0 = _mig_box0(c)
+                                    _b0 = _box_of0(c)
                                     _wh0 = _dims_p.get(_b0)
                                     if not _wh0: return
                                     _r0 = _aq_by_code.get(c, {}) or {}
@@ -7193,16 +7220,12 @@ elif mode == "🏪 아쿠나리스":
                         # [V49] 자유 배치 저장 (편집표가 없던 리런에서는 기존값 보존)
                         _new_plan["free"] = _free_live if df_free is not None else _free_cur
                         # [V67] 배치 저장 = 상자 인스턴스 좌표(schema 2) — 불러오면 저장 시점 모습 그대로.
-                        #  assign/splits는 인스턴스에서 파생해 함께 기록(진열품목 탭·인쇄물·구버전 하위호환).
+                        #  [V68] 시트 셀 50,000자 한도 대응: 좌표는 압축 포맷 inst2(상자명 미저장 — items에서
+                        #  재해석), assign/splits는 파생 하위호환(진열품목 탭·인쇄물이 읽음).
                         _ins_sv = st.session_state.get(f"aq_inst_{sel_site}", [])
                         if _ins_sv:
                             _new_plan["schema_version"] = AQ_SCHEMA_V
-                            _new_plan["instances"] = [
-                                {"id": str(x.get("id")), "code": str(x.get("code")),
-                                 "box": str(x.get("box") or ""), "rack": str(x.get("rack")),
-                                 "shelf": int(x.get("shelf") or 0),
-                                 "col": int(float(x.get("col") or 0)), "layer": int(float(x.get("layer") or 0))}
-                                for x in _ins_sv]
+                            _new_plan["inst2"] = aq_inst_pack(_ins_sv)
                             _asg_dv9, _sp_dv9 = aq_inst_derive_assign(
                                 _ins_sv, st.session_state.get(f"aq_rows_{sel_site}") or {})
                             _new_plan["assign"] = _asg_dv9
@@ -7213,13 +7236,31 @@ elif mode == "🏪 아쿠나리스":
                             _new_plan["rack_order"] = _ord_sv
                         elif isinstance(_plan_cur.get("rack_order"), list):
                             _new_plan["rack_order"] = _plan_cur["rack_order"]
-                        for s in aq_sites_all:
-                            if str(s.get("농협명", "")).strip() == sel_site:
-                                s["랙구성JSON"] = json.dumps(_racks_out, ensure_ascii=False)
-                                s["배치JSON"] = json.dumps(_new_plan, ensure_ascii=False)
-                        aq_save_sites(aq_sites_all)
-                        aq_load_all.clear()
-                        st.success("저장 완료 (AQ_Sites 시트)"); time.sleep(0.5); st.rerun()
+                        # [V68] 시트 셀 한도(50,000자) 가드 — 공백 없는 JSON + 한도 임박 시
+                        #  하위호환 필드부터 단계 생략(좌표 inst2는 항상 보존), 그래도 초과면 저장 중단·안내.
+                        _SEP9 = (",", ":")
+                        _pj9 = json.dumps(_new_plan, ensure_ascii=False, separators=_SEP9)
+                        if len(_pj9) > 49500 and "splits" in _new_plan:
+                            _new_plan.pop("splits", None)
+                            _pj9 = json.dumps(_new_plan, ensure_ascii=False, separators=_SEP9)
+                            st.warning("배치JSON이 커서 하위호환 splits를 생략하고 저장합니다 — 배치 좌표는 전부 보존됩니다.")
+                        if len(_pj9) > 49500 and "assign" in _new_plan:
+                            _new_plan.pop("assign", None)
+                            _pj9 = json.dumps(_new_plan, ensure_ascii=False, separators=_SEP9)
+                            st.warning("배치JSON이 커서 하위호환 assign을 생략하고 저장합니다 — 배치 좌표는 전부 보존되지만, "
+                                       "진열품목·인쇄물의 '확정 배치 기준' 필터가 이 사이트에선 동작하지 않을 수 있습니다.")
+                        if len(_pj9) > 50000:
+                            st.error(f"저장 불가: 배치JSON {len(_pj9):,}자 — 시트 셀 한도(50,000자) 초과. "
+                                     "배치 품목 수를 줄이거나 다음 세션에서 셀 분할 저장을 요청하세요.")
+                        else:
+                            for s in aq_sites_all:
+                                if str(s.get("농협명", "")).strip() == sel_site:
+                                    s["랙구성JSON"] = json.dumps(_racks_out, ensure_ascii=False, separators=_SEP9)
+                                    s["배치JSON"] = _pj9
+                            aq_save_sites(aq_sites_all)
+                            aq_load_all.clear()
+                            st.success(f"저장 완료 (AQ_Sites 시트 · 배치JSON {len(_pj9):,}자/50,000)")
+                            time.sleep(0.5); st.rerun()
                     except Exception as e:
                         st.error(f"저장 실패: {aq_err_str(e)}")
 

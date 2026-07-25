@@ -8,7 +8,7 @@ import datetime
 # [V67] 모듈 버전 — app.py가 신구 짝(app.py↔이 파일)을 검증하는 데 사용.
 #  두 파일 중 하나만 배포되면 NameError 대신 친절한 안내가 뜨도록 한다.
 #  ⚠ 모듈에 새 함수를 추가하는 버전업마다 이 숫자와 app.py 가드 기준을 함께 올릴 것.
-AQ_LAYOUT_VER = 68   # [V68] inst2 압축 저장(시트 셀 50,000자 한도 대응)
+AQ_LAYOUT_VER = 69   # [V69] 배치도 파일 저장(SVG 라벨 표시)·가이드북 펼침면 지원
 
 # 렌더러가 쓰는 색상 헬퍼(app.py에도 동일 정의가 있으나 순수함수라 모듈 자체 보유)
 def _aq_hexrgb(h):
@@ -881,6 +881,12 @@ def aq_shelf_top_svg(rack_name, shelf_no, inner, shelf_h, depth, seq, rows_by_co
                f'{_aq_esc(rack_name)} 단{shelf_no} 탑뷰 — 내측 {inner}×깊이 {depth}mm · 아래쪽=전면</text>')
     return (f'<svg width="{pw + pad*2:.0f}" height="{ph + pad*2:.0f}" xmlns="http://www.w3.org/2000/svg">'
             + "".join(out) + '</svg>')
+
+def _aq_svg_for_file(svg):
+    """[V69] 파일 저장용 SVG — 화면에서는 ⛶ 전체화면일 때만 JS가 켜는 라벨(`aqlbl`)을 **항상 표시**로 바꾸고,
+    루퍼젯 뒷표기(`aqtag`)는 겹치므로 숨긴다(전체화면 화면과 동일한 모습). 캡처와 달리 벡터라 무손실."""
+    return (str(svg).replace('<text class="aqtag" ', '<text class="aqtag" style="display:none" ')
+                    .replace('style="display:none">', '>'))
 
 def aq_svg_hover_html(svg, interactive=False, nonce="", boxes=None, committed_ts=0, ack=""):
     """[V49] SVG를 호버 툴팁(품목명 크게·규격·상자·최대수량)과 함께 iframe HTML로 래핑.

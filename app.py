@@ -1025,8 +1025,8 @@ def aq_rename_box(old, new):
 from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 — ⚠배포 시 aquanaris_layout.py도 함께 올릴 것
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
-if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 68:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V68)와 짝이 맞지 않습니다.\n\n"
+if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 69:
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V69)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1397,6 +1397,266 @@ def _aq_guide_card(pdf, x, y, it, rgb, bc, bc_note, img):
         pdf.f(6.9); pdf.set_text_color(*pdf.BLACK); pdf.set_xy(cx + 1.5, r3y + 1.2)
         pdf.multi_cell(cw - 3, 3.2, it["desc"][:160], max_line_height=3.2)
 
+# ══ [V69] 배치도 벡터 렌더 — 화면 SVG와 같은 인스턴스 좌표를 PDF에 직접 그린다 ══
+#  화면 캡처는 화질이 떨어져 인쇄물에 못 쓴다(대표님 지적). 좌표를 벡터로 다시 그리면
+#  확대해도 선명하고, 같은 로직으로 가이드북 지면에도 그대로 실린다.
+AQ_PDF_FRAME_T = 19        # 랙 기둥 두께(mm 실척) — SVG `_aq_rack_parts`와 동일
+AQ_PDF_GAP_X = 70.0        # 랙 사이 가로 간격(mm 실척)
+AQ_PDF_GAP_Y = 230.0       # 줄 사이 세로 간격(랙 이름 자리 포함)
+
+def _aq_pdf_rack_wh(rk):
+    """랙 1대의 실척 크기(mm) — 렌더러와 같은 식(Σ단높이+단두께×(단수−1)+기둥)."""
+    hs = list(rk.get("단높이") or [])
+    t = int(rk.get("단두께") or 0)
+    return (int(rk.get("내측폭") or 0) + AQ_PDF_FRAME_T * 2,
+            sum(hs) + t * max(0, len(hs) - 1) + AQ_PDF_FRAME_T)
+
+def _aq_pdf_fit(racks, area_w, area_h):
+    """줄당 랙수를 바꿔가며 **배율이 최대가 되는 조합**을 고른다 — 잘리지 않고 빈 공간 최소.
+    반환 (줄당 랙수, 배율, 전체폭mm실척, 전체높이mm실척)."""
+    sizes = [_aq_pdf_rack_wh(rk) for rk in racks]
+    if not sizes or area_w <= 0 or area_h <= 0:
+        return 1, 0.0, 0.0, 0.0
+    best = None
+    for per in range(1, len(sizes) + 1):
+        rows = [sizes[i:i + per] for i in range(0, len(sizes), per)]
+        w = max(sum(s[0] for s in r) + AQ_PDF_GAP_X * (len(r) - 1) for r in rows)
+        h = sum(max(s[1] for s in r) for r in rows) + AQ_PDF_GAP_Y * (len(rows) - 1)
+        if w <= 0 or h <= 0: continue
+        sc = min(area_w / w, area_h / h)
+        if best is None or sc > best[1] + 1e-9:
+            best = (per, sc, w, h)
+    return best or (1, 0.0, 0.0, 0.0)
+
+def _aq_pdf_blend(rgb, a=0.72):
+    """SVG의 fill-opacity 0.72와 같은 색 — PDF는 알파 대신 흰색과 미리 섞는다."""
+    return tuple(int(round(255 - (255 - c) * a)) for c in rgb)
+
+def _aq_pdf_rack(pdf, x, y, rk, inst_by, dims, info, sc):
+    """랙 1대를 (x,y)에 배율 sc로 그린다 — 프레임·단선·상자(부속군색)·색상 자석테이프·라벨."""
+    hs = list(rk.get("단높이") or [])
+    t = int(rk.get("단두께") or 0)
+    name = str(rk.get("명칭") or "")
+    W, H = _aq_pdf_rack_wh(rk)
+    pw, ph = W * sc, H * sc
+    pdf.set_fill_color(250, 250, 247); pdf.set_draw_color(*pdf.BLACK)
+    pdf.set_line_width(max(0.18, min(0.5, pw * 0.006)))
+    pdf.rect(x, y, pw, ph, "DF")
+    _ns = max(4.2, min(9.0, pw * 0.13))
+    pdf.txt(x, y - _ns * 0.62 - 0.8, pw, _ns * 0.6, name, _ns, bold=True, color=pdf.DARK, align="C")
+    y_real = 0
+    for si, sh in enumerate(hs, 1):
+        base = y + ph - y_real * sc          # 이 단의 바닥
+        y_real += sh
+        ytop = y + ph - y_real * sc          # 개구부 상단(=선반 판 윗면)
+        pdf.set_draw_color(*pdf.BLACK); pdf.set_line_width(max(0.14, min(0.4, pw * 0.005)))
+        pdf.line(x, ytop, x + pw, ytop)
+        y_real += t
+        ins = inst_by.get((name, si)) or []
+        if not ins: continue
+        cols, _unk = aq_inst_cols(ins, dims)
+        for cx, cw, stack in cols:
+            ycum, tape_rgb = 0.0, None
+            for it, wh in stack:
+                bw, bh = wh
+                meta = info.get(str(it.get("code"))) or {}
+                base_rgb = _aq_hexrgb(AQ_GROUP_COLORS.get(aq_grp_norm(meta.get("grp") or "")))
+                if tape_rgb is None: tape_rgb = base_rgb
+                rgb = _aq_pdf_blend(base_rgb)
+                bx = x + AQ_PDF_FRAME_T * sc + cx * sc
+                ycum += bh
+                by = base - ycum * sc
+                bwp, bhp = bw * sc, bh * sc
+                pdf.set_fill_color(*rgb); pdf.set_draw_color(*pdf.BLACK); pdf.set_line_width(0.1)
+                pdf.rect(bx, by, bwp, bhp, "DF")
+                if bwp >= 5.0 and bhp >= 2.2:   # 라벨 — 상자 안에 들어갈 때만(넘침 방지)
+                    tc = _aq_lum_txt(rgb)
+                    nm = _aq_pr_clean(meta.get("name") or it.get("code"))
+                    sp = _aq_pr_clean(meta.get("spec") or "")
+                    if bhp >= 5.4 and sp:
+                        pdf.fit_txt(bx + 0.3, by + 0.2, bwp - 0.6, bhp / 2 - 0.2, nm,
+                                    min(6.5, bwp * 0.17), bold=True, color=tc, align="C", min_size=2.0)
+                        pdf.fit_txt(bx + 0.3, by + bhp / 2, bwp - 0.6, bhp / 2 - 0.2, sp,
+                                    min(5.5, bwp * 0.15), color=tc, align="C", min_size=1.9)
+                    else:
+                        pdf.fit_txt(bx + 0.3, by, bwp - 0.6, bhp, nm,
+                                    min(6.5, bwp * 0.17), bold=True, color=tc, align="C", min_size=2.0)
+            if tape_rgb:   # 색상 자석테이프(단 전면 하단 밴드) — 진열대 실물과 동일 표기
+                th = max(0.45, min(1.4, ph * 0.012))
+                pdf.set_fill_color(*tape_rgb)
+                pdf.rect(x + AQ_PDF_FRAME_T * sc + cx * sc, base - th, cw * sc, th, "F")
+
+def _aq_pdf_draw(pdf, x0, y0, racks, inst_by, dims, info, per, sc, align="C", area_w=0.0):
+    """racks를 (x0,y0)에서 area_w 폭 안에 per개씩 줄지어 그린다(줄 안에서는 바닥 정렬).
+    align: C=가운데 · L=왼쪽(펼침면 오른쪽 페이지) · R=오른쪽(펼침면 왼쪽 페이지). 반환: 사용 높이mm."""
+    sizes = [_aq_pdf_rack_wh(rk) for rk in racks]
+    y, i = y0, 0
+    while i < len(racks):
+        row = list(range(i, min(i + per, len(racks))))
+        rw = sum(sizes[j][0] for j in row) + AQ_PDF_GAP_X * (len(row) - 1)
+        rh = max(sizes[j][1] for j in row)
+        if align == "R":   x = x0 + area_w - rw * sc
+        elif align == "L": x = x0
+        else:              x = x0 + (area_w - rw * sc) / 2.0
+        for j in row:
+            _aq_pdf_rack(pdf, x, y + (rh - sizes[j][1]) * sc, racks[j], inst_by, dims, info, sc)
+            x += (sizes[j][0] + AQ_PDF_GAP_X) * sc
+        y += rh * sc + AQ_PDF_GAP_Y * sc
+        i += per
+    return max(0.0, y - y0 - AQ_PDF_GAP_Y * sc)
+
+def _aq_inst_by_shelf(instances):
+    out = {}
+    for it in instances:
+        out.setdefault((str(it.get("rack") or ""), int(it.get("shelf") or 0)), []).append(it)
+    return out
+
+def aq_site_layout(site, recs=None, boxes=None):
+    """[V69] 사이트의 랙 구성 + 상자 인스턴스 복원 — **가상랙(🅥) 제외**.
+    저장 포맷 3종 호환: inst2(V68 압축) → instances(V67) → v1 assign/splits(패킹 1회 재현).
+    반환 (rack_list, instances, dims, info)."""
+    recs = recs if recs is not None else aq_load_items()
+    boxes = boxes if boxes is not None else aq_load_boxes()
+    by_code = {str(r.get("품목코드", "")).strip().zfill(5): r for r in recs}
+    dims = aq_box_dims_map(boxes)
+    racks_raw, plan = [], {}
+    for srow in aq_load_sites():
+        if str(srow.get("농협명", "")).strip() == str(site).strip():
+            try: racks_raw = json.loads(str(srow.get("랙구성JSON") or "[]"))
+            except Exception: racks_raw = []
+            try: plan = json.loads(str(srow.get("배치JSON") or "{}"))
+            except Exception: plan = {}
+            break
+    if not isinstance(plan, dict): plan = {}
+    if not isinstance(racks_raw, list): racks_raw = []
+    pit = plan.get("items") if isinstance(plan.get("items"), dict) else {}
+    free = plan.get("free") if isinstance(plan.get("free"), dict) else {}
+    for c, f in (free or {}).items():
+        try:
+            _w, _h = int(f.get("w") or 0), int(f.get("h") or 0)
+            if _w > 0 and _h > 0: dims[f"자유:{c}"] = (_w, _h)
+        except Exception:
+            continue
+    rack_list = []
+    for r in racks_raw:
+        if not isinstance(r, dict): continue
+        nm = str(r.get("명칭") or "").strip()
+        if not nm or nm.startswith("🅥"): continue        # 가상랙 = 임시 보관 공간 → 도면에서 제외
+        try: wv = int(float(r.get("폭mm") or 0))
+        except Exception: wv = 0
+        try:
+            hs = [int(float(x)) for x in str(r.get("단높이mm(콤마구분)") or "").split(",") if str(x).strip()]
+        except Exception:
+            hs = []
+        try: tk = int(float(r.get("단두께mm") or 0))
+        except Exception: tk = 0
+        if wv > 0 and hs:
+            rack_list.append({"명칭": nm, "내측폭": wv - 38, "단높이": hs, "단두께": tk})
+    def _box_of(c):
+        r0 = by_code.get(str(c), {}) or {}
+        b0 = str(((pit or {}).get(str(c), {}) or {}).get("box") or r0.get("기본상자") or "").strip()
+        if not b0 and f"자유:{c}" in dims: b0 = f"자유:{c}"
+        return b0
+    insts = []
+    if isinstance(plan.get("inst2"), dict) and plan["inst2"]:
+        insts = aq_inst_unpack(plan["inst2"], _box_of)
+    elif isinstance(plan.get("instances"), list):
+        for x in plan["instances"]:
+            if not isinstance(x, dict): continue
+            try:
+                insts.append({"id": str(x.get("id") or ""), "code": str(x.get("code") or ""),
+                              "box": str(x.get("box") or ""), "rack": str(x.get("rack") or ""),
+                              "shelf": int(x.get("shelf") or 0),
+                              "col": float(x.get("col") or 0), "layer": float(x.get("layer") or 0)})
+            except Exception:
+                continue
+        aq_inst_normalize(insts)
+    else:   # v1(assign/splits) — 종전 패킹 규칙으로 1회 재현
+        asg = plan.get("assign") if isinstance(plan.get("assign"), dict) else {}
+        spl = plan.get("splits") if isinstance(plan.get("splits"), dict) else {}
+        seqs = {}
+        def _add(c, rk, sh, n):
+            b0 = _box_of(c); wh = dims.get(b0)
+            if not wh: return
+            g0 = str((by_code.get(str(c), {}) or {}).get("진열분류") or "(미지정)")
+            for _ in range(max(1, int(n or 1))):
+                seqs.setdefault((rk, sh), []).append((str(c), g0, b0, wh[0], wh[1], 1))
+        for c, d in (asg or {}).items():
+            if not isinstance(d, dict): continue
+            try: _sh = int(d.get("shelf") or 0)
+            except Exception: _sh = 0
+            if str(d.get("rack") or "") and _sh > 0: _add(c, str(d["rack"]), _sh, d.get("n") or 1)
+        for c, lst in (spl or {}).items():
+            for e in (lst if isinstance(lst, list) else []):
+                try: _add(c, str(e[0]), int(e[1]), int(e[2]))
+                except Exception: continue
+        for k in seqs: seqs[k] = aq_canon_seq(seqs[k])
+        insts = aq_instances_from_seqs(seqs, rack_list)
+    _rknames = {rk["명칭"] for rk in rack_list}
+    insts = [x for x in insts if str(x.get("rack") or "") in _rknames]   # 가상랙·없는 랙 제외
+    info = {}
+    for x in insts:
+        c = str(x.get("code"))
+        if c in info: continue
+        r0 = by_code.get(c, {}) or {}
+        info[c] = {"name": _aq_pr_clean(r0.get("품목명_AQ") or c),
+                   "spec": _aq_pr_clean(r0.get("규격_AQ") or ""),
+                   "grp": str(r0.get("진열분류") or "(미지정)")}
+    return rack_list, insts, dims, info
+
+def aq_layout_pdf_bytes(site, rack_list, instances, dims, info):
+    """[V69] 배치도 1장 PDF(A4 가로·벡터) — 화면 캡처 대신 인쇄·문서 첨부용. 가상랙 제외본을 넘길 것."""
+    pdf = _AqPrintPDF()
+    pdf.add_page(orientation="L", format="A4")
+    _today = datetime.date.today().strftime("%Y-%m-%d")
+    pdf.txt(10, 7, 200, 9, f"{site} — 진열 배치도", 16, bold=True)
+    pdf.txt(10, 16.5, 200, 5, f"실척 벡터 도면 · 부속군 색상 체계 · 가상랙 제외 · {_today}",
+            8.5, color=pdf.INK500)
+    pdf.set_draw_color(*pdf.BLACK); pdf.set_line_width(0.4); pdf.line(10, 23, 287, 23)
+    ax, ay, aw, ah = 10.0, 30.0, 277.0, 168.0
+    per, sc, _w9, _h9 = _aq_pdf_fit(rack_list, aw, ah)
+    y0 = ay + max(0.0, (ah - _h9 * sc) / 2.0)
+    _aq_pdf_draw(pdf, ax, y0, rack_list, _aq_inst_by_shelf(instances), dims, info,
+                 per, sc, align="C", area_w=aw)
+    pdf.txt(0, 202, 297, 4, f"Aqunaris · ShinJinChemTech · sjct.kr · 상자 {len(instances)}개 · {_today}",
+            7, color=(168, 168, 168), align="C")
+    return bytes(pdf.output())
+
+def _aq_gb_layout_spread(pdf, site, rack_list, instances, dims, info, foot):
+    """[V69] 가이드북 배치도 **펼침면(2·3페이지)** — 책자로 접으면 좌우가 마주보며 한 장처럼 이어진다.
+    · 두 페이지가 **같은 배율**(따로 계산 후 작은 쪽으로 통일) → 랙 크기가 좌우 동일
+    · 왼쪽 페이지는 오른쪽(제본선) 정렬, 오른쪽 페이지는 왼쪽 정렬 → 가운데 간격 최소
+    · 랙은 절대 페이지에 걸쳐 잘리지 않고, 줄당 랙수를 최적화해 빈 공간을 줄인다."""
+    if not rack_list or not instances: return False
+    inst_by = _aq_inst_by_shelf(instances)
+    OUT, IN, TOP, BOT = 9.0, 7.0, 30.0, 18.0   # TOP = 제목·캡션 + 랙 이름 자리
+    aw, ah = 210 - OUT - IN, 297 - TOP - BOT
+    if len(rack_list) < 3:   # 랙이 적으면 한 페이지에 (빈 페이지 방지)
+        pages = [(rack_list, "C", OUT)]
+    else:
+        ws = [_aq_pdf_rack_wh(rk)[0] for rk in rack_list]
+        tot, acc, cut = sum(ws), 0, len(rack_list)
+        for i, w in enumerate(ws):
+            acc += w
+            if acc >= tot / 2.0: cut = i + 1; break
+        cut = max(1, min(len(rack_list) - 1, cut))
+        pages = [(rack_list[:cut], "R", OUT), (rack_list[cut:], "L", IN)]
+    fits = [_aq_pdf_fit(rks, aw, ah) for rks, _al, _x in pages]
+    sc = min(f[1] for f in fits)
+    for pi, ((rks, align, x0), fit) in enumerate(zip(pages, fits)):
+        pdf.add_page()
+        # 제목은 **바깥쪽**(책 펼쳤을 때 페이지 가장자리)으로 — 제본선 가운데에 두 제목이 몰리지 않게
+        _ta9 = "C" if align == "C" else ("L" if align == "R" else "R")
+        pdf.txt(OUT if align != "L" else IN, 8, aw, 8,
+                f"{site} 진열 배치도" + ("" if pi == 0 else " (이어서)"), 15, bold=True, align=_ta9)
+        pdf.txt(OUT if align != "L" else IN, 17.5, aw, 4.5,
+                "실척 도면 · 색상 = 부속군" + (" · 좌우 두 면이 이어집니다" if len(pages) > 1 else ""),
+                8, color=pdf.INK500, align=_ta9)
+        y0 = TOP + max(0.0, (ah - fit[3] * sc) / 2.0)
+        _aq_pdf_draw(pdf, x0, y0, rks, inst_by, dims, info, fit[0], sc, align=align, area_w=aw)
+        foot()
+    return True
+
 def aq_guidebook_pdf_bytes(recs, site, bc_mode, img_of=None):
     """가이드북 PDF → (bytes, 품목수, 확정배치사용여부). site='(전체 품목)'이면 진열분류 보유 전체."""
     assign = {}
@@ -1450,6 +1710,19 @@ def aq_guidebook_pdf_bytes(recs, site, bc_mode, img_of=None):
     if not pdf.sj_logo(84, 238, 42):   # 보증 = SJ 로고 1개 (두 브랜드 텍스트 병렬 폐지)
         pdf.txt(0, 244, 210, 6, "Aqunaris · ShinJinChemTech", 10, color=pdf.INK500, align="C")
     pdf.txt(0, 284, 210, 6, f"{_today} · v1 · sjct.kr", 9, color=pdf.INK500, align="C", mono=True)
+
+    # ②-0 [V69] 배치도 펼침면 (2·3페이지) — 농협 선택 시. 실패해도 가이드북은 계속 생성하되 원인을 남긴다.
+    if site and site != "(전체 품목)":
+        try:
+            _rk9, _in9, _dm9, _if9 = aq_site_layout(site, recs)
+            if _rk9 and _in9:
+                _aq_gb_layout_spread(pdf, site, _rk9, _in9, _dm9, _if9, _foot)
+            else:
+                st.session_state["_aq_gb_layout_note"] = (
+                    f"'{site}'의 저장된 배치·랙 구성이 없어 배치도 페이지는 생략했습니다 "
+                    "(사이트 설계에서 배치 후 💾 저장하면 다음 생성부터 포함됩니다).")
+        except Exception as _e9:
+            st.session_state["_aq_gb_layout_note"] = f"배치도 페이지 생략 — {aq_err_str(_e9)}"
 
     # ② 부속군 색상 색인 (+HEX 병기 §5-2)
     pdf.add_page()
@@ -5653,14 +5926,19 @@ elif mode == "🏪 아쿠나리스":
                                    mime="application/pdf", key=f"aq_pr_st_dl_{_s9}")
 
             st.markdown("---")
-            st.markdown("**📖 농협 맞춤 가이드북** — 표지 + 부속군 색상 색인 + 군별 품목 카드 (위 대상 사이트 기준)")
+            st.markdown("**📖 농협 맞춤 가이드북** — 표지 + **배치도 펼침면(2·3p)** + 부속군 색상 색인 + 군별 품목 카드 (위 대상 사이트 기준)")
+            st.caption("🗺 [V69] 농협을 고르면 그 농협의 **저장된 배치도가 2·3페이지에 펼침면으로** 들어갑니다 — "
+                       "책자로 접으면 좌우가 마주보며 한 장처럼 이어지고, 같은 배율이라 랙 크기가 좌우 동일합니다(가상랙 제외).")
             if st.button("📖 가이드북 PDF 생성", key="aq_pr_gb_go"):
                 with st.spinner("가이드북 생성 중..."):
                     try:
+                        st.session_state.pop("_aq_gb_layout_note", None)
                         _gb_b, _gb_n, _gb_asg = aq_guidebook_pdf_bytes(aq_items, _pr_site, _pr_bc_mode, _pr_imgof)
                         st.session_state["aq_pr_gb_out"] = (_gb_b, _pr_site, _gb_n, _gb_asg, _pr_bc_mode)
                     except Exception as e:
                         st.error(f"가이드북 생성 실패: {aq_err_str(e)}")
+            if st.session_state.get("_aq_gb_layout_note"):   # [V69] 배치도 페이지 생략 사유 노출(조용히 넘어가지 않음)
+                st.info(st.session_state["_aq_gb_layout_note"])
             _gb9 = st.session_state.get("aq_pr_gb_out")
             if _gb9:
                 st.caption(f"{_gb9[1]} · {_gb9[2]}품목 · {'확정 배치 기준' if _gb9[3] else '진열분류 전체 기준'} · {_gb9[4]}바코드")
@@ -5714,6 +5992,19 @@ elif mode == "🏪 아쿠나리스":
             # [V60] 사이트 선택 — 표준(AQ_Items 정본) 외에 저장된 농협·표준v2 등 어느 사이트의 배치든 조회
             _ib_site_opts = ["(표준 — AQ_Items 섹션·단·열)"] + [str(s.get("농협명", "")).strip()
                                                           for s in aq_load_sites() if str(s.get("농협명", "")).strip()]
+            # [V69] 사이트 설계 '진열 품목 상세 보기' → 그 농협 기준으로 자동 설정(위젯 생성 전에만 가능)
+            if st.session_state.get("_aq_items_jump"):
+                _ij9 = st.session_state.pop("_aq_items_jump")
+                if _ij9 in _ib_site_opts:
+                    st.session_state["aq_items_site"] = _ij9   # '배치된 품목만' 체크는 배치 유무로 자동 기본값
+            if st.session_state.pop("_aq_items_tabjump", False):   # 탭도 함께 전환(부모 문서 탭 버튼 클릭)
+                import streamlit.components.v1 as _cmp9
+                _cmp9.html(   # ⚠ Streamlit 탭은 <button>이 아니라 role="tab" DIV — 태그로 좁히면 못 찾는다
+                    "<script>(function(){var n=0;var t=setInterval(function(){try{"
+                    "var bs=window.parent.document.querySelectorAll('[role=\"tab\"]');"
+                    "for(var i=0;i<bs.length;i++){if((bs[i].innerText||'').indexOf('진열 품목')>-1){"
+                    "bs[i].click();clearInterval(t);return;}}}catch(e){}"
+                    "if(++n>24)clearInterval(t);},250);})();</script>", height=0)
             c_f0, c_f1, c_f2 = st.columns([2, 1.4, 2.6])
             with c_f0:
                 _ib_site = st.selectbox("배치 기준 사이트", _ib_site_opts, key="aq_items_site",
@@ -6162,33 +6453,108 @@ elif mode == "🏪 아쿠나리스":
                 _jump = st.session_state.pop("_aq_site_jump")
                 if _jump in _site_names:
                     st.session_state["aq_site_sel"] = _jump
+            # [V69] 표준 시스템을 목록 맨 위·강조 표시 — 표준은 계속 다듬어 나가는 '살아있는 기준'이다.
+            _has_std9 = AQ_STD_SITE in _site_names
+            _opts9 = (["(신규 등록)"] + ([AQ_STD_SITE] if _has_std9 else [])
+                      + [n for n in _site_names if n != AQ_STD_SITE])
+            def _site_fmt9(n):
+                return f"⭐ {n} — 기준 시스템" if n == AQ_STD_SITE else n
             c_sel, c_std = st.columns([3, 2])
             with c_sel:
-                sel_site = st.selectbox("사이트", ["(신규 등록)"] + _site_names, key="aq_site_sel")
+                sel_site = st.selectbox("사이트", _opts9, key="aq_site_sel", format_func=_site_fmt9)
             with c_std:
-                st.caption("V1 도면 역산 표준 시스템(랙 12대+전 품목 배치)을 사이트로 생성/재설정합니다.")
-                if st.button("📐 표준 시스템(Aqunaris V1) 불러오기", key="aq_std_load"):
+                st.caption("표준 시스템 = 계속 다듬어 나가는 **기준 배치**입니다. 아래 버튼으로 바로 열고, "
+                           "농협 설계는 **복제 후 수정**하세요.")
+                if st.button("📐 표준 시스템 열기", key="aq_std_load", use_container_width=True,
+                             help="저장된 표준 시스템 사이트를 즉시 엽니다(없으면 V1 도면 기준으로 처음 한 번 생성)."):
                     try:
+                        if _has_std9:                      # [V69] 이미 있으면 '열기'만 — 손질본을 덮어쓰지 않는다
+                            st.session_state["_aq_site_jump"] = AQ_STD_SITE
+                            st.rerun()
                         _racks_std, _plan_std = aq_std_payload(aq_items)
-                        _found_std = False
-                        for s in aq_sites_all:
-                            if str(s.get("농협명", "")).strip() == AQ_STD_SITE:
-                                s["랙구성JSON"] = json.dumps(_racks_std, ensure_ascii=False)
-                                s["배치JSON"] = json.dumps(_plan_std, ensure_ascii=False)
-                                s["상태"] = "표준"; _found_std = True
-                        if not _found_std:
-                            aq_sites_all.append({"농협ID": "S000", "농협명": AQ_STD_SITE, "지역": "-",
-                                                 "상태": "표준", "설치일": "2023-03",
-                                                 "랙구성JSON": json.dumps(_racks_std, ensure_ascii=False),
-                                                 "배치JSON": json.dumps(_plan_std, ensure_ascii=False),
-                                                 "견적ID": "", "담당자": "",
-                                                 "비고": "V1 도면 역산 표준 시스템 — 검증 기준"})
+                        aq_sites_all.append({"농협ID": "S000", "농협명": AQ_STD_SITE, "지역": "-",
+                                             "상태": "표준", "설치일": "2023-03",
+                                             "랙구성JSON": json.dumps(_racks_std, ensure_ascii=False, separators=(",", ":")),
+                                             "배치JSON": json.dumps(_plan_std, ensure_ascii=False, separators=(",", ":")),
+                                             "견적ID": "", "담당자": "",
+                                             "비고": "V1 도면 역산 표준 시스템 — 검증 기준"})
                         aq_save_sites(aq_sites_all)
                         aq_load_all.clear()
                         st.session_state["_aq_site_jump"] = AQ_STD_SITE
-                        st.success("표준 시스템 생성/갱신 완료"); time.sleep(0.5); st.rerun()
+                        st.success("표준 시스템을 새로 만들었습니다"); time.sleep(0.5); st.rerun()
                     except Exception as e:
-                        st.error(f"표준 불러오기 실패: {aq_err_str(e)}")
+                        st.error(f"표준 열기 실패: {aq_err_str(e)}")
+            if sel_site == AQ_STD_SITE:   # 선택값도 굵게(가능한 경우) — 기준 시스템 작업 중임을 눈에 띄게
+                st.markdown('<style>.st-key-aq_site_sel div[data-baseweb="select"] '
+                            '{font-weight:800 !important;}</style>', unsafe_allow_html=True)
+
+            # ── [V69] 사이트 복제 — 표준(또는 비슷한 농협)을 복제해 이름만 바꿔 시작 ──
+            if sel_site != "(신규 등록)":
+                with st.expander(f"📄 '{sel_site}' 복제해서 새 농협 만들기", expanded=False):
+                    st.caption("랙 구성·배치·진열 계획을 **그대로 복사**한 새 사이트를 만듭니다. "
+                               "A농협이 표준과 거의 같다면 → 복제 → 다른 부분만 수정 → 💾 저장.")
+                    _cp1, _cp2 = st.columns([3, 1.4])
+                    with _cp1:
+                        _cp_nm9 = st.text_input("새 농협명 *", key=f"aq_cp_nm_{sel_site}",
+                                                placeholder="예: 여주농협")
+                    with _cp2:
+                        _cp_rg9 = st.text_input("지역", key=f"aq_cp_rg_{sel_site}")
+                    if st.button("📄 복제 실행", key=f"aq_cp_go_{sel_site}"):
+                        _nm9 = _cp_nm9.strip()
+                        if not _nm9:
+                            st.error("새 농협명을 입력하세요.")
+                        elif _nm9 in _site_names:
+                            st.error("이미 등록된 농협명입니다.")
+                        else:
+                            try:
+                                _src9 = next(s for s in aq_sites_all
+                                             if str(s.get("농협명", "")).strip() == sel_site)
+                                _ids9 = {str(s.get("농협ID", "")).strip() for s in aq_sites_all}
+                                _n9i = len(aq_sites_all) + 1
+                                while f"S{_n9i:03d}" in _ids9: _n9i += 1
+                                aq_sites_all.append({
+                                    "농협ID": f"S{_n9i:03d}", "농협명": _nm9,
+                                    "지역": _cp_rg9.strip() or str(_src9.get("지역", "")),
+                                    "상태": "제안", "설치일": "",
+                                    "랙구성JSON": str(_src9.get("랙구성JSON") or ""),
+                                    "배치JSON": str(_src9.get("배치JSON") or ""),
+                                    "견적ID": "", "담당자": str(_src9.get("담당자", "")),
+                                    "비고": f"'{sel_site}' 복제 ({datetime.date.today().strftime('%Y-%m-%d')})"})
+                                aq_save_sites(aq_sites_all)
+                                aq_load_all.clear()
+                                for _k9 in list(st.session_state.keys()):   # 복제본은 새 세션 상태로 시작
+                                    if _k9.startswith((f"aq_inst_{_nm9}", f"aq_rows_{_nm9}")):
+                                        st.session_state.pop(_k9, None)
+                                st.session_state["_aq_site_jump"] = _nm9
+                                st.success(f"'{_nm9}' 복제 완료 — 수정 후 💾 저장하세요.")
+                                time.sleep(0.6); st.rerun()
+                            except Exception as e:
+                                st.error(f"복제 실패: {aq_err_str(e)}")
+
+            # ── [V69] 표준 공장초기화 — 되돌릴 수 없어 깊이 숨긴다(손질본이 날아감) ──
+            if sel_site == AQ_STD_SITE:
+                with st.expander("⚠ 표준을 V1 도면 원본으로 되돌리기 (공장초기화)", expanded=False):
+                    st.caption("코드에 박힌 V1 도면 상수로 랙·배치를 **재생성**합니다 — 그동안 다듬어 온 "
+                               "표준 손질본이 사라집니다. 복구는 시트 버전 기록으로만 가능.")
+                    _rs_in9 = st.text_input("확인 — '초기화' 입력", key="aq_std_reset_in")
+                    if st.button("⚠ 표준 공장초기화 실행", key="aq_std_reset_go"):
+                        if _rs_in9.strip() != "초기화":
+                            st.error("'초기화'를 정확히 입력하세요.")
+                        else:
+                            try:
+                                _racks_std, _plan_std = aq_std_payload(aq_items)
+                                for s in aq_sites_all:
+                                    if str(s.get("농협명", "")).strip() == AQ_STD_SITE:
+                                        s["랙구성JSON"] = json.dumps(_racks_std, ensure_ascii=False, separators=(",", ":"))
+                                        s["배치JSON"] = json.dumps(_plan_std, ensure_ascii=False, separators=(",", ":"))
+                                        s["상태"] = "표준"
+                                aq_save_sites(aq_sites_all)
+                                aq_load_all.clear()
+                                for _k9 in (f"aq_inst_{AQ_STD_SITE}", f"aq_rows_{AQ_STD_SITE}"):
+                                    st.session_state.pop(_k9, None)
+                                st.success("표준을 V1 도면 원본으로 되돌렸습니다"); time.sleep(0.5); st.rerun()
+                            except Exception as e:
+                                st.error(f"초기화 실패: {aq_err_str(e)}")
 
             # ── [V55] 사이트 삭제 (대표님 요청 — 테스트 사이트 정리) ──
             if sel_site != "(신규 등록)":
@@ -7018,6 +7384,37 @@ elif mode == "🏪 아쿠나리스":
                                              help="그림에서 드래그·더블클릭한 조작을 표와 배치에 반영합니다."):
                                     st.session_state["aq_ops_bump"] = True   # [V55] 다음 턴에 브리지 재평가
                                     st.rerun()
+                            # ── [V69] 배치도 파일 저장 — 캡처 대신 벡터로(확대해도 선명) · 가상랙 제외 ──
+                            _ins_real9 = [x for x in _ins_eff9 if str(x.get("rack") or "") != AQ_VIRT]
+                            _rk_file9 = [rk for rk in _rk_list if rk["명칭"] != AQ_VIRT]
+                            _fd1, _fd2, _fd3 = st.columns([1.5, 1.5, 3])
+                            _fstem9 = f"아쿠나리스_배치도_{sel_site}_{datetime.date.today().strftime('%Y%m%d')}"
+                            with _fd1:
+                                _svg_f9 = _aq_svg_for_file(
+                                    aq_racks_svg_all(_rk_file9, {}, per_row=6, scale=0.30, info=_info_map,
+                                                     instances=_ins_real9, dims=_dims_p)) if _ins_real9 else ""
+                                st.download_button("🖼 배치도 SVG 저장", data=(_svg_f9 or "").encode("utf-8"),
+                                                   file_name=f"{_fstem9}.svg", mime="image/svg+xml",
+                                                   disabled=not _svg_f9, use_container_width=True,
+                                                   key=f"aq_dl_svg_{sel_site}",
+                                                   help="벡터 원본 — 확대해도 화질 손실 없음(브라우저·일러스트레이터·한글/워드 삽입 가능). 전 상자 품명·규격 표시.")
+                            with _fd2:
+                                if st.button("📄 배치도 PDF 만들기", key=f"aq_dl_pdf_go_{sel_site}",
+                                             disabled=not _ins_real9, use_container_width=True,
+                                             help="A4 가로 1장 벡터 도면 — 인쇄·문서 첨부용."):
+                                    try:
+                                        st.session_state[f"aq_lay_pdf_{sel_site}"] = aq_layout_pdf_bytes(
+                                            sel_site, _rk_file9, _ins_real9, _dims_p, _info_map)
+                                    except Exception as _pe9:
+                                        st.error(f"배치도 PDF 생성 실패: {aq_err_str(_pe9)}")
+                            with _fd3:
+                                _lp9 = st.session_state.get(f"aq_lay_pdf_{sel_site}")
+                                if _lp9:
+                                    st.download_button(f"⬇️ 배치도 PDF ({len(_lp9) // 1024}KB)", data=_lp9,
+                                                       file_name=f"{_fstem9}.pdf", mime="application/pdf",
+                                                       key=f"aq_dl_pdf_{sel_site}")
+                                else:
+                                    st.caption("💾 저장하면 이 배치도가 **가이드북 2·3페이지 펼침면**에도 들어갑니다(가상랙 제외).")
                         _leg = " ".join(
                             f'<span style="display:inline-block;width:10px;height:10px;background:{AQ_GROUP_COLORS.get(aq_grp_norm(g), "#9AA0A6")};margin-right:4px;"></span>'
                             f'<span style="font-size:12px;margin-right:10px;">{g}</span>' for g in _pg)
@@ -7072,8 +7469,9 @@ elif mode == "🏪 아쿠나리스":
                                     st.info("선택한 단 정보를 찾을 수 없습니다.")
 
                 st.markdown("##### 4️⃣ 견적 확인 · 저장")
+                _parts2 = 0.0   # [V69] 부속 합계 — 저장 버튼 행의 내부 지표에서도 사용
                 if plan_groups and (edited_plan is not None):
-                    _parts2, _bcnt2, _skip2 = 0.0, {}, []
+                    _bcnt2, _skip2 = {}, []
                     for _, _row in edited_plan.iterrows():
                         if not _aq_use(str(_row["품목코드"])): continue   # [V48] 공급 제외
                         try: _q = int(_row["수량"] or 0)
@@ -7099,36 +7497,21 @@ elif mode == "🏪 아쿠나리스":
                         st.caption(f"↔ 가로 배치 {_n_garo}건 — 깊이 얕은 단용 (전면 폭을 상자 깊이만큼 차지)")
                     if _skip2:
                         st.caption(f"수량/단가 0으로 집계 제외 {len(_skip2)}건")
-                    st.download_button(
-                        "⬇️ 사이트 진열계획 CSV",
-                        edited_plan.to_csv(index=False).encode("utf-8-sig"),
-                        file_name=f"aqunaris_{sel_site}_진열계획.csv", mime="text/csv",
-                        key=f"aq_site_csv_{sel_site}")
-
-                    # [V48] 회사 이익 — 권한 계정(master/aq_profit) 전용. 현장 시연 화면(공용 로그인)에는 절대 미노출.
-                    if aq_can("aq_profit", strict=True):
-                        with st.expander("💰 회사 이익 확인 (권한 계정 전용)", expanded=False):
-                            _buy_sum, _n_nobuy = 0.0, 0
-                            for _, _row in edited_plan.iterrows():
-                                if not _aq_use(str(_row["품목코드"])): continue
-                                try: _q9 = int(_row["수량"] or 0)
-                                except Exception: _q9 = 0
-                                if _q9 <= 0: continue
-                                _p9 = prod_by_code.get(str(_row["품목코드"]), {})
-                                try: _b9 = float(_p9.get("price_buy") or 0)
-                                except Exception: _b9 = 0.0
-                                if _b9 <= 0:
-                                    _n_nobuy += 1; continue
-                                _buy_sum += _b9 * _q9
-                            _rev9 = _parts2
-                            _profit9 = _rev9 - _buy_sum
-                            _net9 = _rev9 * 0.95 - _buy_sum
-                            pm1, pm2, pm3, pm4 = st.columns(4)
-                            pm1.metric("매입 합계", f"{_buy_sum:,.0f}원")
-                            pm2.metric("이익(수수료 전)", f"{_profit9:,.0f}원 ({(_profit9 / _rev9 * 100 if _rev9 else 0):.1f}%)")
-                            pm3.metric("계통2 반영 순이익", f"{_net9:,.0f}원")
-                            pm4.metric("매입가 미등록", f"{_n_nobuy}건")
-                            st.caption("이익 = 부속 합계(지역농협가) − 매입 합계 · 계통2 반영 = 매출×95% − 매입 (상자·설치·운송비 별도)")
+                    _csv_c1, _csv_c2 = st.columns([1.6, 2.4])
+                    with _csv_c1:
+                        st.download_button(
+                            "⬇️ 사이트 진열계획 CSV",
+                            edited_plan.to_csv(index=False).encode("utf-8-sig"),
+                            file_name=f"aqunaris_{sel_site}_진열계획.csv", mime="text/csv",
+                            key=f"aq_site_csv_{sel_site}", use_container_width=True)
+                    with _csv_c2:
+                        # [V69] 총괄표의 세부 내역 → 진열 품목 탭으로 바로 이동(그 농협 기준으로 자동 설정)
+                        if st.button("🗄️ 이 농협 진열 품목 상세 보기 →", key=f"aq_go_items_{sel_site}",
+                                     use_container_width=True,
+                                     help="진열 품목 탭으로 이동하며, 배치 기준 사이트를 이 농협으로 자동 설정합니다."):
+                            st.session_state["_aq_items_jump"] = sel_site
+                            st.session_state["_aq_items_tabjump"] = True
+                            st.rerun()
 
                 # ── [V44] 표준 배치 검증 — 랙 단높이 × 상자 치수 × 실배치(V1 위치)로 단별 용량 판정 ──
                 with st.expander("📏 표준 배치 검증 (V1 섹션 위치 기준 — 표준화 참고 전용)", expanded=(sel_site == AQ_STD_SITE)):
@@ -7174,7 +7557,35 @@ elif mode == "🏪 아쿠나리스":
                         _vshow = [v for v in _vr if not _only_bad or v["판정"].startswith("⚠")]
                         st.dataframe(pd.DataFrame(_vshow), hide_index=True, height=300)
 
-                if st.button("💾 사이트 저장 (랙 구성 + 진열 계획)", type="primary", key=f"aq_site_save_{sel_site}"):
+                # [V69] 저장 행 — 왼쪽 저장 버튼, 같은 레벨 **오른쪽 끝**에 내부 지표(눈에 띄지 않게)
+                _sv_c1, _sv_c2 = st.columns([6, 1])
+                with _sv_c2:
+                    if aq_can("aq_profit", strict=True) and (edited_plan is not None):
+                        with st.expander("⋯", expanded=False):   # 라벨 최소화 — 현장 시연 화면 보호
+                            _buy_sum, _n_nobuy = 0.0, 0
+                            for _, _row in edited_plan.iterrows():
+                                if not _aq_use(str(_row["품목코드"])): continue
+                                try: _q9 = int(_row["수량"] or 0)
+                                except Exception: _q9 = 0
+                                if _q9 <= 0: continue
+                                _p9 = prod_by_code.get(str(_row["품목코드"]), {})
+                                try: _b9 = float(_p9.get("price_buy") or 0)
+                                except Exception: _b9 = 0.0
+                                if _b9 <= 0:
+                                    _n_nobuy += 1; continue
+                                _buy_sum += _b9 * _q9
+                            _rev9 = _parts2
+                            _profit9 = _rev9 - _buy_sum
+                            _net9 = _rev9 * 0.95 - _buy_sum
+                            st.caption("내부 지표 (권한 계정 전용)")
+                            pm1, pm2, pm3, pm4 = st.columns(4)
+                            pm1.metric("매입 합계", f"{_buy_sum:,.0f}원")
+                            pm2.metric("이익(수수료 전)", f"{_profit9:,.0f}원 ({(_profit9 / _rev9 * 100 if _rev9 else 0):.1f}%)")
+                            pm3.metric("계통2 반영 순이익", f"{_net9:,.0f}원")
+                            pm4.metric("매입가 미등록", f"{_n_nobuy}건")
+                            st.caption("이익 = 부속 합계(지역농협가) − 매입 합계 · 계통2 반영 = 매출×95% − 매입 (상자·설치·운송비 별도)")
+                if _sv_c1.button("💾 사이트 저장 (랙 구성 + 진열 계획)", type="primary",
+                                 key=f"aq_site_save_{sel_site}", use_container_width=True):
                     try:
                         _racks_out = []
                         for _, _rr in df_racks_eff.iterrows():   # [V54] 상속 적용본 저장 = 실제 값으로 기록

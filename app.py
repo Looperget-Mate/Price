@@ -1025,8 +1025,8 @@ def aq_rename_box(old, new):
 from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 — ⚠배포 시 aquanaris_layout.py도 함께 올릴 것
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
-if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 69:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V69)와 짝이 맞지 않습니다.\n\n"
+if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 70:
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V70)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1454,7 +1454,7 @@ def _aq_pdf_rack(pdf, x, y, rk, inst_by, dims, info, sc):
         y_real += t
         ins = inst_by.get((name, si)) or []
         if not ins: continue
-        cols, _unk = aq_inst_cols(ins, dims)
+        cols, _unk = aq_inst_cols(ins, dims, int(rk.get("내측폭") or 0))   # [V70] 좌/우 정렬 반영
         for cx, cw, stack in cols:
             ycum, tape_rgb = 0.0, None
             for it, wh in stack:
@@ -7032,7 +7032,8 @@ elif mode == "🏪 아쿠나리스":
                                                     _ins9s, str(_op9["iid"]), _trk9, _tsh9,
                                                     xr=_op9.get("xr"), onto=_op9.get("onto"),
                                                     dims=_dims_p, shelf_h=_shelf_h9(_trk9, _tsh9),
-                                                    inner=(_rk_by9.get(_trk9) or {}).get("내측폭") or 0)
+                                                    inner=(_rk_by9.get(_trk9) or {}).get("내측폭") or 0,
+                                                    anchor=_op9.get("anchor"))   # [V70] 놓은 쪽(좌/우)
                                                 if _e9m: _op_errs9.append(_e9m)
                                             elif _t9 == "dup" and _op9.get("iid"):
                                                 _sd9 = next((x for x in _ins9s
@@ -7449,7 +7450,7 @@ elif mode == "🏪 아쿠나리스":
                                     # [V67] 정면과 동일한 인스턴스 좌표 열을 탑뷰에 그대로 사용(재패킹 없음)
                                     _ins_tv9 = [x for x in _ins_eff9
                                                 if (str(x.get("rack")), int(x.get("shelf") or 0)) == _tv_sel]
-                                    _colsTV, _unkTV = aq_inst_cols(_ins_tv9, _dims_p)
+                                    _colsTV, _unkTV = aq_inst_cols(_ins_tv9, _dims_p, _rk_tv["내측폭"])   # [V70]
                                     _cols_tv9 = [(_cx9, _cw9,
                                                   [(str(i9.get("code")),
                                                     str((_info_map.get(str(i9.get("code")), {}) or {}).get("grp") or "(미지정)"),

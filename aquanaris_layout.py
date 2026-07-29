@@ -8,7 +8,7 @@ import datetime
 # [V67] 모듈 버전 — app.py가 신구 짝(app.py↔이 파일)을 검증하는 데 사용.
 #  두 파일 중 하나만 배포되면 NameError 대신 친절한 안내가 뜨도록 한다.
 #  ⚠ 모듈에 새 함수를 추가하는 버전업마다 이 숫자와 app.py 가드 기준을 함께 올릴 것.
-AQ_LAYOUT_VER = 69   # [V69] 배치도 파일 저장(SVG 라벨 표시)·가이드북 펼침면 지원
+AQ_LAYOUT_VER = 70   # [V70] 상자 좌/우 정렬(anchor) — 오른쪽에 놓으면 오른쪽에 붙는다
 
 # 렌더러가 쓰는 색상 헬퍼(app.py에도 동일 정의가 있으나 순수함수라 모듈 자체 보유)
 def _aq_hexrgb(h):
@@ -336,47 +336,66 @@ def aq_inst_new_id(instances, code):
             except Exception: pass
     return f"{code}:{mx + 1}"
 
+def _aq_anc(it):
+    """[V70] 인스턴스의 정렬 기준 — 'R'이면 단 오른쪽 끝에 붙는다(없으면 기본 'L' = 왼쪽)."""
+    return "R" if str((it or {}).get("anchor") or "L").upper() == "R" else "L"
+
 def aq_inst_normalize(instances):
     """좌표 정규화(제자리) — 단별 col을 0..k-1 연속 번호로, 열 안 layer를 0..m-1(바닥부터)로.
-    상자를 빼면 위 상자가 내려앉고(붕 뜸 구조적 불가), 빈 열 번호가 사라진다. 삽입은 col=x.5 후 호출."""
+    상자를 빼면 위 상자가 내려앉고(붕 뜸 구조적 불가), 빈 열 번호가 사라진다. 삽입은 col=x.5 후 호출.
+    [V70] 왼쪽 정렬(L)·오른쪽 정렬(R) 그룹을 **각각** 번호 매긴다 — 한쪽에서 상자를 빼도 반대쪽은 그대로."""
     by_shelf = {}
     for it in instances:
         by_shelf.setdefault((str(it.get("rack") or ""), int(it.get("shelf") or 0)), []).append(it)
+    def _ly(t):
+        try: return float(t.get("layer") or 0)
+        except Exception: return 0.0
     for _loc, lst in by_shelf.items():
-        cols = {}
-        for it in lst:
-            try: cv = float(it.get("col") or 0)
-            except Exception: cv = 0.0
-            cols.setdefault(cv, []).append(it)
-        for ci, cv in enumerate(sorted(cols)):
-            def _ly(t):
-                try: return float(t.get("layer") or 0)
-                except Exception: return 0.0
-            for li, it in enumerate(sorted(cols[cv], key=_ly)):
-                it["col"] = ci; it["layer"] = li
+        for anc in ("L", "R"):
+            cols = {}
+            for it in lst:
+                if _aq_anc(it) != anc: continue
+                try: cv = float(it.get("col") or 0)
+                except Exception: cv = 0.0
+                cols.setdefault(cv, []).append(it)
+            for ci, cv in enumerate(sorted(cols)):
+                for li, it in enumerate(sorted(cols[cv], key=_ly)):
+                    it["col"] = ci; it["layer"] = li
     return instances
 
-def aq_inst_cols(shelf_insts, dims):
+def aq_inst_cols(shelf_insts, dims, inner=0):
     """단 위 인스턴스 → 렌더 열 목록. 반환: (cols, unknown)
-    cols=[(x0mm, 열폭mm, [(인스턴스, (폭,높이)) 아래→위])] — x = 왼쪽 열 최대폭 누적(겹침 불가).
+    cols=[(x0mm, 열폭mm, [(인스턴스, (폭,높이)) 아래→위])] — 겹침 불가.
+    [V70] 왼쪽 정렬(기본)은 x=0부터, **오른쪽 정렬(anchor='R')은 단 오른쪽 끝(inner)에서부터** 채운다.
+    두 그룹은 가운데에서 만나며, 자리가 모자라면 오른쪽 그룹이 왼쪽 그룹에 붙어 겹치지 않는다
+    (그 경우 폭 초과로 검증에 잡힌다). inner=0이면 전부 왼쪽 정렬 — 구 데이터 동작 불변.
     unknown = 상자 치수 미등록 인스턴스(그리지 못함 — 검증이 문장으로 노출, 조용히 숨기지 않음)."""
-    cols, unknown = {}, []
+    colsL, colsR, unknown = {}, {}, []
     for it in shelf_insts:
         wh = dims.get(str(it.get("box") or ""))
         if not wh:
             unknown.append(it); continue
         try: cv = float(it.get("col") or 0)
         except Exception: cv = 0.0
-        cols.setdefault(cv, []).append((it, wh))
+        (colsR if (inner and _aq_anc(it) == "R") else colsL).setdefault(cv, []).append((it, wh))
+    def _ly(p):
+        try: return float(p[0].get("layer") or 0)
+        except Exception: return 0.0
     out, x = [], 0
-    for cv in sorted(cols):
-        def _ly(p):
-            try: return float(p[0].get("layer") or 0)
-            except Exception: return 0.0
-        stack = sorted(cols[cv], key=_ly)
+    for cv in sorted(colsL):
+        stack = sorted(colsL[cv], key=_ly)
         cw = max(wh[0] for _it, wh in stack)
         out.append((x, cw, stack))
         x += cw
+    if colsR:
+        runs = []
+        for cv in sorted(colsR):
+            stack = sorted(colsR[cv], key=_ly)
+            runs.append((stack, max(wh[0] for _it, wh in stack)))
+        xr = max(x, inner - sum(w for _s, w in runs))   # 왼쪽 그룹과 겹치지 않는 선까지만 오른쪽으로
+        for stack, cw in runs:
+            out.append((xr, cw, stack))
+            xr += cw
     return out, unknown
 
 def _aq_inst_find(instances, iid):
@@ -388,35 +407,43 @@ def _aq_inst_shelf(instances, rack, shelf, but=None):
     return [it for it in instances if it is not but
             and str(it.get("rack") or "") == str(rack) and int(it.get("shelf") or 0) == int(shelf)]
 
-def aq_inst_move(instances, iid, track, tshelf, xr=None, onto=None, dims=None, shelf_h=0, inner=0):
+def aq_inst_move(instances, iid, track, tshelf, xr=None, onto=None, dims=None, shelf_h=0, inner=0, anchor=None):
     """iid 상자를 (track,tshelf)로 이동(제자리 수정). onto=아래 상자 인스턴스 id → 그 열 맨 위 적층
     (Σ열높이 ≤ 단높이 검증 — 초과 시 이동하지 않고 오류 문장 반환), 아니면 xr(0~1) 위치에 새 열 삽입(layer 0).
+    [V70] anchor='R'이면 **단 오른쪽 끝 기준**으로 붙는다(왼쪽이 비어도 오른쪽에 정렬).
+    적층(onto)일 때는 아래 상자의 정렬 기준을 그대로 물려받는다.
     반환: "" = 성공, 그 외 = 오류 메시지(호출부가 화면에 노출)."""
     dims = dims or {}
     tgt = _aq_inst_find(instances, iid)
     if tgt is None:
         return f"이동 실패: 상자 {iid}를 찾을 수 없음(이미 삭제되었거나 다른 세션 조작)"
+    def _set_anc(it, anc):
+        if anc == "R": it["anchor"] = "R"
+        else: it.pop("anchor", None)     # 기본값은 키를 두지 않는다(저장 용량·구 데이터 호환)
     if onto:
         base = _aq_inst_find(instances, onto)
         if base is not None and base is not tgt and str(base.get("rack")) == str(track) \
                 and int(base.get("shelf") or 0) == int(tshelf):
+            _anc_b = _aq_anc(base)       # [V70] 적층은 아래 상자의 정렬 기준을 물려받는다
             try: col_v = float(base.get("col") or 0)
             except Exception: col_v = 0.0
             stack = [it for it in _aq_inst_shelf(instances, track, tshelf, but=tgt)
-                     if float(it.get("col") or 0) == col_v]
+                     if _aq_anc(it) == _anc_b and float(it.get("col") or 0) == col_v]
             hsum = sum((dims.get(str(it.get("box") or "")) or (0, 0))[1] for it in stack)
             h_t = (dims.get(str(tgt.get("box") or "")) or (0, 0))[1]
             if shelf_h and h_t and hsum + h_t > shelf_h:
                 return (f"적층 불가: {tgt.get('code')} — 열 높이 {hsum}+{h_t} > 단높이 {shelf_h}mm"
                         f" (단높이를 늘리거나 옆에 놓으세요)")
             tgt["rack"], tgt["shelf"] = str(track), int(tshelf)
+            _set_anc(tgt, _anc_b)
             tgt["col"] = col_v
             tgt["layer"] = max([float(it.get("layer") or 0) for it in stack] or [-1.0]) + 1.0
             aq_inst_normalize(instances)
             return ""
         # onto 대상이 사라졌으면 새 열 삽입으로 폴백(조작 자체는 유실시키지 않음)
-    others = _aq_inst_shelf(instances, track, tshelf, but=tgt)
-    cols, _unk = aq_inst_cols(others, dims)
+    _anc = "R" if str(anchor or "").upper() == "R" else "L"   # [V70] 놓은 쪽에 붙는다
+    others = [it for it in _aq_inst_shelf(instances, track, tshelf, but=tgt) if _aq_anc(it) == _anc]
+    cols, _unk = aq_inst_cols(others, dims, inner if _anc == "R" else 0)
     total_w = (cols[-1][0] + cols[-1][1]) if cols else 0
     try: _xr = max(0.0, min(1.0, float(1.0 if xr is None else xr)))
     except Exception: _xr = 1.0
@@ -425,9 +452,10 @@ def aq_inst_move(instances, iid, track, tshelf, xr=None, onto=None, dims=None, s
     for i, (x0c, cw, _st) in enumerate(cols):
         if xmm < x0c + cw / 2.0:
             idx = i; break
-    for i, (_x, _w, stck) in enumerate(cols):   # 기존 열을 정수 인덱스로 재부여 후 그 사이에 삽입
+    for i, (_x, _w, stck) in enumerate(cols):   # 같은 정렬 그룹의 열을 정수 인덱스로 재부여 후 그 사이에 삽입
         for _it, _wh in stck: _it["col"] = i
     tgt["rack"], tgt["shelf"] = str(track), int(tshelf)
+    _set_anc(tgt, _anc)
     tgt["col"] = idx - 0.5
     tgt["layer"] = 0
     aq_inst_normalize(instances)
@@ -442,11 +470,14 @@ def aq_inst_dup(instances, iid, dims=None, shelf_h=0):
     try: col_v = float(src.get("col") or 0)
     except Exception: col_v = 0.0
     rack, shelf = str(src.get("rack")), int(src.get("shelf") or 0)
-    stack = [it for it in _aq_inst_shelf(instances, rack, shelf) if float(it.get("col") or 0) == col_v]
+    _anc_s = _aq_anc(src)   # [V70] 복제본은 원본과 같은 쪽(좌/우)에 붙는다
+    stack = [it for it in _aq_inst_shelf(instances, rack, shelf)
+             if _aq_anc(it) == _anc_s and float(it.get("col") or 0) == col_v]
     h_s = (dims.get(str(src.get("box") or "")) or (0, 0))[1]
     hsum = sum((dims.get(str(it.get("box") or "")) or (0, 0))[1] for it in stack)
     new = {"id": aq_inst_new_id(instances, str(src.get("code"))), "code": str(src.get("code")),
            "box": str(src.get("box") or ""), "rack": rack, "shelf": shelf}
+    if _anc_s == "R": new["anchor"] = "R"
     if shelf_h and h_s and hsum + h_s <= shelf_h and str(src.get("box")) != "루퍼젯팩":
         new["col"] = col_v
         new["layer"] = max([float(it.get("layer") or 0) for it in stack] or [-1.0]) + 1.0
@@ -475,7 +506,7 @@ def aq_inst_place_code(instances, code, box, rack, shelf, count, dims=None, shel
     layers = min(max_layers, int(shelf_h // h)) if (h and shelf_h) else 1
     if str(box) == "루퍼젯팩": layers = 1
     layers = max(1, layers)
-    on = _aq_inst_shelf(instances, rack, shelf)
+    on = [it for it in _aq_inst_shelf(instances, rack, shelf) if _aq_anc(it) == "L"]   # [V70] 왼쪽 그룹 뒤에
     col = max([float(it.get("col") or 0) for it in on] or [-1.0]) + 1.0
     li = 0
     for _k in range(max(0, int(count))):
@@ -529,7 +560,7 @@ def aq_inst_validate(instances, rack_list, dims):
             msgs.append(f"{rack} 단{shelf}: 랙 구성에 없는 랙({len(lst)}상자)"); continue
         if not (0 < shelf <= len(rk["단높이"])):
             msgs.append(f"{rack} 단{shelf}: 단 번호 범위 초과({len(lst)}상자)"); continue
-        cols, unknown = aq_inst_cols(lst, dims)
+        cols, unknown = aq_inst_cols(lst, dims, rk["내측폭"])   # [V70] 좌/우 정렬 반영
         if unknown:
             msgs.append(f"{rack} 단{shelf}: 상자 치수 미등록 {len(unknown)}건"
                         f"({', '.join(str(u.get('code')) for u in unknown[:4])})")
@@ -572,7 +603,8 @@ def aq_inst_derive_assign(instances, rows_meta=None):
 def aq_inst_pack(instances):
     """[V68] 인스턴스 → 압축 저장 포맷 `inst2` = {랙: {단(str): {코드: [[col,layer], ...]}}}.
     상자명은 저장하지 않는다(로드 시 items/기본상자/자유배치에서 재해석 — 저장 시 items에 병합돼 있음).
-    시트 셀 50,000자 한도 대응: 장황한 dict 리스트 대비 약 1/5 크기."""
+    시트 셀 50,000자 한도 대응: 장황한 dict 리스트 대비 약 1/5 크기.
+    [V70] 오른쪽 정렬 상자만 원소를 `[col,layer,1]`로 — 왼쪽 정렬(대부분)은 크기 변화 없음."""
     out = {}
     for it in instances:
         rk = str(it.get("rack") or "")
@@ -583,12 +615,13 @@ def aq_inst_pack(instances):
         except Exception: cl = 0
         try: ly = int(float(it.get("layer") or 0))
         except Exception: ly = 0
-        out.setdefault(rk, {}).setdefault(sh, {}).setdefault(c, []).append([cl, ly])
+        e = [cl, ly, 1] if _aq_anc(it) == "R" else [cl, ly]
+        out.setdefault(rk, {}).setdefault(sh, {}).setdefault(c, []).append(e)
     return out
 
 def aq_inst_unpack(packed, box_of):
     """[V68] `inst2` → 인스턴스 리스트(id 재발급·정규화). box_of(code)→상자명 콜러블.
-    저장 좌표를 그대로 신뢰 — 재계산 없음."""
+    저장 좌표를 그대로 신뢰 — 재계산 없음. [V70] 세 번째 원소가 있으면 오른쪽 정렬."""
     out = []
     if not isinstance(packed, dict): return out
     for rk, shs in packed.items():
@@ -603,8 +636,13 @@ def aq_inst_unpack(packed, box_of):
                 for e in pairs:
                     try: cl, ly = float(e[0]), float(e[1])
                     except Exception: continue
-                    out.append({"id": aq_inst_new_id(out, str(c)), "code": str(c), "box": b,
-                                "rack": str(rk), "shelf": sh_i, "col": cl, "layer": ly})
+                    _it = {"id": aq_inst_new_id(out, str(c)), "code": str(c), "box": b,
+                           "rack": str(rk), "shelf": sh_i, "col": cl, "layer": ly}
+                    try:
+                        if len(e) > 2 and int(e[2]): _it["anchor"] = "R"
+                    except Exception:
+                        pass
+                    out.append(_it)
     aq_inst_normalize(out)
     return out
 
@@ -704,7 +742,7 @@ def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=
         if inst_by_shelf is not None:   # [V67] 인스턴스 좌표 렌더 — 패킹(재계산) 없음
             _ins9 = inst_by_shelf.get((rack_name, si)) or []
             if not _ins9: continue
-            _colsI, _unkI = aq_inst_cols(_ins9, dims or {})
+            _colsI, _unkI = aq_inst_cols(_ins9, dims or {}, inner)   # [V70] 오른쪽 정렬 반영
             cols_p = []
             for _cxI, _cwI, _stI in _colsI:
                 _stk9 = []
@@ -1071,11 +1109,15 @@ document.addEventListener('mouseup',function(ev){if(!aqDrag)return;
    var r=x.getBoundingClientRect();
    if(r.width>0&&r.left<ev.clientX&&ev.clientX<r.right&&ev.clientY<r.bottom-4)return x.dataset.iid||null;}
   return null;}
+ function aqSide(b){   /* [V70] 놓은 자리가 단의 오른쪽 끝에 더 가까우면 오른쪽 정렬로 붙인다 */
+  var rb=b.getBoundingClientRect();
+  return ((zr.right-rb.right) < (rb.left-zr.left)) ? 'R' : 'L';}
  d.items.forEach(function(it){var b=it.b;   /* [V67] 상자 인스턴스(iid) 단위 op — 상자 1개=조작 1건 */
   if(b.dataset.iid){
    var _onto=aqOnBox(b,ev);
    var op={t:'move',iid:b.dataset.iid,code:b.dataset.code,
-           track:z.dataset.rack,tshelf:parseInt(z.dataset.shelf),xr:Math.round(xr*1000)/1000};
+           track:z.dataset.rack,tshelf:parseInt(z.dataset.shelf),xr:Math.round(xr*1000)/1000,
+           anchor:aqSide(b)};   /* [V70] 'L'=왼쪽부터 / 'R'=오른쪽 끝부터 (적층이면 아래 상자를 따름) */
    if(_onto)op.onto=_onto;   /* 아래 상자 인스턴스 id → 그 열 맨 위 적층(서버가 단높이 검증) */
    aqPush(op);}
   b.dataset.rack=z.dataset.rack;b.dataset.shelf=z.dataset.shelf;});

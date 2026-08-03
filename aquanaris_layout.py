@@ -8,7 +8,7 @@ import datetime
 # [V67] 모듈 버전 — app.py가 신구 짝(app.py↔이 파일)을 검증하는 데 사용.
 #  두 파일 중 하나만 배포되면 NameError 대신 친절한 안내가 뜨도록 한다.
 #  ⚠ 모듈에 새 함수를 추가하는 버전업마다 이 숫자와 app.py 가드 기준을 함께 올릴 것.
-AQ_LAYOUT_VER = 70   # [V70] 상자 좌/우 정렬(anchor) — 오른쪽에 놓으면 오른쪽에 붙는다
+AQ_LAYOUT_VER = 71   # [V71] 섹션(랙) 더블클릭 = 랙 복제/삭제 + 가이드북 지면 개편
 
 # 렌더러가 쓰는 색상 헬퍼(app.py에도 동일 정의가 있으나 순수함수라 모듈 자체 보유)
 def _aq_hexrgb(h):
@@ -722,7 +722,9 @@ def _aq_rack_parts(out, x0, y0, rack_name, inner, shelf_hs, shelf_seqs, frame_t=
     _virt9 = str(rack_name).startswith("🅥")   # [V53] 가상랙 = 점선 프레임 + 연노랑 배경으로 구분
     _dash9 = ' stroke-dasharray="7,4"' if _virt9 else ''
     _fill9 = "#FFFBEB" if _virt9 else "#FAFAF7"
-    out.append(f'<rect x="{x0:.1f}" y="{y0:.1f}" width="{pw:.1f}" height="{ph:.1f}" fill="{_fill9}" stroke="#191414" stroke-width="1.6"{_dash9}/>')
+    # [V71] 랙 배경 = 더블클릭 대상(랙 복제/삭제 메뉴) — 이름표(≡)와 함께 data-rack을 갖는다
+    out.append(f'<rect class="aqrackbg" data-rack="{_aq_esc(rack_name)}" x="{x0:.1f}" y="{y0:.1f}" '
+               f'width="{pw:.1f}" height="{ph:.1f}" fill="{_fill9}" stroke="#191414" stroke-width="1.6"{_dash9}/>')
     # [V55] 랙 이름 = 랙 순서 드래그 핸들 (≡ 표시)
     out.append(f'<text class="aqrackhandle" data-rack="{_aq_esc(rack_name)}" x="{x0:.1f}" y="{y0 - 4:.1f}" '
                f'font-size="11" fill="#8C8681">≡ {_aq_esc(rack_name)}</text>')
@@ -1205,6 +1207,46 @@ var aqRDrag=null;
   aqRDrag={g:(h.closest?h.closest('g.aqrackg'):null),rack:h.getAttribute('data-rack'),
            sx:ev.clientX,sy:ev.clientY,moved:false};
   ev.preventDefault();ev.stopPropagation();});
+});
+/* [V71] 섹션(랙) 더블클릭 = 랙 복제/삭제 메뉴 — 이름표(≡ 섹션NN)나 랙 빈 바탕을 더블클릭.
+   랙 구성 표·배치·견적·저장 데이터에 함께 반영된다(서버가 처리). 가상랙은 대상 아님. */
+function aqRackNow(){clearTimeout(window.__aqap);window.__aqap=setTimeout(aqApply,80);}
+function aqRackMenu(name,ev){aqMenuHide();
+ if(!name)return;
+ var m=document.createElement('div');aqMenu=m;m.id='aqmenu';
+ m.style.cssText='position:fixed;z-index:120;background:#191414;border:2px solid #F4D624;'
+  +'border-radius:8px;padding:8px;font-family:sans-serif;max-width:250px;'
+  +'left:'+(ev.clientX+6)+'px;top:'+(ev.clientY+6)+'px;';
+ var t=document.createElement('div');
+ t.style.cssText='color:#F4D624;font-weight:700;font-size:12px;margin-bottom:6px;';
+ t.textContent='📚 '+name; m.appendChild(t);
+ var virt=(name.indexOf('🅥')===0);
+ if(virt){var w=document.createElement('div');
+  w.style.cssText='color:#CFC9C3;font-size:11px;margin-bottom:6px;';
+  w.textContent='가상랙은 임시 보관 공간이라 복제·삭제할 수 없습니다.';m.appendChild(w);}
+ var b1=document.createElement('button');b1.textContent='⧉ 복제(빈 랙)';
+ var b2=document.createElement('button');b2.textContent='⧉ 복제(상자까지)';
+ var b3=document.createElement('button');b3.textContent='🗑 랙 삭제';
+ var b4=document.createElement('button');b4.textContent='✕';
+ (virt?[b4]:[b1,b2,b3,b4]).forEach(function(b){
+  b.style.cssText='margin:0 6px 4px 0;padding:4px 8px;border:1px solid '+(b===b3?'#D9534F':'#F4D624')
+   +';background:#191414;color:#FFFFFF;border-radius:6px;cursor:pointer;font-size:12px;';
+  m.appendChild(b);});
+ if(!virt){var hnt=document.createElement('div');
+  hnt.style.cssText='color:#CFC9C3;font-size:10px;margin-top:5px;line-height:1.35;';
+  hnt.textContent='복제 = 같은 규격의 랙을 바로 뒤에 추가 · 삭제 = 그 랙과 안의 상자를 제거. 실수하면 ↩️ 되돌리기.';
+  m.appendChild(hnt);}
+ b1.onclick=function(){aqPush({t:'rdup',rack:name});aqStat('랙 복제 요청 — 반영 중…');aqMenuHide();aqRackNow();};
+ b2.onclick=function(){aqPush({t:'rdup',rack:name,deep:1});aqStat('랙 복제(상자 포함) 요청 — 반영 중…');aqMenuHide();aqRackNow();};
+ b3.onclick=function(){aqPush({t:'rdel',rack:name});
+  var g=document.querySelector('g.aqrackg[data-rack="'+name+'"]');   /* 낙관 표시 — 반영 전에도 사라져 보이게 */
+  if(g)g.style.display='none';
+  aqStat('랙 삭제 요청 — 반영 중…');aqMenuHide();aqRackNow();};
+ b4.onclick=aqMenuHide;
+ document.getElementById('aqwrap').appendChild(m);}
+[].slice.call(document.querySelectorAll('.aqrackhandle,.aqrackbg')).forEach(function(h){
+ h.addEventListener('dblclick',function(ev){
+  aqRackMenu(h.getAttribute('data-rack'),ev);ev.preventDefault();ev.stopPropagation();});
 });
 document.addEventListener('mousemove',function(ev){if(!aqRDrag)return;
  var dx=(ev.clientX-aqRDrag.sx)/aqZ,dy=(ev.clientY-aqRDrag.sy)/aqZ;

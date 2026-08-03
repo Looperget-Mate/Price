@@ -1025,8 +1025,8 @@ def aq_rename_box(old, new):
 from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 — ⚠배포 시 aquanaris_layout.py도 함께 올릴 것
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
-if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 70:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V70)와 짝이 맞지 않습니다.\n\n"
+if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 71:
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V71)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1085,6 +1085,7 @@ class _AqPrintPDF(FPDF):
         self.set_auto_page_break(False)
         self.set_margins(0, 0, 0)
         self._fam, self._famx, self._mono, self._hasb = "Helvetica", None, None, False
+        self._dx = 0.0   # [V71] 제본(gutter) 보정 가로 이동량 — 아래 gutter() 참조
         try:   # ① Pretendard (디자인가이드 §4)
             self.add_font("PT", "", os.path.join(AQ_ASSET_DIR, "Pretendard-Regular.otf"))
             self.add_font("PT", "B", os.path.join(AQ_ASSET_DIR, "Pretendard-Bold.otf"))
@@ -1104,6 +1105,27 @@ class _AqPrintPDF(FPDF):
             self._mono = "JBM"
         except Exception:
             pass
+
+    # ── [V71] 제본(gutter) 보정 — 책자로 접으면 페이지 사이 가운데가 잘 안 보인다(대표님 지시) ──
+    #  펼쳤을 때 **짝수 페이지 = 왼쪽 면 → 살짝 왼쪽으로**, **홀수 페이지 = 오른쪽 면 → 살짝 오른쪽으로**.
+    #  아래 rect/line/image/sxy를 거치는 모든 그리기가 self._dx만큼 가로 이동한다.
+    #  표지(1페이지)와 스티커는 _dx=0이라 종전과 완전히 동일.
+    def gutter(self, delta=0.0):
+        self._dx = float(delta) if (self.page_no() % 2) else -float(delta)
+
+    def rect(self, x, y, *a, **k):
+        return super().rect(x + self._dx, y, *a, **k)
+
+    def line(self, x1, y1, x2, y2, *a, **k):
+        return super().line(x1 + self._dx, y1, x2 + self._dx, y2, *a, **k)
+
+    def image(self, name, x=None, y=None, *a, **k):
+        if isinstance(x, (int, float)): x = x + self._dx
+        return super().image(name, x, y, *a, **k)
+
+    def sxy(self, x, y):
+        """제본 보정을 적용한 set_xy — multi_cell/cell 직전 위치 지정은 이걸 쓴다."""
+        return self.set_xy(x + self._dx, y)
 
     def f(self, size, bold=False):
         try: self.set_font(self._fam, "B" if (bold and self._hasb) else "", size)
@@ -1126,7 +1148,7 @@ class _AqPrintPDF(FPDF):
     def txt(self, x, y, w, h, s, size, bold=False, color=None, align="L", mono=False):
         (self.fmono if (mono and self._mono_ok(s)) else self.f)(size, bold)
         self.set_text_color(*(color or self.BLACK))
-        self.set_xy(x, y); self.cell(w, h, str(s), align=align)
+        self.sxy(x, y); self.cell(w, h, str(s), align=align)
 
     def fit_txt(self, x, y, w, h, s, size, bold=False, color=None, align="L", min_size=5.5, mono=False):
         s = str(s); sz = size
@@ -1140,7 +1162,7 @@ class _AqPrintPDF(FPDF):
             while s and self.get_string_width(s + "…") > w - 0.6: s = s[:-1]
             s += "…"
         self.set_text_color(*(color or self.BLACK))
-        self.set_xy(x, y); self.cell(w, h, s, align=align)
+        self.sxy(x, y); self.cell(w, h, s, align=align)
 
     def sj_logo(self, x, y, w):
         """SJ 보증 로고(ShinJinChemTech.png) — 자산 없으면 조용히 생략(텍스트 타이핑 금지)."""
@@ -1180,17 +1202,24 @@ class _AqPrintPDF(FPDF):
                 guard = i < 3 or i >= 92 or 45 <= i < 50
                 self.rect(x + i * mw, y, mw, h + (1.4 if guard else 0), "F")
         # [V58] 하단 숫자 = 가능한 최대 크기(굵게) — 리더기 없는 농협은 눈으로 숫자를 읽음(대표님 요청).
-        #  폭은 실측(get_string_width)으로, 세로는 digits_room(mm, 바 아래 여유)으로 제한.
+        # [V71] **축소만 하던 것 → 확대 겸용**: 바코드 폭에 꽉 차게 자동으로 키운다(대표님 첨부 이미지의
+        #  빨간 박스 = 바 바로 아래, 바코드 폭만큼). 가이드북 카드도 이 규칙을 그대로 따른다(스티커와 동일).
+        #  폭은 실측(get_string_width), 세로는 digits_room(mm, 바 아래 여유)으로 제한.
         pt = float(digits_pt)
+        room_w = max(1.0, w - 0.6)
         try:
             self.fmono(pt, True)
-            while pt > 4.0 and self.get_string_width(str(code)) > w - 0.8:
-                pt -= 0.5; self.fmono(pt, True)
+            _wd = self.get_string_width(str(code))
+            if _wd > 0:
+                pt = max(4.0, min(48.0, pt * room_w / _wd))   # 폭에 정확히 맞춘 크기(확대·축소 공통)
+                self.fmono(pt, True)
+            while pt > 4.0 and self.get_string_width(str(code)) > room_w:
+                pt -= 0.25; self.fmono(pt, True)
         except Exception:
             pass
         if digits_room:
-            pt = min(pt, max(4.0, (digits_room - 1.2) / 0.3528))   # 1.2=바-숫자 간격, 1pt=0.3528mm
-        self.txt(x, y + h + 1.2, w, pt * 0.42, code, pt, bold=True, align="C", mono=True)   # [V53] 데이터=모노
+            pt = min(pt, max(4.0, (digits_room - 1.0) / 0.3528))   # 1.0=바-숫자 간격, 1pt=0.3528mm
+        self.txt(x, y + h + 1.0, w, pt * 0.42, code, pt, bold=True, align="C", mono=True)   # [V53] 데이터=모노
         return True
 
     def qr(self, data, x, y, size, label=""):
@@ -1301,7 +1330,7 @@ def _aq_sticker_card(pdf, s, x, y, it, rgb, bc, img):
         r3y = r2y + r2h + 1.6; r3h = y + H - FT - 4.2 - r3y
         pdf.lbox(cx, r3y, cw, r3h)
         if it["desc"]:
-            pdf.f(8.5); pdf.set_text_color(*pdf.BLACK); pdf.set_xy(cx + 2, r3y + 1)
+            pdf.f(8.5); pdf.set_text_color(*pdf.BLACK); pdf.sxy(cx + 2, r3y + 1)
             pdf.multi_cell(cw - 4, 3.9, it["desc"][:130], max_line_height=3.9)
         pdf.txt(cx, y + H - FT - 3.4, cw, 2.6, _AQ_STICKER_CAPTION, 5.5, color=pdf.INK500, align="C")
     elif s == "80":
@@ -1324,7 +1353,7 @@ def _aq_sticker_card(pdf, s, x, y, it, rgb, bc, img):
         r3y = r2y + r2h + 1.0; r3h = y + H - FT - 3.4 - r3y
         pdf.lbox(cx, r3y, cw, r3h)
         if it["desc"]:
-            pdf.f(6); pdf.set_text_color(*pdf.BLACK); pdf.set_xy(cx + 1.2, r3y + 0.7)
+            pdf.f(6); pdf.set_text_color(*pdf.BLACK); pdf.sxy(cx + 1.2, r3y + 0.7)
             pdf.multi_cell(cw - 2.4, 2.7, it["desc"][:80], max_line_height=2.7)
         pdf.txt(cx, y + H - FT - 2.8, cw, 2.2, _AQ_STICKER_CAPTION, 4.6, color=pdf.INK500, align="C")
     else:  # "98" — 저높이 라벨: 설명 우측 세로칸
@@ -1350,7 +1379,7 @@ def _aq_sticker_card(pdf, s, x, y, it, rgb, bc, img):
         dx = bx + bw + 2; dw = cx + cw - dx
         pdf.lbox(dx, r2y, dw, r2h)
         if it["desc"]:
-            pdf.f(5.6); pdf.set_text_color(*pdf.BLACK); pdf.set_xy(dx + 1, r2y + 0.7)
+            pdf.f(5.6); pdf.set_text_color(*pdf.BLACK); pdf.sxy(dx + 1, r2y + 0.7)
             pdf.multi_cell(dw - 2, 2.6, it["desc"][:100], max_line_height=2.6)
 
 def aq_sticker_pdf_bytes(recs, size_key, bc_mode, img_of=None):
@@ -1371,6 +1400,8 @@ def aq_sticker_pdf_bytes(recs, size_key, bc_mode, img_of=None):
         _aq_sticker_card(pdf, size_key, x, y, it, _aq_hexrgb(AQ_GROUP_COLORS.get(aq_grp_norm(it["grp"]))), _aq_pr_bc(it, bc_mode), img)
     return bytes(pdf.output())
 
+AQ_GB_GUTTER = 5.0   # [V71] 제본 보정 이동량(mm) — 짝수 페이지는 왼쪽, 홀수 페이지는 오른쪽으로
+
 def _aq_guide_card(pdf, x, y, it, rgb, bc, bc_note, img):
     """가이드북 품목 카드 88×62 — 대표님 스케치 레이아웃."""
     CW, CH, FT = 88, 62, 2.0
@@ -1387,14 +1418,15 @@ def _aq_guide_card(pdf, x, y, it, rgb, bc, bc_note, img):
     pdf.qr(it["qr"], qx, r2y + 3.5, 20, label="영상 보기")
     bx = qx + 23; bw = cx + cw - bx
     if bc:
-        pdf.ean13(bc, bx, r2y + 4, bw, 16)
-        if bc_note: pdf.txt(bx, r2y + 25, bw, 3.5, bc_note, 6.5, color=(180, 60, 60), align="C")
+        # [V71] 하단 숫자를 바코드 폭에 꽉 차게 확대(스티커와 동일 규칙) — 6.5pt 고정 → 약 9pt
+        pdf.ean13(bc, bx, r2y + 4, bw, 16, digits_pt=12, digits_room=5.2)
+        if bc_note: pdf.txt(bx, r2y + 25.5, bw, 3.2, bc_note, 6.5, color=(180, 60, 60), align="C")
     else:
         pdf.txt(bx, r2y + 12, bw, 5, "바코드 없음", 8, color=(180, 60, 60), align="C")
     r3y = r2y + r2h + 2; r3h = y + CH - FT - 2 - r3y
     pdf.lbox(cx, r3y, cw, r3h)
     if it["desc"]:
-        pdf.f(6.9); pdf.set_text_color(*pdf.BLACK); pdf.set_xy(cx + 1.5, r3y + 1.2)
+        pdf.f(6.9); pdf.set_text_color(*pdf.BLACK); pdf.sxy(cx + 1.5, r3y + 1.2)
         pdf.multi_cell(cw - 3, 3.2, it["desc"][:160], max_line_height=3.2)
 
 # ══ [V69] 배치도 벡터 렌더 — 화면 SVG와 같은 인스턴스 좌표를 PDF에 직접 그린다 ══
@@ -1432,6 +1464,127 @@ def _aq_pdf_blend(rgb, a=0.72):
     """SVG의 fill-opacity 0.72와 같은 색 — PDF는 알파 대신 흰색과 미리 섞는다."""
     return tuple(int(round(255 - (255 - c) * a)) for c in rgb)
 
+# ══ [V71] 배치도 상자 라벨 — 품명+규격 2줄, 12pt 지향·10pt 하한 (대표님 지시) ══
+#  "텍스트를 자르지는 말고, 잘릴 것 같으면 대표 명칭 또는 줄임말로. 품명과 규격이 같이 들어가야 하고,
+#   많이 줄이더라도. 결국 안 되면 그때는 크기를 줄여라."
+#  → ①줄임 단계로 폭을 맞춘다(자르지 않음) ②그래도 안 들어가면 마지막에 글자 크기를 낮춘다.
+AQ_LBL_PT_HI = 12.0    # 지향 크기(이 이상이면 좋음 — 상자가 크면 14pt까지 키운다)
+AQ_LBL_PT_LO = 10.0    # 하한(여기까지는 줄임말로 버틴다)
+AQ_LBL_PT_MIN = 5.5    # 최후 수단 — 물리적으로 불가능할 때만 여기까지 내려간다
+_AQ_LBL_K = 0.70       # 한글 글자 잉크 높이 / em (실측 근사)
+_AQ_LBL_GAP = 0.10     # 두 줄 사이 간격 / em
+
+def _aq_lbl_cands(s, keep_min=2):
+    """라벨 줄임 단계 — (문자열, 잘랐는가) 를 긴 것부터. 말줄임표(…)는 쓰지 않는다.
+    '잘랐는가'=False인 단계까지는 **대표 명칭**(괄호부·뒤 수식어 제거)이라 뜻이 온전하다."""
+    s = _aq_pr_clean(s)
+    out, seen = [], set()
+    def _add(t, cut):
+        t = str(t or "").strip()
+        if t and t not in seen:
+            seen.add(t); out.append((t, cut))
+    _add(s, False)
+    _add(_aq_strip_paren(s), False)          # 괄호부 제거 — 밸브바디(조임식연결구) → 밸브바디
+    if not out: return []
+    toks = out[-1][0].split()
+    while len(toks) > 1:                     # 뒤 수식어부터 제거 — '엘보 20mm 조임식' → '엘보 20mm' → '엘보'
+        toks = toks[:-1]; _add(" ".join(toks), False)
+    head = out[-1][0]
+    for n in range(len(head) - 1, keep_min - 1, -1):   # 그래도 넘치면 앞 n글자(줄임말)
+        _add(head[:n], True)
+    return out
+
+def _aq_lbl_spec_cands(s):
+    """규격 전용 줄임 — **절대 자르지 않는다**(25mm→25m가 되면 뜻이 달라짐).
+    괄호부 제거 후 구분자(+ * × / , 공백) 단위로 뒤에서부터 덜어낸다.
+    예: '20mm*13mm'→'20mm' · '삼발이+연결대+닛쁠'→'삼발이+연결대'→'삼발이' · '50mm 일반형'→'50mm'."""
+    s = _aq_pr_clean(s)
+    out, seen = [], set()
+    def _add(t):
+        t = str(t or "").strip().strip("+*×/,·- ")
+        if t and t not in seen:
+            seen.add(t); out.append((t, False))
+    _add(s)
+    _add(_aq_strip_paren(s))
+    cur = out[-1][0] if out else ""
+    for _ in range(6):
+        pos = max((cur.rfind(sep) for sep in ("+", "*", "×", "/", ",", " ")), default=-1)
+        if pos <= 0: break
+        cur = cur[:pos]
+        _add(cur)
+    # 단위(mm) 축약 — 배치도의 기본 단위는 mm이므로 '20mm*13mm'→'20*13' · '물호스16mm'→'물호스16'.
+    #  단위가 빠진 표기는 조금 덜 친절하므로 **원표기 후보를 모두 시도한 뒤에** 쓴다.
+    alt = []
+    for t, _c in list(out):
+        if "mm" not in t: continue
+        u = t.replace("mm", "").strip()
+        if u and u not in seen:
+            seen.add(u); alt.append((u, False))
+    out.sort(key=lambda p: -len(p[0]))   # 정보가 많은(긴) 것부터 시도
+    alt.sort(key=lambda p: -len(p[0]))
+    return out + alt
+
+def _aq_lbl_fit(pdf, cands, pt, bold, room_w, allow_cut):
+    """이 크기에서 폭에 들어가는 가장 온전한 후보. 하나도 없으면 None."""
+    for t, cut in cands:
+        if cut and not allow_cut: continue
+        pdf.f(pt, bold)
+        if pdf.get_string_width(t) <= room_w:
+            return t
+    return None
+
+def _aq_lbl_steps(hi, lo):
+    out, v = [], math.floor(hi * 2) / 2.0
+    while v >= lo - 1e-9:
+        out.append(round(v, 2)); v -= 0.5
+    return out
+
+def _aq_pdf_box_label(pdf, bx, by, bwp, bhp, name, spec, tc, short=""):
+    """상자 안에 품명(굵게)+규격 2줄을 그린다.
+    우선순위 — ①12pt 이상을 확보한 채 **자르지 않은** 대표 명칭 ②12pt에서 줄임말
+               ③그래도 안 들어가면 그때 비로소 글자 크기를 낮춘다(대표님 지시)."""
+    nm_c = _aq_lbl_cands(name)
+    if short:
+        _sh = _aq_pr_clean(short)
+        if _sh and _sh not in [t for t, _c in nm_c]:
+            nm_c.insert(1, (_sh, False))     # 시트에 약칭이 있으면 온전한 후보로 우선 사용
+    sp_c = _aq_lbl_spec_cands(spec) if str(spec or "").strip() else []
+    if not nm_c: return
+    room_w = bwp - 0.6
+    if room_w <= 0.8 or bhp <= 0.8: return
+
+    def _try(pt, lines, allow_cut):
+        t1 = _aq_lbl_fit(pdf, nm_c, pt, True, room_w, allow_cut)
+        if t1 is None: return None
+        t2 = _aq_lbl_fit(pdf, sp_c, pt, False, room_w, allow_cut) if lines == 2 else None
+        if lines == 2 and t2 is None: return None
+        return t1, t2
+
+    def _draw(pt, lines, t1, t2):
+        lh = pt * 0.3528 * _AQ_LBL_K
+        gp = pt * 0.3528 * _AQ_LBL_GAP
+        y0 = by + max(0.0, (bhp - (lh * lines + gp * (lines - 1))) / 2.0)
+        pdf.txt(bx + 0.3, y0, room_w, lh, t1, pt, bold=True, color=tc, align="C")
+        if t2:
+            pdf.txt(bx + 0.3, y0 + lh + gp, room_w, lh, t2, pt, color=tc, align="C")
+
+    for lines in ((2, 1) if sp_c else (1,)):   # 규격은 되도록 품명과 함께 — 안 되면 그때 품명만
+        cap = min(14.0, bhp / (0.3528 * (_AQ_LBL_K * lines + _AQ_LBL_GAP * (lines - 1))))
+        if cap < AQ_LBL_PT_MIN: continue
+        # ① 12pt 이상 구간에서 자르지 않은 대표 명칭 — 크기·뜻 둘 다 지키는 최선
+        for pt in _aq_lbl_steps(cap, AQ_LBL_PT_HI):
+            r = _try(pt, lines, False)
+            if r: _draw(pt, lines, *r); return
+        # ② 12pt(또는 상자가 허용하는 최대)에서 줄임말 허용
+        _pt2 = min(math.floor(cap * 2) / 2.0, AQ_LBL_PT_HI)
+        if _pt2 >= AQ_LBL_PT_MIN:
+            r = _try(_pt2, lines, True)
+            if r: _draw(_pt2, lines, *r); return
+        # ③ 최후 — 크기를 낮춘다(10pt 하한을 넘겨야 할 때만 그 아래로)
+        for pt in _aq_lbl_steps(min(cap, AQ_LBL_PT_HI) - 0.5, AQ_LBL_PT_MIN):
+            r = _try(pt, lines, True)
+            if r: _draw(pt, lines, *r); return
+
 def _aq_pdf_rack(pdf, x, y, rk, inst_by, dims, info, sc):
     """랙 1대를 (x,y)에 배율 sc로 그린다 — 프레임·단선·상자(부속군색)·색상 자석테이프·라벨."""
     hs = list(rk.get("단높이") or [])
@@ -1442,7 +1595,7 @@ def _aq_pdf_rack(pdf, x, y, rk, inst_by, dims, info, sc):
     pdf.set_fill_color(250, 250, 247); pdf.set_draw_color(*pdf.BLACK)
     pdf.set_line_width(max(0.18, min(0.5, pw * 0.006)))
     pdf.rect(x, y, pw, ph, "DF")
-    _ns = max(4.2, min(9.0, pw * 0.13))
+    _ns = max(7.0, min(13.0, pw * 0.17))   # [V71] 섹션 이름도 상자 라벨(12pt급)에 맞춰 키움
     pdf.txt(x, y - _ns * 0.62 - 0.8, pw, _ns * 0.6, name, _ns, bold=True, color=pdf.DARK, align="C")
     y_real = 0
     for si, sh in enumerate(hs, 1):
@@ -1455,9 +1608,12 @@ def _aq_pdf_rack(pdf, x, y, rk, inst_by, dims, info, sc):
         ins = inst_by.get((name, si)) or []
         if not ins: continue
         cols, _unk = aq_inst_cols(ins, dims, int(rk.get("내측폭") or 0))   # [V70] 좌/우 정렬 반영
+        # [V71] 색상 자석테이프 — 맨 아래 상자 라벨을 덮으므로 인쇄물에서는 얇게(구 1.4mm → 0.7mm).
+        #  상자 자체가 이미 부속군 색이라 구분 기능은 그대로이고, 그만큼 라벨에 쓸 높이가 늘어난다.
+        _tape_h = max(0.35, min(0.7, ph * 0.008))
         for cx, cw, stack in cols:
             ycum, tape_rgb = 0.0, None
-            for it, wh in stack:
+            for li, (it, wh) in enumerate(stack):
                 bw, bh = wh
                 meta = info.get(str(it.get("code"))) or {}
                 base_rgb = _aq_hexrgb(AQ_GROUP_COLORS.get(aq_grp_norm(meta.get("grp") or "")))
@@ -1469,22 +1625,16 @@ def _aq_pdf_rack(pdf, x, y, rk, inst_by, dims, info, sc):
                 bwp, bhp = bw * sc, bh * sc
                 pdf.set_fill_color(*rgb); pdf.set_draw_color(*pdf.BLACK); pdf.set_line_width(0.1)
                 pdf.rect(bx, by, bwp, bhp, "DF")
-                if bwp >= 5.0 and bhp >= 2.2:   # 라벨 — 상자 안에 들어갈 때만(넘침 방지)
-                    tc = _aq_lum_txt(rgb)
-                    nm = _aq_pr_clean(meta.get("name") or it.get("code"))
-                    sp = _aq_pr_clean(meta.get("spec") or "")
-                    if bhp >= 5.4 and sp:
-                        pdf.fit_txt(bx + 0.3, by + 0.2, bwp - 0.6, bhp / 2 - 0.2, nm,
-                                    min(6.5, bwp * 0.17), bold=True, color=tc, align="C", min_size=2.0)
-                        pdf.fit_txt(bx + 0.3, by + bhp / 2, bwp - 0.6, bhp / 2 - 0.2, sp,
-                                    min(5.5, bwp * 0.15), color=tc, align="C", min_size=1.9)
-                    else:
-                        pdf.fit_txt(bx + 0.3, by, bwp - 0.6, bhp, nm,
-                                    min(6.5, bwp * 0.17), bold=True, color=tc, align="C", min_size=2.0)
+                # [V71] 라벨 = 품명+규격 2줄 (12pt 지향·10pt 하한).
+                #  맨 아래 상자는 하단이 색상 자석테이프에 덮이므로 그만큼 비우고 그 위에 앉힌다.
+                _lbh9 = bhp - ((_tape_h + 0.15) if li == 0 else 0.0)
+                if bwp >= 3.0 and _lbh9 >= 1.6:
+                    _aq_pdf_box_label(pdf, bx, by, bwp, _lbh9,
+                                      meta.get("name") or it.get("code"), meta.get("spec") or "",
+                                      _aq_lum_txt(rgb), short=meta.get("short") or "")
             if tape_rgb:   # 색상 자석테이프(단 전면 하단 밴드) — 진열대 실물과 동일 표기
-                th = max(0.45, min(1.4, ph * 0.012))
                 pdf.set_fill_color(*tape_rgb)
-                pdf.rect(x + AQ_PDF_FRAME_T * sc + cx * sc, base - th, cw * sc, th, "F")
+                pdf.rect(x + AQ_PDF_FRAME_T * sc + cx * sc, base - _tape_h, cw * sc, _tape_h, "F")
 
 def _aq_pdf_draw(pdf, x0, y0, racks, inst_by, dims, info, per, sc, align="C", area_w=0.0):
     """racks를 (x0,y0)에서 area_w 폭 안에 per개씩 줄지어 그린다(줄 안에서는 바닥 정렬).
@@ -1601,6 +1751,8 @@ def aq_site_layout(site, recs=None, boxes=None):
         r0 = by_code.get(c, {}) or {}
         info[c] = {"name": _aq_pr_clean(r0.get("품목명_AQ") or c),
                    "spec": _aq_pr_clean(r0.get("규격_AQ") or ""),
+                   # [V71] 시트에 약칭 컬럼이 있으면 배치도 상자 라벨의 줄임 후보로 우선 사용
+                   "short": _aq_pr_clean(r0.get("약칭") or r0.get("표시명") or ""),
                    "grp": str(r0.get("진열분류") or "(미지정)")}
     return rack_list, insts, dims, info
 
@@ -1622,38 +1774,63 @@ def aq_layout_pdf_bytes(site, rack_list, instances, dims, info):
             7, color=(168, 168, 168), align="C")
     return bytes(pdf.output())
 
-def _aq_gb_layout_spread(pdf, site, rack_list, instances, dims, info, foot):
-    """[V69] 가이드북 배치도 **펼침면(2·3페이지)** — 책자로 접으면 좌우가 마주보며 한 장처럼 이어진다.
-    · 두 페이지가 **같은 배율**(따로 계산 후 작은 쪽으로 통일) → 랙 크기가 좌우 동일
-    · 왼쪽 페이지는 오른쪽(제본선) 정렬, 오른쪽 페이지는 왼쪽 정렬 → 가운데 간격 최소
-    · 랙은 절대 페이지에 걸쳐 잘리지 않고, 줄당 랙수를 최적화해 빈 공간을 줄인다."""
-    if not rack_list or not instances: return False
+# ══ [V71] 가이드북 배치도 펼침면 — 페이지당 6섹션(3열×2줄), 12섹션이 넘으면 다음 장으로 ══
+#  대표님 지시: 책을 펼치면 4·5페이지가 함께 보인다 →
+#    4p 상단 1·2·3 / 5p 상단 4·5·6 / 4p 하단 7·8·9 / 5p 하단 10·11·12,
+#    15섹션이면 6페이지에 나머지 3개.
+AQ_GB_LAY_PER_ROW = 3          # 페이지 한 줄에 놓는 랙 수
+AQ_GB_LAY_ROWS = 2             # 페이지당 줄 수 → 페이지당 6랙 · 펼침면 12랙
+AQ_GB_LAY_M, AQ_GB_LAY_TOP, AQ_GB_LAY_BOT = 10.0, 30.0, 18.0
+
+def _aq_gb_layout_plan(rack_list):
+    """랙 목록 → 페이지별 랙 리스트. 펼침면(12랙)을 왼쪽 면/오른쪽 면으로 갈라 담는다."""
+    per_pg = AQ_GB_LAY_PER_ROW * AQ_GB_LAY_ROWS          # 6
+    per_sp = per_pg * 2                                   # 12
+    pages = []
+    for i in range(0, len(rack_list), per_sp):
+        ch = rack_list[i:i + per_sp]
+        rows = [ch[r:r + AQ_GB_LAY_PER_ROW * 2] for r in range(0, len(ch), AQ_GB_LAY_PER_ROW * 2)]
+        left = [rk for row in rows for rk in row[:AQ_GB_LAY_PER_ROW]]      # 1·2·3 · 7·8·9
+        right = [rk for row in rows for rk in row[AQ_GB_LAY_PER_ROW:]]     # 4·5·6 · 10·11·12
+        if left: pages.append(left)
+        if right: pages.append(right)
+    return pages
+
+def _aq_gb_layout_scale(pages, aw, ah):
+    """모든 배치도 페이지에 공통으로 쓸 배율 — 어느 페이지도 잘리지 않는 최대값."""
+    sc = None
+    for rks in pages:
+        sizes = [_aq_pdf_rack_wh(rk) for rk in rks]
+        rows = [sizes[i:i + AQ_GB_LAY_PER_ROW] for i in range(0, len(sizes), AQ_GB_LAY_PER_ROW)]
+        w = max(sum(s[0] for s in r) + AQ_PDF_GAP_X * (len(r) - 1) for r in rows)
+        h = sum(max(s[1] for s in r) for r in rows) + AQ_PDF_GAP_Y * (len(rows) - 1)
+        if w <= 0 or h <= 0: continue
+        s = min(aw / w, ah / h)
+        sc = s if sc is None else min(sc, s)
+    return sc or 0.0
+
+def _aq_gb_layout_pages(pdf, site, pages, instances, dims, info, foot, gut):
+    """배치도 페이지들을 그린다 — 전 페이지 같은 배율이라 랙 크기가 어디서나 동일."""
+    if not pages or not instances: return False
     inst_by = _aq_inst_by_shelf(instances)
-    OUT, IN, TOP, BOT = 9.0, 7.0, 30.0, 18.0   # TOP = 제목·캡션 + 랙 이름 자리
-    aw, ah = 210 - OUT - IN, 297 - TOP - BOT
-    if len(rack_list) < 3:   # 랙이 적으면 한 페이지에 (빈 페이지 방지)
-        pages = [(rack_list, "C", OUT)]
-    else:
-        ws = [_aq_pdf_rack_wh(rk)[0] for rk in rack_list]
-        tot, acc, cut = sum(ws), 0, len(rack_list)
-        for i, w in enumerate(ws):
-            acc += w
-            if acc >= tot / 2.0: cut = i + 1; break
-        cut = max(1, min(len(rack_list) - 1, cut))
-        pages = [(rack_list[:cut], "R", OUT), (rack_list[cut:], "L", IN)]
-    fits = [_aq_pdf_fit(rks, aw, ah) for rks, _al, _x in pages]
-    sc = min(f[1] for f in fits)
-    for pi, ((rks, align, x0), fit) in enumerate(zip(pages, fits)):
-        pdf.add_page()
+    M, TOP, BOT = AQ_GB_LAY_M, AQ_GB_LAY_TOP, AQ_GB_LAY_BOT
+    aw, ah = 210 - M * 2, 297 - TOP - BOT
+    sc = _aq_gb_layout_scale(pages, aw, ah)
+    if sc <= 0: return False
+    for pi, rks in enumerate(pages):
+        pdf.add_page(); gut()
         # 제목은 **바깥쪽**(책 펼쳤을 때 페이지 가장자리)으로 — 제본선 가운데에 두 제목이 몰리지 않게
-        _ta9 = "C" if align == "C" else ("L" if align == "R" else "R")
-        pdf.txt(OUT if align != "L" else IN, 8, aw, 8,
-                f"{site} 진열 배치도" + ("" if pi == 0 else " (이어서)"), 15, bold=True, align=_ta9)
-        pdf.txt(OUT if align != "L" else IN, 17.5, aw, 4.5,
+        _ta9 = "L" if (pdf.page_no() % 2 == 0) else "R"
+        pdf.txt(M, 8, aw, 8, f"{site} 진열 배치도" + ("" if pi == 0 else f" ({pi + 1})"),
+                15, bold=True, align=_ta9)
+        pdf.txt(M, 17.5, aw, 4.5,
                 "실척 도면 · 색상 = 부속군" + (" · 좌우 두 면이 이어집니다" if len(pages) > 1 else ""),
                 8, color=pdf.INK500, align=_ta9)
-        y0 = TOP + max(0.0, (ah - fit[3] * sc) / 2.0)
-        _aq_pdf_draw(pdf, x0, y0, rks, inst_by, dims, info, fit[0], sc, align=align, area_w=aw)
+        sizes = [_aq_pdf_rack_wh(rk) for rk in rks]
+        _rows = [sizes[i:i + AQ_GB_LAY_PER_ROW] for i in range(0, len(sizes), AQ_GB_LAY_PER_ROW)]
+        _h9 = sum(max(s[1] for s in r) for r in _rows) + AQ_PDF_GAP_Y * (len(_rows) - 1)
+        y0 = TOP + max(0.0, (ah - _h9 * sc) / 2.0)
+        _aq_pdf_draw(pdf, M, y0, rks, inst_by, dims, info, AQ_GB_LAY_PER_ROW, sc, align="C", area_w=aw)
         foot()
     return True
 
@@ -1689,12 +1866,49 @@ def aq_guidebook_pdf_bytes(recs, site, bc_mode, img_of=None):
         pdf.txt(0, 290.5, 210, 4, f"{pdf.page_no()}   ·   Aqunaris · ShinJinChemTech · sjct.kr   ·   {_today}",
                 6.5, color=(168, 168, 168), align="C")
 
+    # [V71] 제본 보정 — 표지 다음부터 짝수는 왼쪽·홀수는 오른쪽으로 AQ_GB_GUTTER만큼 밀어 그린다.
+    def _gut():
+        pdf.gutter(AQ_GB_GUTTER)
+
+    def _page():   # 표지 이후 모든 페이지 = add_page + 제본 보정
+        pdf.add_page(); _gut()
+
+    # ── [V71] 배치도 데이터를 **먼저** 확보한다 — 목차(2페이지)에 실릴 페이지 번호를 미리 알아야 하므로 ──
+    _lay9 = None
+    if site and site != "(전체 품목)":
+        try:
+            _rk9, _in9, _dm9, _if9 = aq_site_layout(site, recs)
+            if _rk9 and _in9:
+                _lay9 = (_aq_gb_layout_plan(_rk9), _in9, _dm9, _if9)
+            else:
+                st.session_state["_aq_gb_layout_note"] = (
+                    f"'{site}'의 저장된 배치·랙 구성이 없어 배치도 페이지는 생략했습니다 "
+                    "(사이트 설계에서 배치 후 💾 저장하면 다음 생성부터 포함됩니다).")
+        except Exception as _e9:
+            st.session_state["_aq_gb_layout_note"] = f"배치도 페이지 생략 — {aq_err_str(_e9)}"
+    _n_lay9 = len(_lay9[0]) if _lay9 else 0
+
+    # ── [V71] 목차용 페이지 번호 사전 계산 — 1 표지 / 2 목차 / 3 색인 / 4~ 배치도 / 그 뒤 군별 카드 ──
+    _P_IDX9 = 3                       # 부속군 색상 색인
+    _P_LAY9 = 4                       # 진열 배치도 시작
+    _toc9 = [("부속군 색상 색인", _P_IDX9, None)]
+    if _n_lay9:
+        _toc9.append((f"{site} 진열 배치도", _P_LAY9,
+                      None if _n_lay9 == 1 else _P_LAY9 + _n_lay9 - 1))
+    _pg9 = _P_LAY9 + _n_lay9          # 첫 카드 페이지
+    for _g9 in groups:
+        _cnt9 = sum(1 for it in sel if it["grp"] == _g9)
+        if not _cnt9: continue
+        _np9 = (_cnt9 + 7) // 8       # 카드 8장/페이지
+        _toc9.append((_g9 or "(미지정)", _pg9, (_pg9 + _np9 - 1) if _np9 > 1 else None))
+        _pg9 += _np9
+
     # ① 표지 — [V53] 화이트 기조 + Aqunaris 워드마크 + 부속군 색 스트립 + SJ 보증 로고 (§5-2, 옐로 전면 폐지)
-    pdf.add_page()
+    pdf.add_page(); pdf._dx = 0.0   # 표지는 제본 보정 제외(대표님 지시)
     try: pdf.set_char_spacing(-0.3)   # 워드마크 자간 -2% (§3 잠정 조판)
     except Exception: pass
     pdf.fx(54); pdf.set_text_color(*pdf.BLACK)
-    pdf.set_xy(0, 78); pdf.cell(210, 22, "Aqunaris", align="C")
+    pdf.sxy(0, 78); pdf.cell(210, 22, "Aqunaris", align="C")
     try: pdf.set_char_spacing(0)
     except Exception: pass
     pdf.txt(0, 106, 210, 12, "아쿠나리스 관수코너 가이드북", 20, bold=True, align="C")
@@ -1711,21 +1925,34 @@ def aq_guidebook_pdf_bytes(recs, site, bc_mode, img_of=None):
         pdf.txt(0, 244, 210, 6, "Aqunaris · ShinJinChemTech", 10, color=pdf.INK500, align="C")
     pdf.txt(0, 284, 210, 6, f"{_today} · v1 · sjct.kr", 9, color=pdf.INK500, align="C", mono=True)
 
-    # ②-0 [V69] 배치도 펼침면 (2·3페이지) — 농협 선택 시. 실패해도 가이드북은 계속 생성하되 원인을 남긴다.
-    if site and site != "(전체 품목)":
-        try:
-            _rk9, _in9, _dm9, _if9 = aq_site_layout(site, recs)
-            if _rk9 and _in9:
-                _aq_gb_layout_spread(pdf, site, _rk9, _in9, _dm9, _if9, _foot)
-            else:
-                st.session_state["_aq_gb_layout_note"] = (
-                    f"'{site}'의 저장된 배치·랙 구성이 없어 배치도 페이지는 생략했습니다 "
-                    "(사이트 설계에서 배치 후 💾 저장하면 다음 생성부터 포함됩니다).")
-        except Exception as _e9:
-            st.session_state["_aq_gb_layout_note"] = f"배치도 페이지 생략 — {aq_err_str(_e9)}"
+    # ② [V71] 목차 (2페이지) — 대표님 지시. 페이지 번호는 위에서 사전 계산한 값.
+    _page()
+    pdf.txt(15, 14, 180, 10, "목차", 18, bold=True)
+    pdf.set_draw_color(*pdf.BLACK); pdf.set_line_width(0.5); pdf.line(15, 26, 195, 26)
+    _ty9 = 36
+    for _nm9, _p19, _p29 in _toc9:
+        _chip9 = AQ_GROUP_COLORS.get(aq_grp_norm(_nm9))
+        _tx9 = 15.0
+        if _chip9:   # 부속군 항목은 색 칩을 앞에 — 색인·진열대 자석테이프와 같은 색
+            pdf.set_fill_color(*_aq_hexrgb(_chip9)); pdf.rect(15, _ty9 + 1.0, 7, 5.6, "F")
+            _tx9 = 25.0
+        _pt9 = f"{_p19}" + (f"–{_p29}" if _p29 else "")
+        pdf.txt(_tx9, _ty9, 130, 7.6, _nm9, 12, bold=not _chip9)
+        pdf.f(12, bool(not _chip9))
+        _lw9 = pdf.get_string_width(_nm9)
+        _dx9, _dw9 = _tx9 + _lw9 + 3, 179 - 16 - (_tx9 + _lw9 + 3)   # 점선 리더 자리
+        pdf.f(9, False)
+        _u9 = pdf.get_string_width("·") or 1.9
+        if _dw9 > _u9:
+            pdf.txt(_dx9, _ty9, _dw9, 7.6, "·" * int(_dw9 / _u9), 9, color=(205, 205, 205))
+        pdf.txt(179 - 16, _ty9, 16, 7.6, _pt9, 12, bold=True, align="R", mono=True)
+        _ty9 += 9.6
+    pdf.txt(15, min(_ty9 + 6, 276), 180, 6,
+            "책자를 펼치면 왼쪽·오른쪽 두 면이 한 장의 배치도로 이어집니다.", 9, color=pdf.DARK)
+    _foot()
 
-    # ② 부속군 색상 색인 (+HEX 병기 §5-2)
-    pdf.add_page()
+    # ③ 부속군 색상 색인 (3페이지, +HEX 병기 §5-2)
+    _page()
     pdf.txt(15, 14, 180, 10, "부속군 색상 색인", 18, bold=True)
     pdf.set_draw_color(*pdf.BLACK); pdf.set_line_width(0.5); pdf.line(15, 26, 195, 26)
     yy = 34
@@ -1739,7 +1966,11 @@ def aq_guidebook_pdf_bytes(recs, site, bc_mode, img_of=None):
     pdf.txt(15, yy + 6, 180, 6, "카드 테두리·진열대 색상 자석테이프·상자 스티커가 모두 같은 부속군 색을 씁니다.", 9, color=pdf.DARK)
     _foot()
 
-    # ③ 부속군별 카드 (2열×4행) + 섹션 밴드(부속군명 병기)·푸터
+    # ④ [V71] 진열 배치도 (4페이지~) — 펼침면 3열×2줄, 페이지당 6섹션
+    if _lay9:
+        _aq_gb_layout_pages(pdf, site, _lay9[0], _lay9[1], _lay9[2], _lay9[3], _foot, _gut)
+
+    # ⑤ 부속군별 카드 (2열×4행) + 섹션 밴드(부속군명 병기)·푸터
     X0, Y0, CW, CH, GX, GY = 12, 22, 88, 62, 10, 4
     for g in groups:
         gi = [it for it in sel if it["grp"] == g]
@@ -1748,8 +1979,10 @@ def aq_guidebook_pdf_bytes(recs, site, bc_mode, img_of=None):
         k = 8
         for it in gi:
             if k == 8:
-                pdf.add_page()
+                _page()
+                _dxb9 = pdf._dx; pdf._dx = 0.0   # [V71] 전폭 색 밴드는 제본 보정 제외(가장자리 흰 띠 방지)
                 pdf.set_fill_color(*rgb); pdf.rect(0, 0, 210, 16, "F")
+                pdf._dx = _dxb9
                 pdf.txt(12, 3.5, 170, 9, g or "(미지정)", 15, bold=True, color=_aq_lum_txt(rgb))
                 _foot()
                 k = 0
@@ -1761,8 +1994,8 @@ def aq_guidebook_pdf_bytes(recs, site, bc_mode, img_of=None):
             _aq_guide_card(pdf, x, y, it, rgb, bc, note, img)
             k += 1
 
-    # ④ 뒷표지 — SJ 로고 + 문의(도메인만 — 문안은 의장 확정 대기, 가이드 §7-④)
-    pdf.add_page()
+    # ⑥ 뒷표지 — SJ 로고 + 문의(도메인만 — 문안은 의장 확정 대기, 가이드 §7-④)
+    pdf.add_page(); pdf._dx = 0.0   # [V71] 표지·뒷표지는 제본 보정 제외
     if not pdf.sj_logo(80, 120, 50):
         pdf.txt(0, 130, 210, 8, "Aqunaris · ShinJinChemTech", 12, color=pdf.INK500, align="C")
     pdf.txt(0, 148, 210, 6, "sjct.kr", 11, color=pdf.INK500, align="C", mono=True)
@@ -5926,9 +6159,11 @@ elif mode == "🏪 아쿠나리스":
                                    mime="application/pdf", key=f"aq_pr_st_dl_{_s9}")
 
             st.markdown("---")
-            st.markdown("**📖 농협 맞춤 가이드북** — 표지 + **배치도 펼침면(2·3p)** + 부속군 색상 색인 + 군별 품목 카드 (위 대상 사이트 기준)")
-            st.caption("🗺 [V69] 농협을 고르면 그 농협의 **저장된 배치도가 2·3페이지에 펼침면으로** 들어갑니다 — "
-                       "책자로 접으면 좌우가 마주보며 한 장처럼 이어지고, 같은 배율이라 랙 크기가 좌우 동일합니다(가상랙 제외).")
+            st.markdown("**📖 농협 맞춤 가이드북** — 표지 + **목차(2p)** + **부속군 색상 색인(3p)** + **배치도 펼침면(4·5p~)** + 군별 품목 카드 (위 대상 사이트 기준)")
+            st.caption("🗺 [V71] 농협을 고르면 그 농협의 **저장된 배치도가 4페이지부터 펼침면으로** 들어갑니다 — "
+                       "펼치면 **왼쪽 면 위 1·2·3 / 오른쪽 면 위 4·5·6 / 왼쪽 아래 7·8·9 / 오른쪽 아래 10·11·12**, "
+                       "페이지당 6섹션이고 12섹션이 넘으면 다음 장으로 이어집니다(가상랙 제외). "
+                       "표지를 뺀 모든 페이지는 **짝수는 왼쪽·홀수는 오른쪽으로 5mm** 밀어 인쇄해, 책자로 묶었을 때 가운데가 가려지지 않습니다.")
             if st.button("📖 가이드북 PDF 생성", key="aq_pr_gb_go"):
                 with st.spinner("가이드북 생성 중..."):
                     try:
@@ -6607,6 +6842,13 @@ elif mode == "🏪 아쿠나리스":
                 st.caption("📐 **총높이mm**를 입력하면 단높이 합을 검증합니다 — Σ단높이 = 총높이 − 단두께×(단높이 개수−1). 예: 총 2000·두께 40·3단 → 단높이 합이 1920('800,800,320' ✓ / '800,700,320' ✗). 불일치 랙은 맞출 때까지 배치에서 제외됩니다.")
                 try: _racks_cur = json.loads(str(_site.get("랙구성JSON") or "[]"))
                 except Exception: _racks_cur = []
+                # [V71] 랙 복제·삭제(그림 더블클릭)로 바뀐 구성은 세션에 남긴다 —
+                #  data_editor는 매 실행 base(시트값)로 되돌아가므로, 오버라이드가 없으면
+                #  다음 조작 때 복제한 랙이 사라진다. 💾 사이트 저장에 성공하면 이 키를 비운다.
+                _rkov_key = f"aq_racks_ov_{sel_site}"
+                _rkov9 = st.session_state.get(_rkov_key)
+                if isinstance(_rkov9, list) and _rkov9:
+                    _racks_cur = _rkov9
                 _rack_cols = ["명칭", "폭mm", "깊이mm", "총높이mm", "단수", "단두께mm", "단높이mm(콤마구분)", "비고"]   # [V54] 단깊이 폐지
                 _df_racks_in = pd.DataFrame(_racks_cur)
                 for _c in _rack_cols:
@@ -6620,6 +6862,29 @@ elif mode == "🏪 아쿠나리스":
                 _df_over = st.session_state.pop(f"aq_rack_fill_{sel_site}", None)
                 if _df_over is not None:
                     _df_racks_in = _df_over
+
+                def _aq_rack_apply9(recs, _site=sel_site, _cols=_rack_cols, _vk=_rkv_key, _ok=_rkov_key):
+                    """[V71] 랙 구성 표를 records로 교체 — 랙 복제·삭제와 그 되돌리기 공통 경로.
+                    세션 오버라이드(_ok)에 남겨 다음 실행에서도 유지되게 하고, 편집표 키를 새로 발급한다."""
+                    if recs is None: return
+                    _dfr = pd.DataFrame(recs)
+                    for _c in _cols:
+                        if _c not in _dfr.columns: _dfr[_c] = ""
+                    _dfr = _dfr[_cols].reset_index(drop=True)
+                    st.session_state[_ok] = _dfr.to_dict("records")
+                    st.session_state[f"aq_rack_fill_{_site}"] = _dfr
+                    st.session_state[_vk] += 1
+                    # '표시할 랙' 다중선택은 위젯 상태가 남아 새 랙이 자동으로 켜지지 않는다 —
+                    #  없어진 랙은 빼고 새 랙은 더해 준다(이 동기화가 없으면 복제한 랙이 그림에 안 보임).
+                    _vwk = f"aq_rk_view_{_site}"
+                    _vw = st.session_state.get(_vwk)
+                    if isinstance(_vw, list):
+                        _nms = [str(r.get("명칭") or "").strip() for r in st.session_state[_ok]
+                                if str(r.get("명칭") or "").strip()]
+                        st.session_state[_vwk] = ([n for n in _vw if n in _nms or n.startswith("🅥")]
+                                                  + [n for n in _nms if n not in _vw])
+
+                _aq_rack_restore9 = _aq_rack_apply9   # ↩️/↪️ 되돌리기에서 쓰는 이름
                 df_racks_ed = st.data_editor(
                     _df_racks_in, num_rows="dynamic", hide_index=True,
                     key=f"aq_racks_ed_{sel_site}_{st.session_state[_rkv_key]}",
@@ -7005,7 +7270,8 @@ elif mode == "🏪 아쿠나리스":
                                     _un9.append({"inst": [dict(x) for x in st.session_state.get(_inst_key, [])],
                                                  "boxov": dict(st.session_state.get(f"aq_boxov_{sel_site}", {})),
                                                  "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or []),
-                                                 "rows": dict(st.session_state.get(_rows_key, {}) or {})})
+                                                 "rows": dict(st.session_state.get(_rows_key, {}) or {}),
+                                                 "racks": df_racks_eff.to_dict("records")})   # [V71] 랙 복제·삭제 되돌리기
                                     if len(_un9) > 20:
                                         del _un9[0]
                                     st.session_state[f"aq_redo_{sel_site}"] = []
@@ -7014,6 +7280,7 @@ elif mode == "🏪 아쿠나리스":
                                     #  실패는 삼키지 않고 수집해 화면에 노출(무한 재시도 방지 위해 done은 유지).
                                     _ins9s = st.session_state.setdefault(_inst_key, [])
                                     _op_errs9 = []
+                                    _rack_edit9 = None   # [V71] 랙 복제·삭제로 바뀐 랙 구성 표(records)
                                     _rk_by9 = {rk["명칭"]: rk for rk in _rk_all}
                                     def _shelf_h9(rk, sh):
                                         _r9h = _rk_by9.get(str(rk))
@@ -7066,9 +7333,56 @@ elif mode == "🏪 아쿠나리스":
                                                     _ti9 = len(_co9)
                                                 _co9.insert(_ti9, str(_op9["rack"]))
                                                 st.session_state[f"aq_rkord_{sel_site}"] = _co9
+                                            elif _t9 in ("rdup", "rdel") and _op9.get("rack"):
+                                                # [V71] 섹션(랙) 더블클릭 → 복제/삭제. 랙 구성 표(1️⃣)·상자
+                                                #  인스턴스·랙 순서를 함께 고쳐 배치·견적·저장에 자동 반영.
+                                                _rn9 = str(_op9["rack"])
+                                                _recs9 = (_rack_edit9 if _rack_edit9 is not None
+                                                          else df_racks_eff.to_dict("records"))
+                                                _ix9 = next((_i for _i, _r in enumerate(_recs9)
+                                                             if str(_r.get("명칭") or "").strip() == _rn9), None)
+                                                _ord9r = list(st.session_state.get(f"aq_rkord_{sel_site}")
+                                                              or [rk["명칭"] for rk in _rk_all])
+                                                if _rn9 == AQ_VIRT:
+                                                    _op_errs9.append("🅥 가상랙은 임시 보관 공간이라 복제·삭제할 수 없습니다.")
+                                                elif _ix9 is None:
+                                                    _op_errs9.append(f"{_rn9}: 랙 구성 표에서 찾지 못해 건너뜁니다.")
+                                                elif _t9 == "rdel":
+                                                    del _recs9[_ix9]
+                                                    _ins9s[:] = [_x for _x in _ins9s
+                                                                 if str(_x.get("rack") or "") != _rn9]
+                                                    st.session_state[f"aq_rkord_{sel_site}"] = [
+                                                        _n for _n in _ord9r if _n != _rn9]
+                                                    _rack_edit9 = _recs9
+                                                else:
+                                                    _used9 = {str(_r.get("명칭") or "").strip() for _r in _recs9}
+                                                    _stem9 = _rn9   # 섹션07-2를 다시 복제하면 섹션07-3 (꼬리표 누적 방지)
+                                                    if "-" in _stem9 and _stem9.rsplit("-", 1)[1].isdigit():
+                                                        _stem9 = _stem9.rsplit("-", 1)[0]
+                                                    _k9r = 2
+                                                    while f"{_stem9}-{_k9r}" in _used9: _k9r += 1
+                                                    _new9r = f"{_stem9}-{_k9r}"
+                                                    _row9r = dict(_recs9[_ix9]); _row9r["명칭"] = _new9r
+                                                    _recs9.insert(_ix9 + 1, _row9r)
+                                                    if _op9.get("deep"):   # 상자까지 복제 — 좌표 그대로 새 랙에
+                                                        for _sx9 in [_x for _x in _ins9s
+                                                                     if str(_x.get("rack") or "") == _rn9]:
+                                                            _cp9r = dict(_sx9)
+                                                            _cp9r["rack"] = _new9r
+                                                            _cp9r["id"] = aq_inst_new_id(_ins9s, str(_sx9.get("code")))
+                                                            _ins9s.append(_cp9r)
+                                                    if _rn9 in _ord9r: _ord9r.insert(_ord9r.index(_rn9) + 1, _new9r)
+                                                    else: _ord9r.append(_new9r)
+                                                    st.session_state[f"aq_rkord_{sel_site}"] = _ord9r
+                                                    _rack_edit9 = _recs9
                                         except Exception as _oe9:
                                             _op_errs9.append(f"{_op9.get('t', '?')} {_op9.get('code', '')}: {aq_err_str(_oe9)}")
                                         _done_ids.add(_op9.get("id"))
+                                    if _rack_edit9 is not None:
+                                        # [V71] 바뀐 랙 구성을 편집표에 반영 — 다음 리런에서 표가 갱신되고,
+                                        #  💾 저장 시 랙구성JSON에 그대로 기록된다.
+                                        _aq_rack_apply9(_rack_edit9)
+                                        aq_inst_normalize(_ins9s)
                                     if _op_errs9:   # [V65] 실패한 조작을 화면에 노출(조용히 사라지지 않게)
                                         st.session_state["aq_op_errs"] = _op_errs9
                                     if len(_done_ids) > 400:   # 세션 메모리 상한
@@ -7343,7 +7657,8 @@ elif mode == "🏪 아쿠나리스":
                             _cb1, _cbU, _cbR, _cb2 = st.columns([3.4, 1, 1, 1.5])
                             with _cb1:
                                 st.caption("🖱️ 호버=정보 · **드래그=상자 1개 이동**(각 상자가 자기 좌표를 기억 — 반영 후에도 그 자리 유지) · **빈 곳 드래그=영역 다중선택 · Shift+클릭=추가 선택**(선택 후 드래그=일괄 이동, Delete=일괄 삭제) · "
-                                           "**더블클릭=복제/삭제/상자 변경** · **⛶ 전체화면=꽉 차게 확대+전 상자 품명·규격**(전체화면에서도 이동·삭제 가능). "
+                                           "**더블클릭=복제/삭제/상자 변경** · **랙 이름(≡)이나 랙 바탕을 더블클릭 = 그 섹션(랙) 복제/삭제**(랙 구성 표·견적·저장에 자동 반영) · "
+                                           "**⛶ 전체화면=꽉 차게 확대+전 상자 품명·규격**(전체화면에서도 이동·삭제 가능). "
                                            "🧱 **다른 상자 위에 올려 놓으면 그 열 위에 적층**(좌표로 저장되어 유지 · 단높이 초과 시 오류로 알려줌). "
                                            "조작은 그림에 즉시 표시되고 **4초 뒤(전체화면은 종료 시) 일괄 반영** — 바로 반영하려면 🔄.")
                             _un_st9 = st.session_state.get(f"aq_undo_{sel_site}") or []
@@ -7356,12 +7671,14 @@ elif mode == "🏪 아쿠나리스":
                                     _rd9.append({"inst": [dict(x) for x in st.session_state.get(_inst_key, [])],
                                                  "boxov": dict(st.session_state.get(f"aq_boxov_{sel_site}", {})),
                                                  "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or []),
-                                                 "rows": dict(st.session_state.get(_rows_key, {}) or {})})   # [V67]
+                                                 "rows": dict(st.session_state.get(_rows_key, {}) or {}),
+                                                 "racks": df_racks_eff.to_dict("records")})   # [V67/V71]
                                     _sn9 = _un_st9.pop()
                                     st.session_state[_inst_key] = [dict(x) for x in _sn9.get("inst", [])]
                                     st.session_state[f"aq_boxov_{sel_site}"] = _sn9["boxov"]
                                     st.session_state[f"aq_rkord_{sel_site}"] = _sn9["rkord"]
                                     st.session_state[_rows_key] = dict(_sn9.get("rows", {}) or {})
+                                    _aq_rack_restore9(_sn9.get("racks"))   # [V71] 랙 구성 표 복원
                                     st.session_state[_ver_key] += 1
                                     st.rerun()
                             with _cbR:
@@ -7372,12 +7689,14 @@ elif mode == "🏪 아쿠나리스":
                                     _un9b.append({"inst": [dict(x) for x in st.session_state.get(_inst_key, [])],
                                                   "boxov": dict(st.session_state.get(f"aq_boxov_{sel_site}", {})),
                                                   "rkord": list(st.session_state.get(f"aq_rkord_{sel_site}") or []),
-                                                  "rows": dict(st.session_state.get(_rows_key, {}) or {})})   # [V67]
+                                                  "rows": dict(st.session_state.get(_rows_key, {}) or {}),
+                                                  "racks": df_racks_eff.to_dict("records")})   # [V67/V71]
                                     _sn9 = _rd_st9.pop()
                                     st.session_state[_inst_key] = [dict(x) for x in _sn9.get("inst", [])]
                                     st.session_state[f"aq_boxov_{sel_site}"] = _sn9["boxov"]
                                     st.session_state[f"aq_rkord_{sel_site}"] = _sn9["rkord"]
                                     st.session_state[_rows_key] = dict(_sn9.get("rows", {}) or {})
+                                    _aq_rack_restore9(_sn9.get("racks"))   # [V71] 랙 구성 표 복원
                                     st.session_state[_ver_key] += 1
                                     st.rerun()
                             with _cb2:
@@ -7671,6 +7990,7 @@ elif mode == "🏪 아쿠나리스":
                                     s["배치JSON"] = _pj9
                             aq_save_sites(aq_sites_all)
                             aq_load_all.clear()
+                            st.session_state.pop(f"aq_racks_ov_{sel_site}", None)   # [V71] 시트와 동기화됨 — 랙 오버라이드 해제
                             st.success(f"저장 완료 (AQ_Sites 시트 · 배치JSON {len(_pj9):,}자/50,000)")
                             time.sleep(0.5); st.rerun()
                     except Exception as e:

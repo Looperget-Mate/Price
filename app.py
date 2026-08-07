@@ -1039,8 +1039,8 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 73:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V73)와 짝이 맞지 않습니다.\n\n"
+if _LG_VER < 74:
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V74)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()

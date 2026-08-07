@@ -276,15 +276,10 @@ def _aq_pil_from_any(v):
     return v
 
 def _aq_trim_white(img, thresh=244, pad=0.05):
-    """[V54] 흰 여백 자동 크롭(누끼 효과) — 피사체가 카드 이미지 칸을 최대한 채우게.
-    [V73] 알파가 있으면 알파를 마스크로 쓴다. 촬영 트랙의 등각 컷은 rembg 투명 PNG인데
-    `convert("L")`은 알파를 버려 투명부(RGB 0,0,0)를 피사체로 읽는다 → bbox가 전면이 되어
-    크롭이 통째로 무효가 되고 제품이 카드 안에서 작게 찍힌다."""
+    """[V54] 흰 여백 자동 크롭(누끼 효과) — 피사체가 카드 이미지 칸을 최대한 채우게."""
     try:
-        if "A" in img.getbands():
-            mask = img.getchannel("A").point(lambda p: 255 if p > 8 else 0)
-        else:
-            mask = img.convert("L").point(lambda p: 255 if p < thresh else 0)
+        g = img.convert("L")
+        mask = g.point(lambda p: 255 if p < thresh else 0)
         bbox = mask.getbbox()
         if not bbox:
             return img

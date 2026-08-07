@@ -12,6 +12,6 @@ app.py에서 **자립도가 높은 출력 엔진**을 기계적으로 추출해 
 📌 모듈을 추가/변경할 때는 `PKG_VER`를 올리고, app.py의 가드 기준도 함께 올린다.
 """
 
-PKG_VER = 73   # [V73, 2026-08-07] aq_print._aq_trim_white 알파 대응(촬영 등각 누끼 PNG 반영)
+PKG_VER = 72
 
 __all__ = ["PKG_VER"]

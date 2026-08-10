@@ -1556,7 +1556,9 @@ body {{ background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif
     <button onclick="bringFront()">⬆ 맨앞</button>
     <button onclick="sendBack()">⬇ 맨뒤</button>
     <div class="sep"></div>
-    <button onclick="duplicateObj()" title="선택 복사">📋 복사</button>
+    <button onclick="duplicateObj()" title="선택 복제 (배관·텍스트)">📋 복제</button>
+    <button onclick="deleteObj()" style="color:#f99;" title="선택 삭제 (Delete 키도 동일)">🗑 삭제</button>
+    <button onclick="gatherObjects()" style="color:#9cf;" title="캔버스 밖으로 나간 오브젝트를 전부 안으로 끌어옵니다">🧲 화면 안으로</button>
     <div class="sep"></div>
     <button onclick="addText()" title="설명·중요사항 텍스트 추가">🅣 텍스트</button>
     <div class="sep"></div>
@@ -2261,6 +2263,29 @@ function deleteObj()  {{
     if (o._objId) delete objRecipe[o._objId];
     canvas.remove(o); pushUndo(); updateRecipe();
     saveWorkState();   // [V33] 배관·텍스트 삭제 즉시 영속화
+}}
+// [V75] 캔버스 밖으로 나간 오브젝트 회수 — 드래그로 못 잡는 상태를 푼다.
+//       (누끼 여백이 큰 이미지를 확대하거나, 배치 격자가 밀리면 밖으로 나가서 클릭이 안 됨)
+function gatherObjects() {{
+    const M = 8;                       // 캔버스 안쪽 여백(px)
+    let moved = 0;
+    canvas.getObjects().forEach(function(o) {{
+        if (o._isBgImage) return;
+        const b = o.getBoundingRect(true, true);
+        let dx = 0, dy = 0;
+        if (b.left < M) dx = M - b.left;
+        else if (b.left + b.width > CW - M) dx = (CW - M) - (b.left + b.width);
+        if (b.top < M) dy = M - b.top;
+        else if (b.top + b.height > CH - M) dy = (CH - M) - (b.top + b.height);
+        // 캔버스보다 큰 오브젝트는 좌상단에 맞춰 붙인다(잘려도 잡을 수는 있게)
+        if (b.width  > CW - 2*M) dx = M - b.left;
+        if (b.height > CH - 2*M) dy = M - b.top;
+        if (dx || dy) {{ o.set({{ left: o.left + dx, top: o.top + dy }}); o.setCoords(); moved++; }}
+    }});
+    canvas.renderAll();
+    if (moved) {{ pushUndo(); saveWorkState(); }}
+    setStatus(moved ? moved + '개를 캔버스 안으로 끌어왔습니다. 이제 선택·이동할 수 있습니다.'
+                    : '캔버스 밖으로 나간 오브젝트가 없습니다.');
 }}
 function duplicateObj() {{
     const o = canvas.getActiveObject();

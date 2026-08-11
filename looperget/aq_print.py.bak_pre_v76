@@ -487,19 +487,9 @@ def _aq_pdf_rack_wh(rk):
     return (int(rk.get("내측폭") or 0) + AQ_PDF_FRAME_T * 2,
             sum(hs) + t * max(0, len(hs) - 1) + AQ_PDF_FRAME_T)
 
-def _aq_pdf_fit(racks, area_w, area_h, rows=None):
+def _aq_pdf_fit(racks, area_w, area_h):
     """줄당 랙수를 바꿔가며 **배율이 최대가 되는 조합**을 고른다 — 잘리지 않고 빈 공간 최소.
-    [V76] rows(랙 그룹 = 통로 한쪽 줄)가 주어지면 줄 구성은 그대로 두고 배율만 구한다.
     반환 (줄당 랙수, 배율, 전체폭mm실척, 전체높이mm실척)."""
-    if rows:
-        rws = [r for r in rows if r]
-        if not rws or area_w <= 0 or area_h <= 0:
-            return 1, 0.0, 0.0, 0.0
-        w = max(sum(_aq_pdf_rack_wh(rk)[0] for rk in r) + AQ_PDF_GAP_X * (len(r) - 1) for r in rws)
-        h = (sum(max(_aq_pdf_rack_wh(rk)[1] for rk in r) for r in rws)
-             + AQ_PDF_GAP_Y * (len(rws) - 1))
-        if w <= 0 or h <= 0: return 1, 0.0, 0.0, 0.0
-        return max(len(r) for r in rws), min(area_w / w, area_h / h), w, h
     sizes = [_aq_pdf_rack_wh(rk) for rk in racks]
     if not sizes or area_w <= 0 or area_h <= 0:
         return 1, 0.0, 0.0, 0.0
@@ -717,33 +707,26 @@ def _aq_pdf_rack(pdf, x, y, rk, inst_by, dims, info, sc):
         pdf.set_draw_color(*pdf.BLACK); pdf.set_line_width(max(0.1, min(0.3, pw * 0.004)))
         pdf.rect(x, _py, pw, plank_h, "D")
 
-def _aq_pdf_draw(pdf, x0, y0, racks, inst_by, dims, info, per, sc, align="C", area_w=0.0, bands=None, rows=None, row_w=0.0):
+def _aq_pdf_draw(pdf, x0, y0, racks, inst_by, dims, info, per, sc, align="C", area_w=0.0, bands=None):
     """racks를 (x0,y0)에서 area_w 폭 안에 per개씩 줄지어 그린다(줄 안에서는 바닥 정렬).
     align: C=가운데 · L=왼쪽(펼침면 오른쪽 페이지) · R=오른쪽(펼침면 왼쪽 페이지).
     bands: [V74] 줄별 높이(실척mm)를 밖에서 지정 — 여러 페이지가 같은 줄 높이를 쓰게 한다.
-           None이면 종전대로 그 페이지 안에서만 최대 랙 높이로 잡는다.
-    rows: [V76] 줄 구성을 밖에서 지정(랙 그룹 = 통로 한쪽 줄). per 대신 이 줄 그대로 그린다.
-          빈 줄([])도 자리는 차지한다 — 그래야 같은 그룹이 모든 면에서 같은 눈높이에 온다.
-    row_w: [V76] 모든 줄이 공유하는 줄폭(실척mm). 주어지면 **줄마다 가운데를 다시 잡지 않고**
-           그 폭을 정렬한 뒤 각 줄을 그 왼쪽 끝에서 시작한다 — 짧은 줄(통로 한쪽이 한 대 적을 때)의
-           랙이 맞은편 같은 순번 랙 아래에 오게 하려는 것. 없으면 종전대로 줄마다 정렬.
-    반환: 사용 높이mm."""
-    rws = rows if rows is not None else [racks[i:i + per] for i in range(0, len(racks), per)]
-    y = y0
-    for ri, row in enumerate(rws):
-        rh = float(bands[ri]) if (bands and ri < len(bands)) else 0.0
-        if row:
-            sizes = [_aq_pdf_rack_wh(rk) for rk in row]
-            rw = sum(s[0] for s in sizes) + AQ_PDF_GAP_X * (len(row) - 1)
-            rh = max(rh, max(s[1] for s in sizes))
-            bw = float(row_w) if row_w else rw
-            if align == "R":   x = x0 + area_w - bw * sc
-            elif align == "L": x = x0
-            else:              x = x0 + (area_w - bw * sc) / 2.0
-            for rk, sz in zip(row, sizes):
-                _aq_pdf_rack(pdf, x, y + (rh - sz[1]) * sc, rk, inst_by, dims, info, sc)
-                x += (sz[0] + AQ_PDF_GAP_X) * sc
+           None이면 종전대로 그 페이지 안에서만 최대 랙 높이로 잡는다. 반환: 사용 높이mm."""
+    sizes = [_aq_pdf_rack_wh(rk) for rk in racks]
+    y, i, ri = y0, 0, 0
+    while i < len(racks):
+        row = list(range(i, min(i + per, len(racks))))
+        rw = sum(sizes[j][0] for j in row) + AQ_PDF_GAP_X * (len(row) - 1)
+        rh = max(sizes[j][1] for j in row)
+        if bands and ri < len(bands): rh = max(rh, bands[ri])
+        if align == "R":   x = x0 + area_w - rw * sc
+        elif align == "L": x = x0
+        else:              x = x0 + (area_w - rw * sc) / 2.0
+        for j in row:
+            _aq_pdf_rack(pdf, x, y + (rh - sizes[j][1]) * sc, racks[j], inst_by, dims, info, sc)
+            x += (sizes[j][0] + AQ_PDF_GAP_X) * sc
         y += rh * sc + AQ_PDF_GAP_Y * sc
+        i += per; ri += 1
     return max(0.0, y - y0 - AQ_PDF_GAP_Y * sc)
 
 def _aq_inst_by_shelf(instances):
@@ -792,14 +775,7 @@ def aq_site_layout(site, recs=None, boxes=None):
         try: tk = int(float(r.get("단두께mm") or 0))
         except Exception: tk = 0
         if wv > 0 and hs:
-            rack_list.append({"명칭": nm, "내측폭": wv - 38, "단높이": hs, "단두께": tk,
-                              "그룹": str(r.get("그룹") or "").strip()})   # [V76] 통로 한쪽 줄
-    # [V76] 화면에서 정한 랙 순서를 인쇄물도 따른다 — 지금까지는 랙구성JSON 입력순이라
-    #  화면 배치도와 가이드북의 랙 나열이 어긋날 수 있었다(그룹 안 좌→우 순서가 여기서 정해진다).
-    _ord9 = [n for n in (plan.get("rack_order") or []) if isinstance(n, str)]
-    if _ord9:
-        _oix9 = {n: i for i, n in enumerate(_ord9)}
-        rack_list.sort(key=lambda rk: _oix9.get(rk["명칭"], len(_ord9) + 1))
+            rack_list.append({"명칭": nm, "내측폭": wv - 38, "단높이": hs, "단두께": tk})
     def _box_of(c):
         r0 = by_code.get(str(c), {}) or {}
         b0 = str(((pit or {}).get(str(c), {}) or {}).get("box") or r0.get("기본상자") or "").strip()
@@ -864,12 +840,10 @@ def aq_layout_pdf_bytes(site, rack_list, instances, dims, info):
             8.5, color=pdf.INK500)
     pdf.set_draw_color(*pdf.BLACK); pdf.set_line_width(0.4); pdf.line(10, 23, 287, 23)
     ax, ay, aw, ah = 10.0, 30.0, 277.0, 168.0
-    # [V76] 랙에 '그룹'(통로 한쪽 줄)이 있으면 그 줄 그대로 — 화면 배치도·가이드북과 같은 모습
-    _rows9 = [rks for _g9, rks in aq_rack_groups(rack_list)] or None
-    per, sc, _w9, _h9 = _aq_pdf_fit(rack_list, aw, ah, rows=_rows9)
+    per, sc, _w9, _h9 = _aq_pdf_fit(rack_list, aw, ah)
     y0 = ay + max(0.0, (ah - _h9 * sc) / 2.0)
     _aq_pdf_draw(pdf, ax, y0, rack_list, _aq_inst_by_shelf(instances), dims, info,
-                 per, sc, align="C", area_w=aw, rows=_rows9, row_w=(_w9 if _rows9 else 0.0))
+                 per, sc, align="C", area_w=aw)
     pdf.txt(0, 202, 297, 4, f"Aqunaris · ShinJinChemTech · sjct.kr · 상자 {len(instances)}개 · {_today}",
             7, color=(168, 168, 168), align="C")
     return bytes(pdf.output())
@@ -882,84 +856,22 @@ AQ_GB_LAY_PER_ROW = 3          # 페이지 한 줄에 놓는 랙 수
 AQ_GB_LAY_ROWS = 2             # 페이지당 줄 수 → 페이지당 6랙 · 펼침면 12랙
 AQ_GB_LAY_M, AQ_GB_LAY_TOP, AQ_GB_LAY_BOT = 10.0, 30.0, 18.0
 
-# ══ [V76] 랙 그룹(통로 한쪽 줄) 기준 지면 배치 — 대표님 지시 2026-08-11 ══
-#  현장은 통로를 사이에 두고 랙이 마주 본다. 책자도 그 모습 그대로 읽혀야 한다.
-#   예1) 통로 오른쪽 6대(1~6)·왼쪽 5대(7~11) → 4p 위 1·2·3 / 아래 7·8·9 · 5p 위 4·5·6 / 아래 10·11
-#   예2) 통로 오른쪽 4대(1~4)·왼쪽 3대(5~7) → 4p 위 1·2   / 아래 5·6   · 5p 위 3·4   / 아래 7
-#  규칙 ① 같은 그룹 = 한 줄(통로 한쪽)   ② 한 통로의 두 줄 = 한 페이지의 위·아래
-#       ③ 한 줄은 한 면에 최대 3대 → 한 면 최대 3×2
-#       ④ 한 통로가 몇 면을 쓰는지는 **긴 쪽**이 정하고, 두 줄 모두 그 면 수로 **균등 분할**
-#          (6대·2면 → 3+3 · 5대 → 3+2 · 4대 → 2+2 · 3대 → 2+1) — 한쪽만 몰아 채우지 않는다
-#       ⑤ [V77] **한 펼침면에는 한 통로만.** 통로가 바뀌면 왼쪽 면(짝수 페이지)에서 새로 시작하고,
-#          자리가 어긋나면 백지 한 면을 끼운다 — 다른 통로가 한 장으로 이어져 보이면 안 되므로.
-#  [V77] 어느 두 줄이 한 통로인지는 **그룹명 `통로-쪽`**(예 `1-오른쪽` · `2-왼쪽`)으로 정한다.
-#   통로 표기가 없으면 종전대로 등장 순서 2개씩 한 통로 — 통로가 하나뿐인 현장은 그대로 쓰면 된다.
-def _aq_gb_even_split(items, n):
-    """items를 n조각으로 앞쪽 우선 균등 분할 — 5,2→[3,2] · 4,2→[2,2] · 3,2→[2,1] · 2,3→[1,1,0]."""
-    if n <= 0: return []
-    base, rem = divmod(len(items), n)
-    out, i = [], 0
-    for k in range(n):
-        take = base + (1 if k < rem else 0)
-        out.append(items[i:i + take]); i += take
-    return out
-
 def _aq_gb_layout_plan(rack_list):
-    """랙 목록 → 페이지별 **줄 구성** [[줄,...], ...] (줄=랙 리스트 · None=끼움 백지면).
-    랙에 '그룹'이 있으면 위 규칙대로, 없으면 종전(V71) 펼침면 분할."""
-    aisles = aq_rack_aisles(rack_list, AQ_GB_LAY_ROWS)   # [V77] 통로 단위로 묶어 온다
-    if not aisles:
-        return _aq_gb_layout_plan_seq(rack_list)
-    pages = []
-    for _al, rows_g in aisles:
-        band = [rks for _g, rks in rows_g]               # 위 줄 · 아래 줄
-        n_pg = max(1, max(-(-len(rks) // AQ_GB_LAY_PER_ROW) for rks in band))   # ④ 긴 쪽이 면 수를 정한다
-        # ⑤ **두 면 이상 쓰는 통로**만 왼쪽 면(짝수 페이지)부터 시작시킨다 — 그 통로의 한 줄이
-        #    펼침면을 가로질러 이어지므로. 배치도 첫 면이 짝수(4p)라 지금까지 그린 면 수가 홀수면 백지 한 면.
-        #    한 면짜리 통로는 이어질 것이 없으니 백지를 끼우지 않는다(빈 면 낭비 방지) —
-        #    대신 지면 제목에 통로를 박고 머리선을 그어 옆 면과 섞여 읽히지 않게 한다.
-        if n_pg > 1 and len(pages) % 2:
-            pages.append(None)
-        cols = [_aq_gb_even_split(rks, n_pg) for rks in band]
-        for p in range(n_pg):
-            rows = [c[p] for c in cols]
-            while rows and not rows[-1]: rows.pop()   # 뒤쪽 빈 줄만 정리(앞·가운데 빈 줄은 자리 유지)
-            if rows: pages.append(rows)
-    return pages
-
-def _aq_gb_page_aisle(page):
-    """[V77] 이 면에 실린 통로 이름('' = 통로 표기 없음 · None = 백지면)."""
-    if not page: return None
-    for row in _aq_gb_rows(page):
-        for rk in (row or []):
-            g = str((rk or {}).get("그룹") or "").strip()
-            if g: return aq_aisle_of(g)
-    return ""
-
-def _aq_gb_aisle_label(name):
-    """통로 이름을 지면 표기로 — '1'→'1 통로' · '동편통로'→'동편통로' · ''→''."""
-    n = str(name or "").strip()
-    if not n: return ""
-    return n if n.endswith("통로") else f"{n} 통로"
-
-def _aq_gb_layout_plan_seq(rack_list):
-    """[V71] 그룹 표기가 없을 때 — 종전 규칙(펼침면 12랙: 왼 면 1·2·3/7·8·9, 오른 면 4·5·6/10·11·12)."""
-    per_sp = AQ_GB_LAY_PER_ROW * AQ_GB_LAY_ROWS * 2       # 12
+    """랙 목록 → 페이지별 랙 리스트. 펼침면(12랙)을 왼쪽 면/오른쪽 면으로 갈라 담는다."""
+    per_pg = AQ_GB_LAY_PER_ROW * AQ_GB_LAY_ROWS          # 6
+    per_sp = per_pg * 2                                   # 12
     pages = []
     for i in range(0, len(rack_list), per_sp):
         ch = rack_list[i:i + per_sp]
         rows = [ch[r:r + AQ_GB_LAY_PER_ROW * 2] for r in range(0, len(ch), AQ_GB_LAY_PER_ROW * 2)]
-        for side in ([row[:AQ_GB_LAY_PER_ROW] for row in rows],      # 왼 면
-                     [row[AQ_GB_LAY_PER_ROW:] for row in rows]):     # 오른 면
-            while side and not side[-1]: side.pop()
-            if side: pages.append(side)
+        left = [rk for row in rows for rk in row[:AQ_GB_LAY_PER_ROW]]      # 1·2·3 · 7·8·9
+        right = [rk for row in rows for rk in row[AQ_GB_LAY_PER_ROW:]]     # 4·5·6 · 10·11·12
+        if left: pages.append(left)
+        if right: pages.append(right)
     return pages
 
-def _aq_gb_rows(page):
-    """페이지 = 줄 리스트. (평면 랙 리스트가 오면 3대씩 끊어 준다 — 옛 호출 호환)"""
-    if page and not isinstance(page[0], list):
-        return [page[i:i + AQ_GB_LAY_PER_ROW] for i in range(0, len(page), AQ_GB_LAY_PER_ROW)]
-    return list(page or [])
+def _aq_gb_rows(rks):
+    return [rks[i:i + AQ_GB_LAY_PER_ROW] for i in range(0, len(rks), AQ_GB_LAY_PER_ROW)]
 
 def _aq_gb_layout_bands(pages):
     """[V74] 모든 배치도 페이지가 **공유하는 줄 높이**(실척mm)와 그 합.
@@ -967,25 +879,22 @@ def _aq_gb_layout_bands(pages):
     대표님 지적: 책을 펼쳤을 때 오른쪽 면 섹션06·07·08이 왼쪽 면 03·04·05보다 아래로 내려가 있었다.
     페이지마다 제 내용만으로 세로 가운데를 맞춰서 생긴 어긋남이다 —
     줄 높이와 시작선을 전 페이지가 공유하면 좌우 두 면의 같은 줄이 같은 눈높이에 온다."""
-    n = max((len(_aq_gb_rows(p)) for p in pages if p), default=0)
+    n = max((len(_aq_gb_rows(rks)) for rks in pages), default=0)
     bands = [0.0] * n
-    for p in pages:
-        for ri, row in enumerate(_aq_gb_rows(p)):
-            if not row: continue          # [V76] 빈 줄(짧은 쪽 통로) — 높이는 다른 면이 정한다
+    for rks in pages:
+        for ri, row in enumerate(_aq_gb_rows(rks)):
             bands[ri] = max(bands[ri], max(_aq_pdf_rack_wh(rk)[1] for rk in row))
     return bands, (sum(bands) + AQ_PDF_GAP_Y * max(0, n - 1))
 
 def _aq_gb_layout_scale(pages, aw, ah):
-    """모든 배치도 페이지에 공통으로 쓸 배율 — 어느 페이지도 잘리지 않는 최대값.
-    반환 (배율, 공통 줄폭mm실척) — [V76] 줄폭은 짧은 줄의 시작선을 맞추는 데 쓴다."""
+    """모든 배치도 페이지에 공통으로 쓸 배율 — 어느 페이지도 잘리지 않는 최대값."""
     _b, h = _aq_gb_layout_bands(pages)
     w = 0.0
-    for p in pages:
-        for row in _aq_gb_rows(p):
-            if not row: continue
+    for rks in pages:
+        for row in _aq_gb_rows(rks):
             w = max(w, sum(_aq_pdf_rack_wh(rk)[0] for rk in row) + AQ_PDF_GAP_X * (len(row) - 1))
-    if w <= 0 or h <= 0: return 0.0, 0.0
-    return min(aw / w, ah / h), w
+    if w <= 0 or h <= 0: return 0.0
+    return min(aw / w, ah / h)
 
 def _aq_gb_layout_pages(pdf, site, pages, instances, dims, info, foot, gut):
     """배치도 페이지들을 그린다 — 전 페이지 같은 배율이라 랙 크기가 어디서나 동일."""
@@ -993,44 +902,21 @@ def _aq_gb_layout_pages(pdf, site, pages, instances, dims, info, foot, gut):
     inst_by = _aq_inst_by_shelf(instances)
     M, TOP, BOT = AQ_GB_LAY_M, AQ_GB_LAY_TOP, AQ_GB_LAY_BOT
     aw, ah = 210 - M * 2, 297 - TOP - BOT
-    sc, rw9 = _aq_gb_layout_scale(pages, aw, ah)
+    sc = _aq_gb_layout_scale(pages, aw, ah)
     if sc <= 0: return False
     bands, _tot9 = _aq_gb_layout_bands(pages)          # [V74] 전 페이지 공통 줄 높이
     y0 = TOP + max(0.0, (ah - _tot9 * sc) / 2.0)       #        + 공통 시작선 → 좌우 면이 같은 눈높이
-    _n9 = 0                                            # [V76] 백지면을 뺀 실제 배치도 면 번호
-    _alls9 = [_aq_gb_page_aisle(p) for p in pages]     # [V77] 면별 통로
-    _multi9 = len({a for a in _alls9 if a}) > 1        #       통로가 둘 이상인가
-    for _pi9, page in enumerate(pages):
+    for pi, rks in enumerate(pages):
         pdf.add_page(); gut()
-        if not page:   # [V76] 다음 통로를 왼쪽 면에서 시작시키려고 끼운 백지면
-            _nx9 = next((_aq_gb_aisle_label(a) for a in _alls9[_pi9 + 1:] if a), "")
-            pdf.txt(M, 145, aw, 6, f"(다음 면부터 {_nx9})" if _nx9 else "(다음 면부터 이어집니다)",
-                    9, color=pdf.INK500, align="C")
-            foot(); continue
-        _n9 += 1
-        rows = _aq_gb_rows(page)
         # 제목은 **바깥쪽**(책 펼쳤을 때 페이지 가장자리)으로 — 제본선 가운데에 두 제목이 몰리지 않게
-        _al9 = _aq_gb_aisle_label(_alls9[_pi9])        # [V77] 통로가 여럿이면 제목에 통로를 박는다
-        pdf.txt(M, 8, aw, 8, f"{site} 진열 배치도"
-                + (f" — {_al9}" if _al9 else ("" if _n9 == 1 else f" ({_n9})")),
-                15, bold=True, align=("L" if (pdf.page_no() % 2 == 0) else "R"))
         _ta9 = "L" if (pdf.page_no() % 2 == 0) else "R"
-        # [V76] 부제에 이 면의 줄 = 통로 어느 쪽인지 밝힌다(랙 그룹 이름 그대로 · 통로 표기는 뗀다)
-        def _side9(row):   # '1-오른쪽' → '오른쪽'
-            g = str((row[0] or {}).get("그룹") or "").strip()
-            a = aq_aisle_of(g)
-            return g[len(a) + 1:].strip() if a and len(g) > len(a) + 1 else g
-        _gs9 = [s for s in (_side9(row) for row in rows if row) if s]
-        _sub9 = "실척 도면 · 색상 = 부속군"
-        if len(_gs9) >= 2:  _sub9 += f" · 위 {_gs9[0]} 줄 / 아래 {_gs9[1]} 줄"
-        elif len(_gs9) == 1: _sub9 += f" · {_gs9[0]} 줄" + (" (이 통로는 한 면만 씁니다)" if _multi9 else "")
-        if len(pages) > 1:
-            _sub9 += " · 좌우 두 면이 이어집니다" if not _multi9 else " · 이 면은 이 통로만"
-        pdf.txt(M, 17.5, aw, 4.5, _sub9, 8, color=pdf.INK500, align=_ta9)
-        if _multi9:   # [V77] 통로가 여럿이면 머리선 — 옆 면(다른 통로)과 한 장으로 이어져 보이지 않게
-            pdf.set_draw_color(*pdf.BLACK); pdf.set_line_width(0.4); pdf.line(M, 24, M + aw, 24)
-        _aq_pdf_draw(pdf, M, y0, [rk for row in rows for rk in row], inst_by, dims, info,
-                     AQ_GB_LAY_PER_ROW, sc, align="C", area_w=aw, bands=bands, rows=rows, row_w=rw9)
+        pdf.txt(M, 8, aw, 8, f"{site} 진열 배치도" + ("" if pi == 0 else f" ({pi + 1})"),
+                15, bold=True, align=_ta9)
+        pdf.txt(M, 17.5, aw, 4.5,
+                "실척 도면 · 색상 = 부속군" + (" · 좌우 두 면이 이어집니다" if len(pages) > 1 else ""),
+                8, color=pdf.INK500, align=_ta9)
+        _aq_pdf_draw(pdf, M, y0, rks, inst_by, dims, info, AQ_GB_LAY_PER_ROW, sc,
+                     align="C", area_w=aw, bands=bands)
         foot()
     return True
 
@@ -1093,19 +979,8 @@ def aq_guidebook_pdf_bytes(recs, site, bc_mode, img_of=None):
     _P_LAY9 = 4                       # 진열 배치도 시작
     _toc9 = [("부속군 색상 색인", _P_IDX9, None)]
     if _n_lay9:
-        # [V77] 통로가 여럿이면 목차도 통로별 한 줄 — 어느 통로가 몇 페이지인지 바로 찾게.
-        _rows_ai9 = []
-        for _i9, _p9 in enumerate(_lay9[0]):
-            if not _p9: continue                       # 백지면은 목차에 싣지 않는다
-            _lb9 = _aq_gb_page_aisle(_p9)
-            if _rows_ai9 and _rows_ai9[-1][0] == _lb9:
-                _rows_ai9[-1][2] = _P_LAY9 + _i9
-            else:
-                _rows_ai9.append([_lb9, _P_LAY9 + _i9, _P_LAY9 + _i9])
-        for _lb9, _a9, _b9 in _rows_ai9:
-            _lbt9 = _aq_gb_aisle_label(_lb9)
-            _toc9.append((f"{site} 진열 배치도" + (f" — {_lbt9}" if _lbt9 else ""),
-                          _a9, _b9 if _b9 > _a9 else None))
+        _toc9.append((f"{site} 진열 배치도", _P_LAY9,
+                      None if _n_lay9 == 1 else _P_LAY9 + _n_lay9 - 1))
     _pg9 = _P_LAY9 + _n_lay9          # 첫 카드 페이지
     for _g9 in groups:
         _cnt9 = sum(1 for it in sel if it["grp"] == _g9)

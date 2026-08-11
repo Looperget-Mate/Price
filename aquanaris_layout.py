@@ -8,7 +8,7 @@ import datetime
 # [V67] 모듈 버전 — app.py가 신구 짝(app.py↔이 파일)을 검증하는 데 사용.
 #  두 파일 중 하나만 배포되면 NameError 대신 친절한 안내가 뜨도록 한다.
 #  ⚠ 모듈에 새 함수를 추가하는 버전업마다 이 숫자와 app.py 가드 기준을 함께 올릴 것.
-AQ_LAYOUT_VER = 71   # [V71] 섹션(랙) 더블클릭 = 랙 복제/삭제 + 가이드북 지면 개편
+AQ_LAYOUT_VER = 77   # [V77] 통로 묶음 — 그룹명 '통로-쪽'으로 여러 통로·홀수 면을 지면에 정확히 싣는다
 
 # 렌더러가 쓰는 색상 헬퍼(app.py에도 동일 정의가 있으나 순수함수라 모듈 자체 보유)
 def _aq_hexrgb(h):
@@ -63,6 +63,61 @@ def aq_std_n_of(code):
     c = str(code or "").strip().zfill(5)
     if c in AQ_STD_N: return AQ_STD_N[c]
     return (aq_std_free_of(c) or {}).get("n", 1)
+
+# ══ [V76] 랙 그룹 = 통로 한쪽 줄 ══
+#  현장(농협 자재센터)은 통로를 사이에 두고 랙이 마주 본다. 랙 구성 표의 '그룹' 칸에 같은 값을 적은
+#  랙끼리 **한 줄**이 되고, 그 줄이 화면 배치도의 한 행 · 가이드북 지면의 위/아래 줄이 된다.
+#  (예: 통로 오른쪽 6대 = 그룹 A · 왼쪽 5대 = 그룹 B)
+def aq_rack_groups(rack_list):
+    """랙 목록 → [(그룹명, [랙,...]), ...] — 첫 등장 순서(= 랙 순서). 그룹 표기가 하나도 없으면 [].
+
+    그룹이 빈 랙(가상랙 등)도 ''라는 이름의 그룹으로 **제자리에** 모인다 — 순서가 흐트러지지 않는다."""
+    order, by, any_g = [], {}, False
+    for rk in rack_list or []:
+        g = str((rk or {}).get("그룹") or "").strip()
+        if g: any_g = True
+        if g not in by:
+            order.append(g); by[g] = []
+        by[g].append(rk)
+    return [(g, by[g]) for g in order] if any_g else []
+
+# ══ [V77] 통로 묶음 — 어느 두 줄이 '마주 보는 한 통로'인가 ══
+#  V76은 그룹을 등장 순서대로 2개씩 한 통로로 봤다. 통로가 하나면 맞지만,
+#  통로가 여럿이거나 어떤 통로는 한 면만 쓸 때 **다른 통로의 두 줄이 마주 보는 것처럼** 묶였다.
+#  → 그룹명을 `통로-쪽`(예 `1-오른쪽` · `2-왼쪽` · `동편-R`)으로 적으면 앞부분이 같은 그룹끼리 한 통로가 된다.
+AQ_AISLE_SEPS = "-_/|·"        # 통로와 쪽을 가르는 구분자
+
+def aq_aisle_of(group):
+    """그룹명에서 통로 부분만. 구분자가 없으면 '' (= 통로 표기 없음)."""
+    g = str(group or "").strip()
+    for s in AQ_AISLE_SEPS:
+        if s in g:
+            a, b = g.split(s, 1)
+            if a.strip() and b.strip(): return a.strip()
+    return ""
+
+def aq_rack_aisles(rack_list, per_aisle=2):
+    """랙 목록 → 통로 묶음 [(통로명, [(그룹명, [랙,...]), ...]), ...] — 첫 등장 순서.
+
+    · 그룹명에 통로 표기가 하나라도 있으면 **앞부분이 같은 그룹끼리** 한 통로(표기 없는 그룹은 홀로 한 통로).
+    · 하나도 없으면 종전(V76)대로 등장 순서 per_aisle개씩 한 통로로 본다 — 통로명은 ''.
+    · 한 통로에 줄이 per_aisle보다 많으면 그만큼 나눠 싣는다(한 면에 놓을 수 있는 줄 수 한계)."""
+    gr = aq_rack_groups(rack_list)
+    if not gr: return []
+    if not any(aq_aisle_of(g) for g, _rs in gr):
+        return [("", gr[i:i + per_aisle]) for i in range(0, len(gr), per_aisle)]
+    order, by = [], {}
+    for g, rks in gr:
+        k = aq_aisle_of(g) or g          # 통로 표기가 없는 그룹은 그 이름 자체가 통로 = 한 면짜리 통로
+        if k not in by:
+            order.append(k); by[k] = []
+        by[k].append((g, rks))
+    out = []
+    for k in order:
+        rows = by[k]
+        for i in range(0, len(rows), per_aisle):
+            out.append((k, rows[i:i + per_aisle]))
+    return out
 
 def aq_box_dims_map(boxes):
     """AQ_Boxes → {상자종류: (폭mm, 높이mm)} (치수 있는 것만)."""
@@ -129,7 +184,9 @@ def aq_std_payload(aq_items):
             plan_items[r["품목코드"]] = {"box": box, "qty": qty, "ori": "세로"}
     racks = []
     for s in sorted(AQ_STD_RACK_H):
-        racks.append({"명칭": f"섹션{s}", "폭mm": 1200, "깊이mm": 450, "단수": len(AQ_STD_RACK_H[s]),   # [V55] 실측 1200
+        # [V76] 그룹 = 통로 한쪽 줄. V1 도면 = 윗줄 섹션12~07(A) · 아랫줄 섹션01~06(B) — AQ_STD_RACK_ORDER와 같다.
+        racks.append({"명칭": f"섹션{s}", "그룹": ("A" if s >= "07" else "B"),
+                      "폭mm": 1200, "깊이mm": 450, "단수": len(AQ_STD_RACK_H[s]),   # [V55] 실측 1200
                       "총높이mm": AQ_STD_TOTAL_H, "단두께mm": AQ_STD_SHELF_T,   # [V60] 실측 — 검증식 정합
                       "단높이mm(콤마구분)": ",".join(str(x) for x in AQ_STD_RACK_H[s]),
                       "단깊이mm(콤마구분)": "", "비고": "표준(실측 2026-07-23)"})
@@ -849,12 +906,17 @@ def aq_rack_svg(rack_name, inner, shelf_hs, shelf_seqs, frame_t=19, scale=0.22, 
     return (f'<svg width="{pw + pad*2:.0f}" height="{ph + pad*2 + 14:.0f}" xmlns="http://www.w3.org/2000/svg">'
             + "".join(out) + '</svg>')
 
-def aq_racks_svg_all(rack_list, seq_by_shelf, per_row=6, scale=None, info=None, mstack=None, instances=None, dims=None):
+def aq_racks_svg_all(rack_list, seq_by_shelf, per_row=6, scale=None, info=None, mstack=None, instances=None, dims=None, rows=None):
     """[V47] 전체 배치 뷰 — V1 도면처럼 랙들을 줄당 per_row대씩 나란히 렌더.
     rack_list=[{명칭,내측폭,단높이}], seq_by_shelf={(랙명,단):[...]}. [V49] info=호버 툴팁 데이터.
     [V64] mstack=수동 적층 고정 코드 집합(렌더 전용 — 검증·견적 패킹엔 미적용).
-    [V67] instances(인스턴스 리스트)+dims 주어지면 패킹 없이 저장 좌표대로 렌더(seq_by_shelf 무시)."""
+    [V67] instances(인스턴스 리스트)+dims 주어지면 패킹 없이 저장 좌표대로 렌더(seq_by_shelf 무시).
+    [V76] rows=줄 구성을 밖에서 지정. 생략해도 랙에 '그룹'이 있으면 **그룹 = 한 줄**로 자동 렌더 —
+          화면 배치도와 가이드북 지면이 같은 줄을 쓰게 하려는 것(대표님 지시 2026-08-11)."""
     if not rack_list: return ""
+    if rows is None:
+        _gr9 = aq_rack_groups(rack_list)
+        rows = [rks for _g9, rks in _gr9] if _gr9 else None
     _iby9 = None
     if instances is not None:
         _iby9 = {}
@@ -864,7 +926,8 @@ def aq_racks_svg_all(rack_list, seq_by_shelf, per_row=6, scale=None, info=None, 
         n = len(rack_list)
         scale = 0.22 if n <= 2 else (0.16 if n <= 4 else 0.105)
     pad, gap_x, gap_y = 16, 12, 26
-    rows = [rack_list[i:i + per_row] for i in range(0, len(rack_list), per_row)]
+    rows = [r for r in (rows or []) if r] or \
+           [rack_list[i:i + per_row] for i in range(0, len(rack_list), per_row)]
     out, y = [], pad + 4
     total_w = 0
     for row in rows:

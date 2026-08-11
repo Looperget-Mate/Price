@@ -1025,8 +1025,8 @@ def aq_rename_box(old, new):
 from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 — ⚠배포 시 aquanaris_layout.py도 함께 올릴 것
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
-if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 71:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V71)와 짝이 맞지 않습니다.\n\n"
+if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V77)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1039,8 +1039,8 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 74:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V74)와 짝이 맞지 않습니다.\n\n"
+if _LG_VER < 77:
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V77)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -4698,6 +4698,16 @@ elif mode == "🏪 아쿠나리스":
                 st.caption("📋 **새 랙 행은 명칭만 입력하면 첫 랙의 값(폭·깊이·총높이·단수·단두께·단높이)이 자동 적용**됩니다 — 현장 랙은 대부분 같은 규격이므로 다른 부분만 수정하세요. 저장 시 실제 값으로 기록됩니다.")
                 # [V49] 단높이 검증 규칙: 총높이mm 입력 시 Σ단높이 + 단두께×(단수−1) = 총높이 여야 배치에 반영.
                 st.caption("📐 **총높이mm**를 입력하면 단높이 합을 검증합니다 — Σ단높이 = 총높이 − 단두께×(단높이 개수−1). 예: 총 2000·두께 40·3단 → 단높이 합이 1920('800,800,320' ✓ / '800,700,320' ✗). 불일치 랙은 맞출 때까지 배치에서 제외됩니다.")
+                # [V76] 그룹 = 통로 한쪽 줄 · [V77] 통로가 여럿이면 `통로-쪽` 표기 (대표님 지시 2026-08-11)
+                st.caption("🛣️ **그룹 = 통로 한쪽 줄**입니다. 통로에 서서 **오른쪽 랙에 같은 값(예 `A`), 왼쪽 랙에 다른 값(예 `B`)**을 적으세요 — "
+                           "화면 배치도·배치도 PDF·**가이드북 지면**이 모두 그 줄대로 그려집니다. "
+                           "가이드북은 **한 면에 한 줄 최대 3대 · 위/아래 2줄(최대 3×2)**, 통로가 길면 다음 면으로 이어집니다 "
+                           "(오른쪽 6대·왼쪽 5대 → 4p 위 1·2·3/아래 7·8·9, 5p 위 4·5·6/아래 10·11). 비워 두면 종전 방식(순서대로 6대씩)입니다.")
+                st.caption("🚏 **통로가 둘 이상이거나 어떤 통로는 한 면만 쓸 때**는 그룹을 **`통로-쪽`**으로 적으세요 — "
+                           "`1-오른쪽` `1-왼쪽` `2-오른쪽` 처럼요(구분자 `-` `_` `/` 아무거나). "
+                           "**앞부분이 같은 그룹끼리 한 통로**가 되고, **한 펼침면에는 한 통로만** 실립니다 "
+                           "(통로가 바뀌면 왼쪽 면부터 새로 시작 — 자리가 어긋나면 백지 한 면이 들어갑니다). "
+                           "목차와 지면 제목에도 통로가 표기됩니다. 통로가 하나뿐이면 `A`/`B`처럼 그냥 적어도 됩니다.")
                 try: _racks_cur = json.loads(str(_site.get("랙구성JSON") or "[]"))
                 except Exception: _racks_cur = []
                 # [V71] 랙 복제·삭제(그림 더블클릭)로 바뀐 구성은 세션에 남긴다 —
@@ -4707,7 +4717,7 @@ elif mode == "🏪 아쿠나리스":
                 _rkov9 = st.session_state.get(_rkov_key)
                 if isinstance(_rkov9, list) and _rkov9:
                     _racks_cur = _rkov9
-                _rack_cols = ["명칭", "폭mm", "깊이mm", "총높이mm", "단수", "단두께mm", "단높이mm(콤마구분)", "비고"]   # [V54] 단깊이 폐지
+                _rack_cols = ["명칭", "그룹", "폭mm", "깊이mm", "총높이mm", "단수", "단두께mm", "단높이mm(콤마구분)", "비고"]   # [V54] 단깊이 폐지 · [V76] 그룹
                 _df_racks_in = pd.DataFrame(_racks_cur)
                 for _c in _rack_cols:
                     if _c not in _df_racks_in.columns: _df_racks_in[_c] = ""
@@ -4747,6 +4757,10 @@ elif mode == "🏪 아쿠나리스":
                     _df_racks_in, num_rows="dynamic", hide_index=True,
                     key=f"aq_racks_ed_{sel_site}_{st.session_state[_rkv_key]}",
                     column_config={
+                        "그룹": st.column_config.TextColumn(   # [V76] 통로 한쪽 줄
+                            width="small",
+                            help="통로 한쪽 줄의 이름. 마주 보는 두 줄에 서로 다른 값(예 A / B)을 적으면 "
+                                 "가이드북에서 위·아래 줄로 나뉘어 실제 배치대로 읽힙니다. 비우면 종전 방식."),
                         "폭mm": st.column_config.NumberColumn(format="%d"),
                         "깊이mm": st.column_config.NumberColumn(format="%d"),
                         "총높이mm": st.column_config.NumberColumn(format="%d", help="랙 최하단~최상단 전체 높이 — 입력 시 단높이 합 검증"),
@@ -4817,6 +4831,34 @@ elif mode == "🏪 아쿠나리스":
                     st.warning("📐 단높이 합이 총높이와 맞지 않는 랙이 있습니다(입력한 단높이로 그대로 그려집니다 — 확인용 안내).\n- " + "\n- ".join(_rack_errs))
                 if _rack_notes:
                     st.caption("ℹ️ 단수 확인: " + " · ".join(_rack_notes))
+                # ── [V76] 그룹(통로 한쪽 줄) 미리보기 — 가이드북이 실제로 어떻게 나뉘는지 표에서 바로 확인 ──
+                def _aq_cell9(v):   # 편집표의 새 행은 NaN이 온다 — 'nan' 문자열이 그룹명이 되지 않게
+                    return "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v).strip()
+                _grk9 = []
+                for _ri9, _rr in df_racks_eff.iterrows():
+                    _n9g = _aq_cell9(_rr.get("명칭"))
+                    if _n9g and not _n9g.startswith("🅥"):   # 가상랙은 도면·인쇄물에서 제외
+                        _grk9.append({"명칭": _n9g, "그룹": _aq_cell9(_rr.get("그룹"))})
+                _ord_pv9 = st.session_state.get(f"aq_rkord_{sel_site}") or []
+                if _ord_pv9:   # 그림에서 끌어 바꾼 랙 순서를 미리보기도 따른다(인쇄물과 같은 순서)
+                    _oix_pv9 = {n: i for i, n in enumerate(_ord_pv9)}
+                    _grk9.sort(key=lambda r: _oix_pv9.get(r["명칭"], len(_ord_pv9) + 1))
+                if any(r["그룹"] for r in _grk9):
+                    # [V77] 통로 단위로 보여 준다 — 어느 두 줄이 마주 보는 것으로 잡혔는지 바로 확인
+                    _ai9 = aq_rack_aisles(_grk9, 2)
+                    st.caption("🛣️ 줄 구성 — " + "   |   ".join(
+                        (f"**{_al9 or '통로'}** : " if len(_ai9) > 1 else "")
+                        + " · ".join(f"{_g9 or '(미지정)'} {len(_rs9)}대" for _g9, _rs9 in _rows9)
+                        for _al9, _rows9 in _ai9))
+                    _pv9, _pn9 = [], 4   # 가이드북 배치도는 4페이지부터
+                    for _pg9 in _aqp._aq_gb_layout_plan(_grk9):
+                        _pv9.append(f"{_pn9}p " + (" / ".join(
+                            "·".join(rk["명칭"] for rk in _row9) or "—" for _row9 in _pg9)
+                            if _pg9 else "(백지 — 다음 통로를 왼쪽 면부터)"))
+                        _pn9 += 1
+                    if _pv9:
+                        st.caption("📖 가이드북 배치도 지면(위 줄 / 아래 줄) — " + "  |  ".join(_pv9[:8])
+                                   + (f"  외 {len(_pv9) - 8}면" if len(_pv9) > 8 else ""))
                 # [V44] 슬롯·층수 힌트 (상자 치수 기반)
                 _dims_hint = aq_box_dims_map(aq_boxes)
                 if _dims_hint:
@@ -4974,7 +5016,8 @@ elif mode == "🏪 아쿠나리스":
                         except Exception: _tk3 = 0
                         if _wv3 > 0 and _hs3:
                             _rk_list.append({"명칭": _nm3, "내측폭": _wv3 - 38, "단높이": _hs3,
-                                             "단깊이": _ds3, "깊이": _dp3 or 450, "단두께": _tk3})
+                                             "단깊이": _ds3, "깊이": _dp3 or 450, "단두께": _tk3,
+                                             "그룹": _aq_cell9(_rr.get("그룹"))})   # [V76] 통로 한쪽 줄
                     _dims_p = aq_box_dims_map(aq_boxes)
                     _dims_p.update({f"자유:{c}": (fc["w"], fc["h"]) for c, fc in _free_live.items()})   # [V49] 자유 배치 치수
                     if not _rk_list:
@@ -5777,6 +5820,7 @@ elif mode == "🏪 아쿠나리스":
                                 except Exception: _d[_c] = str(_d[_c])
                             for _c in ["명칭", "단높이mm(콤마구분)", "비고"]:   # [V54] 단깊이 폐지
                                 _d[_c] = str(_d[_c])
+                            _d["그룹"] = str(_d.get("그룹") or "").strip()   # [V76] 통로 한쪽 줄
                             _racks_out.append(_d)
                         _items_out = {}
                         if edited_plan is not None:

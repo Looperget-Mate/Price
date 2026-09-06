@@ -1,0 +1,255 @@
+# -*- coding: utf-8 -*-
+"""
+looperget.design.reproduce — P1 관문: 승인 정답지 5필지 재현율.
+
+    python -m looperget.design.reproduce            # 표 + 판정
+    python -m looperget.design.reproduce 03 --dump  # 한 필지, 엔진 결과 JSON 저장(정답/_재현_P1/)
+
+정답 = `_설계/배추밭스프링클러_20260824/정답/0[1-5]_*.json` (looperget.design.answer/1, 대표 승인 견적 역산).
+기준(제안서 §6): 두수 정확 · 주배관 길이 ±5 % · BOM 품목 집합 · 금액 ±3 % → 5필지 중 4.
+정답 BOM의 변형엘보 00190(규칙 2 이전 승인본)은 '인정된 차이'로 두고 엄격/보정 두 줄을 모두 낸다.
+정답지가 `one_off`로 표기한 일회성 대표 판단(02 25 mm 여분 1롤)도 보정에서 되돌린다.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+from typing import Dict, List
+
+from . import design
+from .site import SCHEMA
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
+D = os.path.join(ROOT, "_설계", "배추밭스프링클러_20260824")
+ANS = os.path.join(D, "정답")
+ELBOW = "00190"
+ELBOW_PRICE = 6700
+
+# 보정 비교에서 정답(승인본)에 적용하는 '인정된 차이' — 모두 표에 그대로 찍는다.
+#   (코드, 수량 변화, 단가, 사유)
+# 필지별 일회성 항목은 여기 적지 않는다 — 정답 JSON의 `one_off`를 읽어 자동으로 붙인다(_정답.py ONE_OFF).
+# 05 50 mm 롤 부족분은 2026-09-03 대표 확정으로 정답지 자체가 3롤로 교정됐다(더는 보정이 아니다).
+ADJUST = {
+    "*": [(ELBOW, "제거", ELBOW_PRICE, "변형엘보 — 규칙 2(08-27) 이전 승인본")],
+}
+
+
+def _load(name):
+    with open(os.path.join(ANS, name), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _bars(ids):
+    with open(os.path.join(D, "10_계산", "_숙진리_스케치추출.json"), encoding="utf-8") as f:
+        J = json.load(f)
+    return [[b["a"], b["b"]] for b in J["bars"] if b["id"] in ids]
+
+
+def _routes(ans, zone_of=None):
+    out = []
+    for r in ans["mainline"]["routes"]:
+        z = r.get("zone") if zone_of is None else zone_of(r)
+        out.append({"name": r["name"], "zone": z, "pts": r["pts"], "by_ceo": True})
+    return out
+
+
+def _polys(ans):
+    return {p["name"]: p["pts"] for p in ans["polygons"]}
+
+
+def _items(*pairs):
+    """(코드, 수량[, 비고]) — 비고가 없으면 「급수 계통 부속 — 대표 계통도 그대로」."""
+    return [{"code": p[0], "qty": p[1], "note": p[2] if len(p) > 2 else "급수 계통 부속 — 대표 계통도 그대로"}
+            for p in pairs]
+
+
+# ── 필지별 site 입력 (대표 판단 항목은 정답지의 대표 결정을 그대로 옮긴다) ─────────
+def site_01():
+    a = _load("01_윗구역_373.json")
+    poly = _polys(a)["윗구역 외곽"]
+    O = poly[0]
+    return a, {
+        "schema": SCHEMA, "name": "01 윗구역 373",
+        "blocks": [{"name": "윗구역", "polygon": poly, "u": a["row_direction"]["윗구역"]["u"],
+                    "policy": dict(mode="along_row", anchor_from="hi", anchor_fixed=9.0, anchor_ref_pt=tuple(O),
+                                   off_fixed=7.0, end_margin=5.0, tail=5.0, scan_m=1.0, scan_origin=tuple(O),
+                                   lat_max=8, anchor_end_margin=0.0)}],
+        "routes": _routes(a),
+        "sources": [{"name": "펌프측 시작", "pt": a["mainline"]["routes"][0]["pts"][0], "start_bands": 4}],
+        "water_items": _items(("00969", 1), ("00970", 1), ("01870", 1), ("01920", 1)),
+        "valves_01403": {"start": 1, "zones": 2},
+    }
+
+
+def site_02():
+    a = _load("02_아랫구역_359외.json")
+    P = _polys(a)
+    return a, {
+        "schema": SCHEMA, "name": "02 아랫구역 359외",
+        "blocks": [
+            {"name": "좌 밭(1전)", "polygon": P["좌 밭 외곽(1전)"], "u": [-1.0, 0.0],
+             "policy": dict(mode="along_row", anchor_from="hi", anchor_fixed=5.0, off_fixed=8.0,
+                            end_margin=5.0, tail=3.0, scan_m=1.0, anchor_end_margin=5.0)},
+            {"name": "우 밭(2전·3전)", "polygon": P["우 밭 외곽(2전·3전)"], "u": [1.0, 0.0],
+             "policy": dict(mode="along_row", anchor_from="lo", anchor_fixed=5.0, off_fixed=5.0,
+                            end_margin=5.0, tail=3.0, scan_m=1.0, anchor_end_margin=5.0)},
+        ],
+        "routes": _routes(a),
+        "sources": [{"name": "입구 매니폴드", "pt": a["water"]["entry"], "tees_here": 1, "start_bands": 2}],
+        "water_items": _items(("00969", 1), ("00188", 1), ("00943", 3), ("01919", 1), ("01870", 1)),
+        "valves_01403": {"start": 1, "zones": 1},
+    }
+
+
+def site_03():
+    a = _load("03_상도리_482-42.json")
+    return a, {
+        "schema": SCHEMA, "name": "03 상도리 482-42",
+        "blocks": [{"name": "482-42", "polygon": _polys(a)["482-42 외곽"], "u": a["row_direction"]["482-42"]["u"],
+                    "policy": dict(skip=False, tail_fill=False, refine=False, start_ref="main")}],
+        "routes": _routes(a),
+        "sources": [{"name": "펌프", "pt": a["water"]["pump_pt"], "start_bands": 4}],
+        "water_items": _items(("00527", 1), ("00970", 3), ("00951", 1), ("01920", 1), ("01870", 1)),
+        "valves_01403": {"start": 1, "zones": 2},
+    }
+
+
+def site_04():
+    a = _load("04_숙진리_212-31.json")
+    P = _polys(a)
+    rd = a["row_direction"]
+    return a, {
+        "schema": SCHEMA, "name": "04 숙진리 212-31",
+        "blocks": [
+            {"name": "위 밭", "polygon": P["위 밭"], "u": rd["위 밭"]["u"], "bars": _bars(range(11, 26)), "policy": {}},
+            {"name": "아래 밭", "polygon": P["아래 밭"], "u": rd["아래 밭"]["u"], "policy": {}},
+        ],
+        "routes": _routes(a),
+        "sources": [{"name": "물탱크·펌프(06 공용 매니폴드)", "pt": a["water"]["pt"], "tees_here": 1, "start_bands": 0},
+                    {"name": "위 밭 T", "pt": a["water"]["tee"], "tees_here": 1, "start_bands": 0}],
+        "water_items": [],                                  # 급수부는 06 물공급부 시트(공용)
+        "valves_01403": {"start": 0, "zones": 2},
+    }
+
+
+def site_05():
+    a = _load("05_숙진리_211-1.json")
+    P = _polys(a)
+    rd = a["row_direction"]
+    pipes = {p["tag"]: p for p in a["water"]["pipes"]}
+    blocks = []
+    for name, ids in (("211-1 (1)상단", range(29, 34)), ("211-1 (3)우측", range(40, 45)), ("211-1 (2)중앙", range(34, 40))):
+        blocks.append({"name": name, "polygon": P[name], "u": rd[name]["u"], "bars": _bars(ids), "policy": {}})
+    return a, {
+        "schema": SCHEMA, "name": "05 숙진리 211-1",
+        "blocks": blocks,
+        "routes": _routes(a),
+        "sources": [{"name": "파이프① (줄1)", "pt": pipes["1"]["tip"], "tees_here": 0, "start_bands": 2},
+                    {"name": "파이프② (줄2 T 양쪽)", "pt": pipes["2"]["tip"], "tees_here": 1, "start_bands": 2}],
+        "water_items": _items(("00857", 1, "a 파이프① 입구 — 카플러 WF 4-3 (수도관 → E호스밸브)"),
+                              ("00969", 1, "a 파이프② — 카플러 WF 4-4 (수도관 → T분기)"),
+                              ("00596", 1, "a 파이프② — 숫엘보 90° (꺾어 내림)"),
+                              ("00440", 1, "a 파이프② — 암나사싱글밸브 (2구역 개폐)"),
+                              ("01920", 1, "a 압력계 부착 루퍼젯 H20 — 15 mm 펀치 타공"),
+                              ("01870", 1, "a 압력계 20 mm 연결세트 — 입구 공급압 확인")),
+        "valves_01403": {"start": 1, "zones": 0},
+    }
+
+
+SITES = {"01": site_01, "02": site_02, "03": site_03, "04": site_04, "05": site_05}
+
+
+def compare(ans: Dict, out: Dict, key: str = "") -> Dict:
+    # 정답지가 스스로 표기한 일회성 대표 판단(규칙 아님)은 보정 대상으로 되돌린다.
+    one_off = [(o["code"], -o["qty_delta"], o["price"], "일회성 대표 판단(정답지 one_off) — " + o["why"])
+               for o in ans.get("one_off", [])]
+    adjust = ADJUST["*"] + ADJUST.get(key, []) + one_off
+    exp_heads = sum(l["n_heads"] for l in ans["laterals"])
+    exp_rows = [l["n_heads"] for l in ans["laterals"]]
+    got_rows = [l["n_heads"] for l in out["laterals"]]
+    exp_zones = {z["name"]: z["heads"] for z in ans["zones"]}
+    got_zones = {z["zone"]: z["n_heads"] for z in out["zones"]}
+    exp_main = float(ans["mainline"]["total_m"])
+    got_main = out["mainline"]["total_m"]
+    main_dev = abs(got_main - exp_main) / exp_main * 100
+    exp_bom = {b["code"]: b["qty"] for b in ans["bom"]}
+    got_bom = {b["code"]: b["qty"] for b in out["bom"]}
+    set_strict = set(exp_bom) == set(got_bom)
+    exp_money = ans["money"]["total"]
+    got_money = out["money"]["total"]
+    dev_strict = (got_money - exp_money) / exp_money * 100
+    # 보정 정답: 인정된 차이를 승인본에 적용
+    adj_bom = dict(exp_bom)
+    exp_adj = exp_money
+    applied = []
+    for code, delta, unit_price, why in adjust:
+        if code not in exp_bom:
+            continue
+        if delta == "제거":
+            exp_adj -= exp_bom[code] * unit_price
+            adj_bom.pop(code)
+        else:
+            exp_adj += delta * unit_price
+            adj_bom[code] += delta
+        applied.append(f"{code} {delta} ({why})")
+    set_adj = set(adj_bom) == set(got_bom)
+    dev_adj = (got_money - exp_adj) / exp_adj * 100
+    diffs = []
+    for c in sorted(set(exp_bom) | set(got_bom)):
+        if exp_bom.get(c) != got_bom.get(c):
+            diffs.append((c, exp_bom.get(c, 0), got_bom.get(c, 0)))
+    ok_heads = got_rows == exp_rows and got_zones == exp_zones
+    return {
+        "heads": (sum(got_rows), exp_heads, ok_heads, got_rows, exp_rows, got_zones, exp_zones),
+        "main": (got_main, exp_main, main_dev, main_dev <= 5.0),
+        "bom": (set_strict, set_adj, sorted(set(exp_bom) - set(got_bom)), sorted(set(got_bom) - set(exp_bom)), diffs),
+        "money": (got_money, exp_money, dev_strict, abs(dev_strict) <= 3.0, exp_adj, dev_adj, abs(dev_adj) <= 3.0),
+        "applied": applied,
+        "pass_strict": ok_heads and main_dev <= 5.0 and set_strict and abs(dev_strict) <= 3.0,
+        "pass_adj": ok_heads and main_dev <= 5.0 and set_adj and abs(dev_adj) <= 3.0,
+    }
+
+
+def run(keys: List[str], dump: bool = False, verbose: bool = True) -> Dict[str, Dict]:
+    with open(os.path.join(D, "10_계산", "_단가_DB.json"), encoding="utf-8") as f:
+        price_db = json.load(f)
+    results = {}
+    for k in keys:
+        ans, site = SITES[k]()
+        out = design(site, price_db)
+        r = compare(ans, out, k)
+        results[k] = r
+        if dump:
+            os.makedirs(os.path.join(ANS, "_재현_P1"), exist_ok=True)
+            with open(os.path.join(ANS, "_재현_P1", f"{k}_engine.json"), "w", encoding="utf-8") as f:
+                json.dump(out, f, ensure_ascii=False, indent=1)
+        if verbose:
+            h, m, b, mo = r["heads"], r["main"], r["bom"], r["money"]
+            print(f"\n[{k}] {site['name']}")
+            print(f"  두수   {h[0]} / 정답 {h[1]}  {'OK' if h[2] else 'DIFF'}   열별 {h[3]}" + ("" if h[3] == h[4] else f" ≠ {h[4]}"))
+            print(f"         구역 {h[5]}" + ("" if h[5] == h[6] else f" ≠ {h[6]}"))
+            print(f"  주배관 {m[0]} m / 정답 {m[1]} m  편차 {m[2]:.1f} %  {'OK' if m[3] else 'FAIL'}   "
+                  f"롤 {out['mainline']['rolls']} T {out['mainline']['tees']} 말단 {out['mainline']['ends']} 이음 {out['mainline']['joints']}")
+            print(f"  BOM집합 엄격 {'OK' if b[0] else 'DIFF'} · 보정(00190 제외) {'OK' if b[1] else 'DIFF'}"
+                  f"   정답에만 {b[2]}  엔진에만 {b[3]}")
+            if b[4]:
+                print("  수량차 (코드: 정답→엔진) " + ", ".join(f"{c}: {e}→{g}" for c, e, g in b[4]))
+            print(f"  금액   {mo[0]:,} / 정답 {mo[1]:,}  {mo[2]:+.1f} % {'OK' if mo[3] else 'FAIL'}"
+                  f"   보정 정답 {mo[4]:,} {mo[5]:+.1f} % {'OK' if mo[6] else 'FAIL'}")
+            for a in r["applied"]:
+                print("  보정: " + a)
+            for w in out["warnings"]:
+                print("  ⚠ " + w)
+            print(f"  → 엄격 {'통과' if r['pass_strict'] else '실패'} · 보정 {'통과' if r['pass_adj'] else '실패'}")
+    if verbose:
+        ns = sum(1 for r in results.values() if r["pass_strict"])
+        na = sum(1 for r in results.values() if r["pass_adj"])
+        print(f"\n재현율  엄격 {ns}/{len(results)} · 보정 {na}/{len(results)}  (관문 = 5 중 4)")
+    return results
+
+
+if __name__ == "__main__":
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    run(args or ["01", "02", "03", "04", "05"], dump="--dump" in sys.argv)

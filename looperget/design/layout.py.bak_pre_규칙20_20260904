@@ -1,0 +1,343 @@
+# -*- coding: utf-8 -*-
+"""
+looperget.design.layout — 폴리곤 + 가지관 방향 → 가지관 열·헤드 배치 (`rows_from_polygon`).
+
+승인본 5필지가 쓴 배치 규칙을 **하나의 엔진 + 정책(RowPolicy)** 으로 일반화한 것이다.
+원천: `_설계/배추밭스프링클러_20260824/10_계산/_계산_배치_숙진리.py` Block(04·05 — 이격 2D·말단 보충·건너뜀·각도 미세조정),
+`03_482-42_상도리/_계산_배치_v4.py`(03 — 앵커 스윕·첫 헤드 여백 스윕), `10_계산/_계산_배치_사선.py`(01)·`_계산_배치.py`(02 — 열 방향 끝 여유만, 1 m 격자 스캔).
+
+좌표계: 로컬 m. u = 가지관 방향 단위벡터(주배관 쪽 → 밭 안쪽). n = perp(u) = 열 정렬축(앵커 a = p·n).
+규칙 번호는 `.claude/agents/design-system.md` 설계 규칙.
+"""
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field, asdict
+from typing import Dict, List, Optional, Sequence, Tuple
+
+from . import geom as G
+
+Pt = Tuple[float, float]
+
+
+@dataclass
+class RowPolicy:
+    """열·헤드 배치 정책. 기본값 = 04·05 승인본(Block)."""
+    S: float = 10.0                 # 헤드 간격(살수 반경)
+    lat_gap: float = 10.0           # 열 간격(직각)
+    std: float = 5.0                # 첫 헤드 여백 기준
+    maxm: float = 6.0               # 첫 헤드 여백 최대
+    floor: float = 4.0              # 경계 이격 하한(격자 헤드)
+    lat_max: int = 7                # 열당 최대 두수(25 mm 한계) — 대표 확정으로만 넘긴다
+    mode: str = "edge2d"            # "edge2d"(경계 2D 이격 · 03·04·05) | "along_row"(열 방향 끝 여유만 · 01·02)
+    # ── 열 앵커 ──
+    anchor_from: str = "lo"         # 앵커 진행 방향: "lo" = a_lo+c 부터 증가 · "hi" = a_hi−c 부터 감소
+    anchor_fixed: Optional[float] = None          # 첫 열 이격 고정(01 = 9 · 02 = 5). None = 스윕
+    anchor_sweep: Tuple[float, float, float] = (4.0, 9.0, 0.05)   # (from, to, step) — 두수 최대 · 남북 이격 균등
+    anchor_ref_pt: Optional[Pt] = None            # 앵커 기준점(None = 폴리곤 extent). 01 = 좌상 정점 O
+    anchor_end_pt: Optional[Pt] = None            # 마지막 열 한계 기준점(None = 폴리곤 extent)
+    anchor_end_margin: Optional[float] = None     # 마지막 열 한계 이격(None = floor)
+    anchor_max: Optional[float] = None            # 앵커 오프셋 상한(01 원본 `while s <= 75`)
+    # ── 첫 헤드 여백 ──
+    off_fixed: Optional[float] = None             # 고정(01 = 7 · 02 = 8/5). None = 스윕 floor..maxm 0.25
+    # ── edge2d 세부 ──
+    start_ref: str = "polygon"      # "polygon" = 폴리곤 진입점부터 · "main" = max(진입점, 주배관 교점) (03)
+    skip: bool = True               # 규칙 5: 이격 미달 자리는 건너뛰고 계속(True) · 거기서 열 끝(False = 03 v4)
+    tail_fill: bool = True          # 규칙 11: 말단 보충 헤드
+    tail_floor: float = 2.0
+    tail_gap: float = 7.0
+    tail_near: float = 8.0          # 두둑에서 이 안쪽만(bars 있을 때)
+    refine: bool = True             # 두수 모자란 열만 ±swing 각도 미세조정(평행이 기본)
+    swing: float = 25.0
+    min_sep: float = 6.0            # 이웃 열과 최소 이격(각도 조정 시)
+    ext: float = 3.0                # 마지막 헤드 뒤 호스 여유(경계 안에서 0.5 단위로 줄임)
+    # ── along_row 세부 ──
+    end_margin: float = 5.0         # 열 끝(반대 경계) 여유
+    tail: float = 5.0               # 마지막 헤드 뒤 호스 여유(고정)
+    scan_m: Optional[float] = 1.0   # 진입·이탈을 이 격자로 스캔(원본 range 스캔). None = 정확값
+    scan_origin: Pt = (0.0, 0.0)    # 격자 원점(01 = O · 02 = (0,0))
+
+    def to_dict(self) -> Dict:
+        return asdict(self)
+
+
+@dataclass
+class Row:
+    a: float
+    p0: Pt                          # 열 시작(폴리곤 진입점 또는 주배관 교점) — 탭점은 branch가 정한다
+    p1: Pt                          # 호스 끝
+    dir: Pt                         # 열 방향(각도 조정 반영)
+    heads: List[Pt]
+    off: float
+    deg: float
+    len: float                      # 호스 길이(p0→p1)
+
+    def to_dict(self) -> Dict:
+        return {"a": round(self.a, 2), "p0": [round(self.p0[0], 1), round(self.p0[1], 1)],
+                "p1": [round(self.p1[0], 1), round(self.p1[1], 1)],
+                "dir": [round(self.dir[0], 4), round(self.dir[1], 4)],
+                "heads": [[round(h[0], 1), round(h[1], 1)] for h in self.heads],
+                "off": round(self.off, 2), "deg": round(self.deg, 1), "len": round(self.len, 1),
+                "n_heads": len(self.heads)}
+
+
+class Block:
+    """한 블록(폴리곤 1개)의 열 배치. `_계산_배치_숙진리.py` Block의 이식 + 정책화."""
+
+    def __init__(self, poly: Sequence[Pt], u: Pt, policy: RowPolicy,
+                 bars: Optional[Sequence[Tuple[Pt, Pt]]] = None,
+                 mains: Optional[Sequence[Sequence[Pt]]] = None):
+        self.poly = [tuple(p) for p in poly]
+        self.u = G.unit(tuple(u))
+        self.n = G.perp(self.u)
+        self.P = policy
+        self.bars = [(tuple(a), tuple(b)) for a, b in (bars or [])]
+        self.mains = [[tuple(p) for p in m] for m in (mains or [])]
+        self.rows: List[Row] = []
+
+    # ── 좌표 ──
+    def to_as(self, p: Pt) -> Tuple[float, float]:
+        return (G.dot(p, self.n), G.dot(p, self.u))
+
+    def to_xy(self, a: float, s: float) -> Pt:
+        return (a * self.n[0] + s * self.u[0], a * self.n[1] + s * self.u[1])
+
+    def cross(self, a: float) -> List[float]:
+        """앵커 a 열 직선과 폴리곤 변의 교점 s(오름차순)."""
+        out = []
+        n = len(self.poly)
+        for i in range(n):
+            p, q = self.poly[i], self.poly[(i + 1) % n]
+            ap, aq = self.to_as(p)[0], self.to_as(q)[0]
+            if (ap > a) == (aq > a):
+                continue
+            t = (a - ap) / (aq - ap)
+            pt = (p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1]))
+            out.append(self.to_as(pt)[1])
+        return sorted(out)
+
+    def main_cross(self, a: float) -> List[float]:
+        """앵커 a 열 직선과 주배관 폴리라인들의 교점 s."""
+        out = []
+        for m in self.mains:
+            for p, q in zip(m, m[1:]):
+                ap, aq = self.to_as(p)[0], self.to_as(q)[0]
+                if (ap > a) == (aq > a):
+                    continue
+                t = (a - ap) / (aq - ap)
+                pt = (p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1]))
+                out.append(self.to_as(pt)[1])
+        return sorted(out)
+
+    def inside(self, p: Pt) -> bool:
+        return G.contains(self.poly, p)
+
+    def edge_dist(self, p: Pt) -> float:
+        return G.edge_dist(p, self.poly)
+
+    def tail_ok(self, p: Pt) -> bool:
+        """말단 보충 헤드는 두둑(대표 작도 바)에서 tail_near 안쪽일 때만 (규칙 11)."""
+        if not self.bars:
+            return True
+        return min(G.seg_dist(p, a, b) for a, b in self.bars) <= self.P.tail_near
+
+    # ── 열 하나 ──
+    def row(self, a: float, swing: float = None, placed: Optional[List[Row]] = None) -> Optional[Row]:
+        P = self.P
+        if P.mode == "along_row":
+            return self._row_along(a)
+        swing = P.swing if swing is None else swing
+        xs = self.cross(a)
+        if len(xs) < 2:
+            return None
+        s_lo, s_hi = xs[0], xs[-1]
+        if P.start_ref == "main":
+            mx = [s for s in self.main_cross(a) if s < s_hi]
+            s0 = max(s_lo, max(mx)) if mx else s_lo
+        else:
+            s0 = s_lo
+        p0 = self.to_xy(a, s0)
+        best = None
+        deg = -swing
+        while deg <= swing + 1e-9:
+            t = math.radians(deg)
+            ux = self.u[0] * math.cos(t) - self.u[1] * math.sin(t)
+            uy = self.u[0] * math.sin(t) + self.u[1] * math.cos(t)
+            offs = [P.off_fixed] if P.off_fixed is not None else _frange(P.floor, P.maxm, 0.25)
+            for o in offs:
+                hs: List[Pt] = []
+                k = 0
+                while True:
+                    d = o + P.S * k
+                    if d > 120:
+                        break
+                    p = (p0[0] + ux * d, p0[1] + uy * d)
+                    if self.inside(p):
+                        if self.edge_dist(p) >= P.floor:
+                            hs.append((round(p[0], 1), round(p[1], 1)))
+                        elif hs and not P.skip:
+                            break                   # 03 v4: 이격 미달이면 열 끝
+                        # 규칙 5(skip): 이격 미달 자리는 구멍으로 두고 계속
+                    elif hs:
+                        break                       # 폴리곤 밖 = 열 끝
+                    k += 1
+                    if k > 14:
+                        break
+                # 규칙 11 말단 보충 헤드
+                if P.tail_fill and hs and len(hs) < P.lat_max:
+                    last_t = G.dist(p0, hs[-1])
+                    t_max = None
+                    tt = last_t + P.tail_gap
+                    while tt <= last_t + P.S + 1e-9:
+                        q = (p0[0] + ux * tt, p0[1] + uy * tt)
+                        if self.inside(q) and self.edge_dist(q) >= P.tail_floor and self.tail_ok(q):
+                            t_max = tt
+                        tt += 0.1
+                    if t_max is not None:
+                        q = (p0[0] + ux * t_max, p0[1] + uy * t_max)
+                        hs.append((round(q[0], 1), round(q[1], 1)))
+                hs = hs[:P.lat_max]
+                if hs and placed:
+                    last_d = G.dist(p0, hs[-1]) + 3.0
+                    q1 = (p0[0] + ux * last_d, p0[1] + uy * last_d)
+                    if any(G.seg_seg_dist(p0, q1, r.p0, r.p1) < P.min_sep for r in placed):
+                        continue
+                if hs:
+                    sc = (len(hs), -abs(deg), -abs(o - P.std))
+                    if best is None or sc > best[0]:
+                        best = (sc, deg, o, hs, (ux, uy))
+            deg += 1.0
+        if best is None:
+            return None
+        _, deg, off, hs, uu = best
+        last = G.dist(p0, hs[-1])
+        ext = P.ext
+        while ext > 0 and not self.inside((p0[0] + uu[0] * (last + ext), p0[1] + uu[1] * (last + ext))):
+            ext -= 0.5
+        p1 = (p0[0] + uu[0] * (last + ext), p0[1] + uu[1] * (last + ext))
+        return Row(a=a, p0=p0, p1=p1, dir=uu, heads=list(hs), off=off, deg=deg, len=round(last + ext, 1))
+
+    def _row_along(self, a: float) -> Optional[Row]:
+        """01·02 방식: 열 방향의 진입·이탈만 보고(경계 2D 이격 없음) 첫 헤드 여백 + 끝 여유."""
+        P = self.P
+        xs = self.cross(a)
+        if len(xs) < 2:
+            return None
+        s_in, s_out = xs[0], xs[-1]
+        if P.scan_m:
+            t0 = G.dot(P.scan_origin, self.u)
+            g = P.scan_m
+            entry = t0 + math.ceil((s_in - t0) / g - 1e-9) * g
+            exit_ = t0 + math.floor((s_out - t0) / g + 1e-9) * g
+        else:
+            entry, exit_ = s_in, s_out
+        if exit_ - entry < P.S:
+            return None
+        off = P.off_fixed if P.off_fixed is not None else P.std
+        a0, b0 = entry + off, exit_ - P.end_margin
+        if b0 < a0:
+            return None
+        k = int((b0 - a0) // P.S) + 1
+        k = min(k, P.lat_max)
+        p0 = self.to_xy(a, entry)
+        hs = [self.to_xy(a, a0 + i * P.S) for i in range(k)]
+        hs = [(round(h[0], 1), round(h[1], 1)) for h in hs]
+        L = off + (k - 1) * P.S + P.tail
+        p1 = self.to_xy(a, entry + L)
+        return Row(a=a, p0=p0, p1=p1, dir=self.u, heads=hs, off=off, deg=0.0, len=round(L, 1))
+
+    # ── 열 앵커 ──
+    def _anchor_bounds(self) -> Tuple[float, float]:
+        av = [self.to_as(p)[0] for p in self.poly]
+        a_lo, a_hi = min(av), max(av)
+        P = self.P
+        if P.anchor_ref_pt is not None:
+            ref = self.to_as(tuple(P.anchor_ref_pt))[0]
+            if P.anchor_from == "lo":
+                a_lo = ref
+            else:
+                a_hi = ref
+        if P.anchor_end_pt is not None:
+            end = self.to_as(tuple(P.anchor_end_pt))[0]
+            if P.anchor_from == "lo":
+                a_hi = end
+            else:
+                a_lo = end
+        return a_lo, a_hi
+
+    def _anchors(self, c: float) -> List[float]:
+        P = self.P
+        a_lo, a_hi = self._anchor_bounds()
+        em = P.floor if P.anchor_end_margin is None else P.anchor_end_margin
+        out = []
+        i = 0
+        while True:
+            off = c + P.lat_gap * i
+            if P.anchor_max is not None and off > P.anchor_max + 1e-9:
+                break
+            a = a_lo + off if P.anchor_from == "lo" else a_hi - off
+            if P.anchor_from == "lo" and a > a_hi - em + 1e-9:
+                break
+            if P.anchor_from == "hi" and a < a_lo + em - 1e-9:
+                break
+            out.append(a)
+            i += 1
+        return out
+
+    def solve(self) -> "Block":
+        P = self.P
+        cs = [P.anchor_fixed] if P.anchor_fixed is not None else _frange(*P.anchor_sweep)
+        best = None
+        for c in cs:
+            rows = []
+            for a in self._anchors(c):
+                r = self.row(a, swing=0.0)
+                if r:
+                    rows.append(r)
+            if rows:
+                n = sum(len(r.heads) for r in rows)
+                a_lo, a_hi = self._anchor_bounds()
+                c2 = (a_hi - rows[-1].a) if P.anchor_from == "lo" else (rows[-1].a - a_lo)
+                sc = (n, -abs(c - c2))
+                if best is None or sc > best[0]:
+                    best = (sc, c, c2, rows)
+        if best is None:
+            self.rows = []
+            return self
+        _, self.c1, self.c2, self.rows = best
+        if P.refine and P.mode == "edge2d":
+            self.refine()
+        return self
+
+    def refine(self, rounds: int = 2) -> "Block":
+        """평행이 기본. 두수가 모자란 열부터 ±swing 각도를 훑어 더 들어가면 바꾼다(이웃 이격 min_sep)."""
+        for _ in range(rounds):
+            changed = False
+            order = sorted(range(len(self.rows)), key=lambda i: len(self.rows[i].heads))
+            for i in order:
+                others = [r for j, r in enumerate(self.rows) if j != i]
+                cur = self.rows[i]
+                cand = self.row(cur.a, placed=others)
+                if cand and len(cand.heads) > len(cur.heads):
+                    self.rows[i] = cand
+                    changed = True
+            if not changed:
+                break
+        return self
+
+
+def rows_from_polygon(poly: Sequence[Pt], u: Pt, policy: Optional[RowPolicy] = None,
+                      bars: Optional[Sequence[Tuple[Pt, Pt]]] = None,
+                      mains: Optional[Sequence[Sequence[Pt]]] = None) -> List[Row]:
+    """폴리곤 + 가지관 방향 u(주배관 쪽 → 밭 안쪽) → 열 목록(주배관 쪽부터 순서대로)."""
+    b = Block(poly, u, policy or RowPolicy(), bars=bars, mains=mains).solve()
+    return b.rows
+
+
+def _frange(a: float, b: float, step: float) -> List[float]:
+    out = []
+    x = a
+    while x <= b + 1e-9:
+        out.append(round(x, 6))
+        x += step
+    return out

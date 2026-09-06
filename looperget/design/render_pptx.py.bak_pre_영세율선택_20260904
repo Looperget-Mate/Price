@@ -1,0 +1,1015 @@
+# -*- coding: utf-8 -*-
+"""
+looperget.design.render_pptx — 설계 요약(job) → 농업 제안서 PPTX (마스터 복제·치환).
+
+정본
+  · 형식 = 농업 제안서 마스터 28면 `_설계/_농업제안서_마스터/마스터_농업제안서_v1_20260824.pptx`
+    (고정면은 그대로 재사용 — 디자인 정본 §7)
+  · 지도면 문법 = 승인 배추밭 5필지 생성기(`20_생성기/_생성_숙진리.py` · `_생성_482_v4.py`)를
+    **설계 JSON 입력형**으로 일반화 — 누적 레이어 · 지도 밖 지시 라벨(규칙 16) · 사선 분기 곡선(규칙 14)
+    · 주배관 > 가지관 굵기(규칙 4) · 살수원 이중 원(10 m / 7 m)
+  · 부속 소개 = 디자인 정본 v1 `_디자인정본/표준_pptx.py` 카드·칩·뱃지 (§5) — 세트명 병기(규칙 8·10)
+  · 대표 계통도(규칙 7)는 meta.sketch_pages 로 받아 **그대로 옮긴다**(다시 그리지 않는다)
+
+숫자는 전부 summary.build(job)에서 온다 — 이 파일은 값을 만들지 않는다.
+"""
+from __future__ import annotations
+
+import copy
+import io
+import json
+import os
+import re
+import shutil
+import sys
+from typing import Dict, List, Optional, Sequence, Tuple
+
+from . import geom as G
+from . import qr as QR
+
+from PIL import Image
+from pptx import Presentation
+from pptx.dml.color import RGBColor
+from pptx.enum.dml import MSO_LINE_DASH_STYLE
+from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.text import PP_ALIGN
+from pptx.oxml.ns import qn
+from pptx.util import Emu, Inches, Pt
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+for _p in (os.path.join(ROOT, "tools"), os.path.join(ROOT, "_디자인정본")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+import agri_overlay as ov                                             # noqa: E402
+from agri_overlay import MapFrame, pipe, head_dot, spray_double, caption, leader, dim_chain, dim_side  # noqa: E402
+import 표준_pptx as DS                                                # noqa: E402
+
+MASTER = os.path.join(ROOT, "_설계", "_농업제안서_마스터", "마스터_농업제안서_v1_20260824.pptx")
+R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+CAP_X, CAP_Y, CAP_W = 8.30, 1.45, 4.80                # 캡션 자리(승인 지면 실측)
+W_MAIN, W_LAT, W_BURIED = DS.HOSE.MAIN_PT, DS.HOSE.BRANCH_PT, 1.6   # 규칙 4
+GRN = RGBColor(0x00, 0xB0, 0x50)
+
+# 총내역 고정면의 영세율 안내 — 견적서 비고와 **같은 문구**로 통일한다(마스터 원문은 손대지 않는다).
+#  · 조특법 제105조는 「면제」가 아니라 **영세율** 조항이다(2026-08-31 확인, log). 마스터엔 「면제 대상」으로 적혀 있었다.
+#  · 제출 서류명 = 「농업경영체 등록확인서」(농업회사법인은 사업자등록증) — 견적 비고·영세율 확인서와 일치.
+#  · 조문 호수를 적을지는 열린 결정(세무대리인 확인). 줄 길이는 고정면이 wrap=False라 원문 길이를 넘기지 않는다.
+VAT_ZERO = [
+    "[농업용 기자재 영세율(부가세0%) 적용 안내]",
+    "적용 근거: 조세특례제한법 제105조 (농업용 스프링클러 설비 부가가치세 영세율 적용 대상)",
+    "적용 혜택: 본 견적은 농가의 시설 투자 부담을 덜어드리기 위해 부가가치세를 영세율(0 %)로 적용한 최종 금액입니다.",
+    "필수 협조사항: 영세율 적용·신고를 위해 결제 전 「농업경영체 등록확인서」(농업회사법인은 사업자등록증) 사본을 제출해 주시기 바랍니다.",
+]
+LINE2 = RGBColor(0xA6, 0x4B, 0xE8)                    # 둘째 줄(구역선) — 보라(승인 규약)
+BURIED = RGBColor(0x9A, 0x9A, 0x9A)
+P4_LOGO_Y = 6.70        # 면4 하단 고정 로고(레이아웃 그림 L0.68 T6.70 W1.25) — 이 위로만 쓴다
+ov.FONT = DS.T.CAPTION                                # 생성 텍스트 서체 = 정본 §3 (고정면은 마스터 그대로)
+
+# 마스터 면 지도 (0-base)
+M = {"표지": 0, "장점": 1, "주의": 2, "상호확인": 3, "대상지": 4, "주배관": 5, "주배관상세": 6,
+     "가지관": 7, "가지관상세": 8, "스프링클러": 9, "스프링클러상세": 10, "헤드성능": 11,
+     "전체": 12, "구역": list(range(13, 21)), "총내역": 21, "꼬리": list(range(22, 28))}
+
+
+# ══════════════ 지면 조작 ══════════════
+def replace_text(slide, old, new):
+    n = 0
+
+    def walk(shapes):
+        nonlocal n
+        for sh in shapes:
+            if sh.shape_type == 6:
+                walk(sh.shapes)
+                continue
+            if not sh.has_text_frame:
+                continue
+            for para in sh.text_frame.paragraphs:
+                runs = para.runs
+                if any(old in r.text for r in runs):
+                    for r in runs:
+                        if old in r.text:
+                            r.text = r.text.replace(old, new)
+                            n += 1
+                elif runs and old in "".join(r.text for r in runs):
+                    runs[0].text = "".join(r.text for r in runs).replace(old, new)
+                    for r in runs[1:]:
+                        r._r.getparent().remove(r._r)
+                    n += 1
+    walk(slide.shapes)
+    return n
+
+
+def clear_slide(slide, keep_top_in=1.0):
+    for sh in list(slide.shapes):
+        if not (sh.has_text_frame and sh.top is not None and sh.top < Inches(keep_top_in)):
+            sh._element.getparent().remove(sh._element)
+
+
+def est_lines(text, box_in, pt, pad=0.20):
+    """텍스트가 몇 줄로 접히는지 어림 — 한글·한자 1.0 em · 공백 0.30 · 그 밖 0.52.
+    실측 대조(면4 각주 12.1 in · 12 pt): 8.23 / 10.13 / 11.76 in 로 렌더 결과와 일치."""
+    em = sum(1.0 if ord(c) > 0x2000 else (0.30 if c == " " else 0.52) for c in text)
+    return max(1, int(-(-(em * pt / 72.0) // (box_in - pad))))
+
+
+def set_paragraphs(shape, texts):
+    """문단 텍스트 교체 — 첫 run 서식 유지. 문단이 모자라면 마지막 문단을 복제해 늘린다(줄이 사라지지 않게)."""
+    tf = shape.text_frame
+    while len(tf.paragraphs) < len(texts):
+        last = tf.paragraphs[-1]._p
+        last.addnext(copy.deepcopy(last))
+    paras = tf.paragraphs
+    for i, p in enumerate(paras):
+        if i < len(texts):
+            runs = p.runs
+            if runs:
+                runs[0].text = texts[i]
+                for r in runs[1:]:
+                    r._r.getparent().remove(r._r)
+        else:
+            p._p.getparent().remove(p._p)
+
+
+def set_title(slide, text):
+    for sh in slide.shapes:
+        if sh.has_text_frame and sh.top is not None and sh.top < Inches(1.0) and sh.text_frame.text.strip():
+            set_paragraphs(sh, [text])
+            return True
+    DS.title(slide, text)
+    return False
+
+
+def copy_shapes(dst, src_slide, dx_in=0.0, dy_in=0.0, skip_pred=None):
+    """다른 파일의 슬라이드 도형을 dst에 복사(+오프셋). 이미지 파트는 blob 재등록, 비이미지 파트는 새 파트명."""
+    same = src_slide.part.package is dst.part.package
+    mapping = {}
+    for rId, rel in src_slide.part.rels.items():
+        if "notesSlide" in rel.reltype or "slideLayout" in rel.reltype:
+            continue
+        if rel.is_external:
+            mapping[rId] = dst.part.rels.get_or_add_ext_rel(rel.reltype, rel.target_ref)
+        elif same:
+            mapping[rId] = dst.part.relate_to(rel.target_part, rel.reltype)
+        elif rel.reltype.endswith("/image"):
+            _, mapping[rId] = dst.part.get_or_add_image_part(io.BytesIO(rel.target_part.blob))
+        else:
+            from pptx.opc.package import Part
+            from pptx.opc.packuri import PackURI
+            tp = rel.target_part
+            stem = re.sub(r"\d+(?=\.\w+$)", "%d", str(tp.partname))
+            pn = dst.part.package.next_partname(stem) if "%d" in stem else PackURI(str(tp.partname))
+            mapping[rId] = dst.part.relate_to(Part(pn, tp.content_type, dst.part.package, tp.blob), rel.reltype)
+    out, added = [], []
+    for shp in src_slide.shapes:
+        if skip_pred and skip_pred(shp):
+            continue
+        el = copy.deepcopy(shp._element)
+        dst.shapes._spTree.append(el)
+        added.append(el)
+        new = dst.shapes[-1]
+        try:
+            new.left = Emu(int(new.left + Inches(dx_in)))
+            new.top = Emu(int(new.top + Inches(dy_in)))
+        except Exception:
+            pass
+        out.append(new)
+    for root in added:                      # 새로 붙인 요소 안에서만 rId를 바꾼다
+        for el in root.iter():
+            for attr, val in list(el.attrib.items()):
+                if attr.startswith("{%s}" % R_NS) and val in mapping:
+                    el.set(attr, mapping[val])
+    return out
+
+
+def move_before(prs, slide, anchor):
+    lst = prs.slides._sldIdLst
+    ids = {prs.part.rels[e.get(qn("r:id"))].target_part: e for e in list(lst)}
+    me, an = ids[slide.part], ids[anchor.part]
+    lst.remove(me)
+    lst.insert(list(lst).index(an), me)
+
+
+def delete_slide(prs, slide):
+    for sldId in list(prs.slides._sldIdLst):
+        rId = sldId.get(qn("r:id"))
+        if prs.part.rels[rId].target_part is slide.part:
+            prs.part.drop_rel(rId)
+            prs.slides._sldIdLst.remove(sldId)
+            return
+
+
+def new_slide_before(prs, anchor):
+    s = prs.slides.add_slide(anchor.slide_layout)
+    for ph in list(s.placeholders):
+        ph._element.getparent().remove(ph._element)
+    move_before(prs, s, anchor)
+    return s
+
+
+def label(slide, x, y, text, size=11, color=None, w=3.0, bold=True, align=PP_ALIGN.LEFT, wrap=True):
+    return DS.text(slide, x, y, text, size=size, font=DS.T.HEAD if bold else DS.T.BODY,
+                   color=color or DS.C.INK, w=w, h=0.28, bold=bold, align=align, wrap=wrap)
+
+
+def bullets(slide, x, y, w, lines, size=11.5, gap=5, color=None):
+    tb = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(0.3))
+    tf = tb.text_frame
+    tf.word_wrap = True
+    hang = int(Inches(0.02 * size))
+    for i, t in enumerate(lines):
+        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        p.space_after = Pt(gap)
+        pPr = p._p.get_or_add_pPr()
+        pPr.set("marL", str(hang))
+        pPr.set("indent", str(-hang))
+        r = p.add_run()
+        r.text = "▷ " + t
+        r.font.name = DS.T.BODY
+        r.font.size = Pt(size)
+        r.font.color.rgb = color or DS.C.INK700
+    return tb
+
+
+# ══════════════ 지도 ══════════════
+class Map:
+    """meta.map = {"png", "pic": {left_in, top_in, w_in, h_in, src}, "m_per_in"} — 승인본 좌표 계약.
+    지도 위 미터 좌표 ↔ 위성 px 사상. P3 지도 어댑터(print_tile)가 이 블록을 채운다."""
+
+    def __init__(self, meta_map: Dict, work_dir: str):
+        self.png = meta_map["png"]
+        self.img = Image.open(self.png).convert("RGB")
+        self.PIC, self.MI = meta_map["pic"], float(meta_map["m_per_in"])
+        self.work = work_dir
+        os.makedirs(work_dir, exist_ok=True)
+
+    def m2px(self, xm, ym):
+        P = self.PIC
+        return (P["src"][0] + (xm / self.MI - P["left_in"]) / P["w_in"] * P["src"][2],
+                P["src"][1] + (ym / self.MI - P["top_in"]) / P["h_in"] * P["src"][3])
+
+    def px2m(self, px, py):
+        P = self.PIC
+        return ((px / P["src"][2] * P["w_in"] + P["left_in"]) * self.MI,
+                (py / P["src"][3] * P["h_in"] + P["top_in"]) * self.MI)
+
+    def place(self, slide, crop_m, tag, left=0.9, top=1.25, max_w=7.2, max_h=5.4) -> MapFrame:
+        x0, y0, x1, y1 = crop_m
+        p0, p1 = self.m2px(x0, y0), self.m2px(x1, y1)
+        px = [max(0, int(p0[0])), max(0, int(p0[1])), min(self.img.width, int(p1[0])), min(self.img.height, int(p1[1]))]
+        fn = os.path.join(self.work, "_지도크롭_%s.png" % re.sub(r"\W+", "", tag))
+        self.img.crop(px).resize(((px[2] - px[0]) * 3, (px[3] - px[1]) * 3), Image.LANCZOS).save(fn)
+        xm0, ym0 = self.px2m(px[0], px[1])
+        xm1, ym1 = self.px2m(px[2], px[3])
+        ar = (xm1 - xm0) / (ym1 - ym0)
+        w = min(max_w, max_h * ar)
+        h = w / ar
+        ox, oy = left + (max_w - w) / 2, top + (max_h - h) / 2
+        slide.shapes.add_picture(fn, Inches(ox), Inches(oy), Inches(w), Inches(h))
+        fr = MapFrame(ox, oy, w, h, xm0, ym0, xm1, ym1)
+        fr.rect = (ox, oy, w, h)
+        return fr
+
+
+def place_leaders(slide, fr, marks, cap_x=CAP_X, gap=0.40, size=13):
+    """지시 라벨을 지도 오른쪽 여백에 세로로 펼친다(규칙 16). marks = [(대상점 m, 글자, 이름)]"""
+    L, T, W, H = fr.rect
+    bx = L + W + 0.24
+    tx = bx + 0.30
+    tw = max(0.55, cap_x - 0.14 - tx)
+    items = sorted([[Emu(fr.xy(*tgt)[1]).inches, tgt, ch, nm] for tgt, ch, nm in marks], key=lambda z: z[0])
+    if not items:
+        return []
+    ys = [z[0] for z in items]
+    for i in range(1, len(ys)):
+        if ys[i] - ys[i - 1] < gap:
+            ys[i] = ys[i - 1] + gap
+    over = ys[-1] - (T + H - 0.16)
+    if over > 0:
+        ys = [y - over for y in ys]
+    if ys[0] < T + 0.16:
+        ys = [y + (T + 0.16 - ys[0]) for y in ys]
+    for y, (_, tgt, ch, nm) in zip(ys, items):
+        lm = ((bx - fr.ox) / fr.s, (y - fr.oy) / fr.s)
+        leader(slide, fr, tgt, lm, ch, size=size)
+        if nm:
+            label(slide, tx, y - 0.105, nm, size=8.0, color=DS.C.INK500, w=tw, bold=False)
+    return items
+
+
+# ══════════════ 렌더러 ══════════════
+class Renderer:
+    def __init__(self, job: Dict, summary: Dict, out_pptx: str, work_dir: Optional[str] = None):
+        self.job, self.S, self.out = job, summary, out_pptx
+        self.site, self.design, self.meta = job["site"], job["design"], job.get("meta", {})
+        self.work = work_dir or os.path.join(os.path.dirname(out_pptx), "_작업")
+        self.map = Map(self.meta["map"], os.path.join(self.work, "지도크롭"))
+        self.polys = [[tuple(p) for p in b["polygon"]] for b in self.site["blocks"]]
+        self.routes = [dict(r, pts=[tuple(p) for p in r["pts"]]) for r in self.site["routes"]]
+        self.lats = self.design["laterals"]
+        self.tx = self.meta.get("texts", {})
+        self.water = self.meta.get("water", {})
+        self.img_dir = self.meta.get("part_img_dir")
+        zones = [str(r.get("zone")) for r in self.routes if r.get("zone") is not None]
+        self.zone_color = {}
+        for z in dict.fromkeys(zones):
+            self.zone_color[z] = ov.PIPE_MAIN if not self.zone_color else LINE2
+        self.qr_dir = os.path.join(self.work, "_qr")
+        try:
+            _pdb = json.load(open(self.meta["price_db"], encoding="utf-8")) if self.meta.get("price_db") else {}
+        except Exception:
+            _pdb = {}
+        self.qr_links = QR.links(_pdb)          # {코드: 설치 영상 URL} — 정본 = AQ_Items `QR링크`
+        self.log: List[str] = []
+
+    # ── 그리기 층 ──
+    def draw_field(self, s, fr, color=ov.DIM, w=2.2):
+        for poly in self.polys:
+            pipe(s, fr, poly + [poly[0]], color=color, weight=w, dash=MSO_LINE_DASH_STYLE.DASH)
+
+    def draw_buried(self, s, fr, w=W_BURIED, pipes=True):
+        if not self.water.get("buried"):
+            return
+        pipe(s, fr, [tuple(p) for p in self.water["buried"]], color=BURIED, weight=w, dash=MSO_LINE_DASH_STYLE.ROUND_DOT)
+        if pipes:
+            for pp in self.water.get("pipes", []):
+                pipe(s, fr, [tuple(pp["tail"]), tuple(pp["tip"])], color=BURIED, weight=w + 0.8)
+                head_dot(s, fr, pp["tip"][0], pp["tip"][1], r_in=0.035, color=BURIED)
+
+    def draw_main(self, s, fr, w=W_MAIN, only=None):
+        for r in self.routes:
+            z = None if r.get("zone") is None else str(r["zone"])
+            col = ov.PIPE_MAIN if z is None else self.zone_color.get(z, ov.PIPE_MAIN)
+            if only is not None and z is not None and z != only:
+                col = ov.GREY
+            pipe(s, fr, r["pts"], color=col, weight=w + (0.5 if z is None else 0))
+        for p, _tag in self.S["tees"]:
+            head_dot(s, fr, p[0], p[1], r_in=0.055, color=ov.INK)
+        for src in self.S["sources"]:
+            head_dot(s, fr, src["pt"][0], src["pt"][1], r_in=0.07, color=GRN)
+
+    def draw_joints(self, s, fr, r_in=0.055):
+        for j in self.S["joints"]:
+            head_dot(s, fr, j["pt"][0], j["pt"][1], r_in=r_in, color=ov.DIM)
+
+    def draw_lats(self, s, fr, w=W_LAT, ids=None):
+        for l in self.lats:
+            if ids is None or l["id"] in ids:
+                pts = [tuple(q) for q in (l.get("path") or [l["p0"], l["p1"]])]
+                pipe(s, fr, pts, color=ov.PIPE_SUB, weight=w)
+
+    def draw_heads(self, s, fr, r_in=0.045, ids=None):
+        for l in self.lats:
+            if ids is None or l["id"] in ids:
+                for hx, hy in l["heads"]:
+                    head_dot(s, fr, hx, hy, r_in=r_in)
+
+    def part_png(self, code):
+        if self.img_dir:
+            p = os.path.join(self.img_dir, "%s.png" % code)
+            if os.path.exists(p):
+                return p
+        self.log.append("부속 사진 없음 %s" % code)
+        return None
+
+    # ── 연결부 카드(정본 §5 카드+칩+뱃지) ──
+    def set_card(self, s, x, y, w, ch, title, setname, parts, note, h=None):
+        """parts = [(code, 이름, 규격)] — 부속은 전부 칩 안에(정본 §5-1)."""
+        h = h or DS.CARD.H
+        DS.card(s, x, y, w, h=h)                      # 세트명은 제목 아래 한 줄(겹침 금지)
+        DS.badge(s, x + DS.BADGE.IN, y + DS.BADGE.IN, ch)
+        label(s, x + DS.BADGE.IN + DS.BADGE.D + 0.10, y + DS.BADGE.IN, title, size=12, w=w - 0.9)
+        DS.text(s, x + DS.BADGE.IN + DS.BADGE.D + 0.10, y + DS.BADGE.IN + 0.30, "세트  %s" % setname,
+                size=9.5, font=DS.T.CAPTION, color=DS.C.INK500, w=w - 0.9, h=0.20)
+        cx = x + 0.22
+        cy = y + 0.78
+        pitch = min(DS.CHIP.PITCH_MAX, max(DS.CHIP.PITCH_MIN, (w - 0.44) / max(1, len(parts))))
+        items = [(nm, sp, self.part_png(code)) for code, nm, sp in parts]
+        DS.chip_row(s, cx, cy, items, pitch=pitch)
+        DS.text(s, x + 0.22, y + h - 0.52, note, size=9.5, font=DS.T.BODY, color=DS.C.INK700, w=w - 0.44, h=0.48)
+
+    # ── 부속 설치 영상 QR (대표 지시 2026-09-04) ──
+    def video_page(self, prs, anchor, codes):
+        """QR링크가 있는 부속만 모아 한 면에 세운다 — 낱개 칩 옆에 QR, 그림 자체에 하이퍼링크.
+
+        지저분해지지 않게 **부속이 나오는 면마다 흩뿌리지 않고 한 면에 모은다**(대표 지시).
+        QR 변 = 0.85 in ≈ 21.6 mm — 인쇄 정본 §5-1의 최소 15 mm 위. PDF에서는 눌러도 열린다.
+        """
+        rows = [(c, self.qr_links[c]) for c in codes if c in self.qr_links]
+        if not rows:
+            return None
+        s = new_slide_before(prs, anchor)
+        clear_slide(s, keep_top_in=0.0)
+        DS.title(s, "부속 설치 영상",
+                 "QR을 휴대폰 카메라로 비추면 설치 영상이 열립니다 — PDF로 보실 때는 QR을 그대로 누르셔도 됩니다")
+        names = {b["code"]: (b.get("name", ""), b.get("spec", "")) for b in self.S["bom"]}
+        NCOL, GAP = 4, 0.26
+        cw = (DS.SLIDE_W - DS.G.MARGIN_L - DS.G.MARGIN_R - GAP * (NCOL - 1)) / NCOL
+        qs = 0.85                                     # QR 변(in) — 21.6 mm
+        y0, pitch_y = DS.G.ROW1_Y + 0.34, 2.30
+        for i, (code, url) in enumerate(rows):
+            x = DS.G.MARGIN_L + (i % NCOL) * (cw + GAP)
+            y = y0 + (i // NCOL) * pitch_y
+            nm_full, sp = names.get(code, ("", ""))
+            nm = re.sub(r"\s*\(.*?\)", "", re.sub(r"^스마트카플러\s*", "", nm_full)).strip() or code
+            DS.chip(s, x, y, nm, "", self.part_png(code))   # 규격은 아래 줄로 — 이름표 넘침 방지
+            qx, qy = x + DS.CHIP.FRAME_W + 0.20, y + (DS.CHIP.FRAME_H - qs) / 2
+            png = QR.png(url, self.qr_dir)
+            if png:
+                pic = s.shapes.add_picture(png, Inches(qx), Inches(qy), Inches(qs), Inches(qs))
+                try:
+                    pic.click_action.hyperlink.address = url      # PDF에서 눌러서 열기
+                except Exception:
+                    self.log.append("QR 하이퍼링크 실패 %s" % code)
+            else:
+                DS.text(s, qx, qy + qs * 0.35, "영상 준비중", size=9, font=DS.T.CAPTION,
+                        color=DS.C.INK500, w=qs, h=0.24, align=PP_ALIGN.CENTER)
+                self.log.append("QR 생성 실패 %s" % code)
+            DS.text(s, qx, qy + qs + 0.06, "▶ 눌러서 보기", size=8.5, font=DS.T.CAPTION,
+                    color=DS.C.INK500, w=qs + 0.3, h=0.20)
+            DS.text(s, x, y + DS.CHIP.FRAME_H + DS.CHIP.GAP_BELOW + DS.CHIP.NAME_H + 0.06,
+                    "%s  ·  %s%s" % (code, nm_full, ("  ·  " + sp) if sp else ""),
+                    size=8.5, font=DS.T.CAPTION, color=DS.C.INK500, w=cw, h=0.34)
+        caption(s, DS.G.MARGIN_L, y0 + ((len(rows) - 1) // NCOL) * pitch_y + 1.86,
+                DS.SLIDE_W - DS.G.MARGIN_L - DS.G.MARGIN_R,
+                "설치 영상 %d편 — 스마트카플러 · 조임식 연결구" % len(rows),
+                ["영상은 부속 조립 순서만 보여줍니다 — 배관 경로·헤드 자리는 앞의 지면을 따르십시오",
+                 "인쇄본에서는 QR을 찍으시고, 화면(PDF)에서는 QR을 누르시면 같은 영상이 열립니다"])
+        self.log.append("설치 영상 면 %d개소" % len(rows))
+        return s
+
+    # ── 지면 ──
+    def build(self) -> str:
+        S, meta, tx = self.S, self.meta, self.tx
+        os.makedirs(os.path.dirname(self.out), exist_ok=True)
+        shutil.copy(MASTER, self.out)
+        prs = Presentation(self.out)
+        sl = list(prs.slides)
+        P = {k: (sl[v] if isinstance(v, int) else [sl[i] for i in v]) for k, v in M.items()}
+        fmt_n = lambda v: format(v, ",")
+
+        # 01 표지
+        replace_text(P["표지"], "{{대상지}}", "%s · %s" % (meta.get("site_short", S["site_label"]), S["name"]))
+
+        # 04 상호 확인사항
+        s = P["상호확인"]
+        est = lambda texts: 0.20 + sum(-(-len(t) // 52) for t in texts) * 0.34     # 문단 높이 어림(in)
+        water_texts = [self.water.get("start_line", "급수원(관정·물탱크·펌프)은 고객 보유 — 본 제안은 펌프 토출측 여과기부터 구성합니다")]
+        water_texts += list(tx.get("topo", [])) or ["—"]
+        water_texts.append("헤드 간격 10 m · 총 %d두 · %d구역(%s두 · 한 구역 최대 25두 이내)"
+                           % (S["n_heads"], len(S["zones"]), " · ".join(str(z["n_heads"]) for z in S["zones"])))
+        filt_texts = tx.get("filter_note") or ["스프링클러 설치 시, 반드시 여과기를 설치해야 합니다",
+                                              "여과기 미설치·미청소로 인한 피해에 대해 당사에게 책임을 물을 수 없음"]
+        y_water, y_filt = 1.30, 1.30 + est(water_texts) + 0.22
+        for sh in s.shapes:
+            if not sh.has_text_frame:
+                continue
+            t = sh.text_frame.text
+            if "설계 제안" in t:
+                set_paragraphs(sh, water_texts)
+                sh.height = Inches(est(water_texts))
+            elif "여과기를 설치" in t:
+                set_paragraphs(sh, filt_texts)
+                sh.top, sh.height = Inches(y_filt), Inches(est(filt_texts))
+            elif t.strip() == "여과기":
+                sh.top = Inches(y_filt)
+        y_note = y_filt + est(filt_texts) + 0.25
+        lines = [(ov.DIM, "※ 이격 기준(반경 10 m) — 첫 스프링클러까지 기준 5 m · 최대 6 m · 하한 4 m (반경 12 m면 기준 7 m · 최대 8 m)"),
+                 (DS.C.INK500, "   두둑과 나란히 가지관을 눕혀 밭 커버율 %.0f %% · 헤드–경계 %.1f m 이상 — 열 끝은 간격을 좁혀 헤드를 하나 더 넣어 끝까지 물이 갑니다"
+                  % (S["cover"] * 100, S["edge_min_m"]))]
+        if S["hydro"]:
+            worst = min(S["hydro"], key=lambda r: r["p_end"])
+            pump = worst.get("pump", "[미확정]")
+            if "need_hp" in worst:
+                lines.append((DS.C.INK500, "※ 펌프 [미확정] — 최대 구역 %d두 요구 = %d L/분 @ %d m (축동력 %.1f HP 이상)"
+                              % (worst["heads"], worst["Q"], worst["need_head_m"], worst["need_hp"])))
+            else:
+                lines.append((DS.C.INK500, "※ 펌프 %s 1대(농가 보유) — 최대 구역 %d두 말단 %.2f bar · 살수 반경 %.1f m → %s"
+                              % (pump, worst["heads"], worst["p_end"], worst["radius_end"],
+                                 ("목표 1.50 bar(반경 10 m)에 %.2f bar 부족 — %d두로 줄이면 맞습니다" % (1.5 - worst["p_end"], worst.get("cap_15bar", worst["heads"])))
+                                 if worst["p_end"] < 1.5 else "목표(1.50 bar · 반경 10 m) 만족. 구역별 운전점은 살수 예시 면에")))
+        y_foot = max(4.45, y_note)
+        tb = s.shapes.add_textbox(Inches(0.6), Inches(y_foot), Inches(12.1), Inches(1.9))
+        tb.text_frame.word_wrap = True
+        for i, (col, t) in enumerate(lines):
+            p = tb.text_frame.paragraphs[0] if i == 0 else tb.text_frame.add_paragraph()
+            r = p.add_run()
+            r.text = t
+            r.font.name = DS.T.HEAD
+            r.font.size = Pt(12.0)
+            r.font.bold = True
+            r.font.color.rgb = col
+            p.space_after = Pt(4)
+        # 각주 아래 빈자리 — 면19 표가 길면 「다음 단계」가 여기로 내려온다
+        self.p4_free_y = y_foot + 0.05 + sum(est_lines(t, 12.10, 12.0) for _, t in lines) * 0.255
+
+        # 05 대상지 개요
+        s = P["대상지"]
+        clear_slide(s)
+        set_title(s, "대상지 개요")
+        fr = self.map.place(s, meta["map"]["wide_m"], "전체", left=0.8, top=1.2, max_w=7.6, max_h=5.9)
+        self.draw_field(s, fr, ov.DIM, 2.5)
+        self.draw_buried(s, fr, 2.0)
+        for src in S["sources"]:
+            head_dot(s, fr, src["pt"][0], src["pt"][1], r_in=0.07, color=GRN)
+        caption(s, 8.7, 1.45, 4.3, S["name"], [
+            "살수 면적 약 %s ㎡ (약 %s 평)" % (fmt_n(S["area_m2"]), fmt_n(S["area_py"])),
+            tx.get("size_txt", "블록 %d개" % len(self.polys)),
+            "빨간 점선 = 이번 제안 대상지",
+            tx.get("wide_note", ("회색 점선 = 기설 매설 배관 %.0f m (농가)" % self.water["buried_len_m"]) if self.water.get("buried") else "매설 배관 없음"),
+            "초록 점 = %s" % self.water.get("start_kind", "급수 시작점"),
+        ], title_color=ov.DIM)
+
+        # 05-b 대표 계통도 지면 (규칙 7 — 그대로 옮긴다)
+        for sp in meta.get("sketch_pages", []):
+            src = Presentation(sp["pptx"])
+            ns = new_slide_before(prs, P["주배관"])
+            copy_shapes(ns, src.slides[sp["slide"]], dx_in=sp.get("dx_in", 0.0), dy_in=sp.get("dy_in", 0.0))
+            for old, new in sp.get("replace", []):
+                replace_text(ns, old, new)
+            self._scan_copied(ns, sp["title"][:12])
+            label(ns, 0.62, 0.42, sp["title"], size=24, w=11.5)
+            cx, cy, cw = sp.get("cap_xy", (8.75, 1.30, 4.2))
+            ts, bs = sp.get("cap_size", (16, 11.5))
+            caption(ns, cx, cy, cw, sp["cap_title"], sp["cap_lines"], title_size=ts, size=bs)
+
+        # 06 주배관 연결
+        s = P["주배관"]
+        clear_slide(s)
+        fr = self.map.place(s, meta["map"]["crop_m"], "주배관")
+        self.draw_field(s, fr)
+        self.draw_buried(s, fr)
+        self.draw_main(s, fr)
+        marks = [(tuple(src["pt"]), "a", self.water.get("a_name", "시작부")) for src in S["sources"][:1]]
+        if S["n_tees"] and meta.get("tee_panel", True):
+            for p, tag in S["tees"]:
+                marks.append((tuple(p), "d", "T분기"))
+        for p in S["ends"]:
+            marks.append((tuple(p), "c", "주배관 말단"))
+        for j in S["joints"]:
+            marks.append((tuple(j["pt"]), "b", "롤 이음"))
+        place_leaders(s, fr, marks)
+        self.draw_joints(s, fr)
+        n_line = len(S["zones"]) or sum(1 for r in self.routes if r.get("zone") is not None)
+        cap = list(tx.get("main_cap", []))
+        if not cap:
+            cap = ["a  %s" % self.water.get("start_kind", "급수 시작점")]
+            for z in S["zones"]:
+                cap.append("%s — 주배관 %.0f m · %d두" % (z["zone"], sum(r["len_m"] for r in self.design["mainline"]["routes"] if r["name"] in z["routes"]), z["n_heads"]))
+            if S["n_joints"]:
+                cap.append("b  일자연결 세트 %s — 50 m를 넘는 지점 %d개소" % (S["sets"]["join50"], S["n_joints"]))
+            cap.append("c  E호스밸브 마감세트 %d개소 — 세척·월동 배수 때 밸브만 엽니다" % S["n_ends"])
+            if S["n_tees"]:
+                cap.append("d  T분기 세트 %s %d개소" % (S["sets"]["tee50"], S["n_tees"]))
+            cap.append("꺾임은 모두 45° 이내 — 현장에서 호스를 굽힙니다(꺾임부 부속 없음)")
+            if len(self.zone_color) > 1:
+                names = {ov.PIPE_MAIN: "노랑", LINE2: "보라"}
+                cap.append(" · ".join("%s = %s" % (names.get(c, "색"), z) for z, c in self.zone_color.items()))
+            v = max((r["v50"] for r in S["hydro"]), default=0)
+            if v > 2.0:
+                cap.append("50 mm 유속 %.2f m/s(권장 2.0 초과) — 급수·정지는 밸브를 천천히(수격 방지)" % v)
+        caption(s, CAP_X, CAP_Y, CAP_W, "주배관 50 mm · %d줄 · %d m" % (n_line, S["main_total_m"]), cap)
+
+        # 07-a 매니폴드 상세 (대표 작도 · 규칙 7) — 있으면 주배관 상세 앞에
+        mf = meta.get("manifold")
+        if mf:
+            ns = new_slide_before(prs, P["주배관상세"])
+            src = Presentation(mf["pptx"])
+            copy_shapes(ns, src.slides[mf["slide"]], dx_in=mf.get("dx_in", 0.0), dy_in=mf.get("dy_in", 0.0),
+                        skip_pred=(lambda sh: sh.shape_type != 6) if mf.get("groups_only") else None)
+            for old, new in mf.get("replace", []):
+                replace_text(ns, old, new)
+            for lb in mf.get("labels", []):
+                x, y, txt = lb[0], lb[1], lb[2]
+                label(ns, x, y, txt, size=10.5, w=lb[3] if len(lb) > 3 else 1.6,
+                      align=PP_ALIGN.RIGHT if len(lb) > 4 and lb[4] == "r" else PP_ALIGN.LEFT)
+            self._scan_copied(ns, "매니폴드")
+            label(ns, 0.62, 0.42, mf["title"], size=24, w=11.5)
+            cx, cy, cw = mf.get("cap_xy", (8.75, 1.30, 4.2))
+            caption(ns, cx, cy, cw, mf["cap_title"], mf["cap_lines"])
+
+        # 07 주배관 연결부 상세 — 카드 3장(c 말단 · b 일자 · d T) 규칙 8·10
+        s = P["주배관상세"]
+        clear_slide(s, keep_top_in=0.0)
+        DS.title(s, "주배관 연결, 연결부 상세")
+        y0 = DS.G.ROW1_Y + 0.15
+        if tx.get("start_on_prev"):
+            label(s, DS.G.MARGIN_L, y0, tx["start_on_prev"], size=11.5, color=DS.C.INK500, w=12.0, bold=False)
+            y0 += 0.45
+        cards = []
+        cards.append(("c", "주배관 말단 마감 세트 — %d개소" % S["n_ends"],
+                      "%s  E호스밸브 마감세트 50 (01403 + 호스밴드 2)" % S["sets"]["end50"],
+                      [("02051", "송수호스", "50 mm"), ("00278", "호스밴드", "2¼″ ×2"), ("01403", "E호스밸브", "50 mm")],
+                      "밸브로 막습니다 — 관 세척·월동 배수 때 밸브만 열면 주배관 안의 물이 빠집니다. 1개소 = E호스밸브 1 + 호스밴드 2."))
+        if S["n_joints"]:
+            cards.append(("b", "주배관 일자연결 세트 — %d개소" % S["n_joints"], S["sets"]["join50"],
+                          [("00278", "호스밴드", "×2"), ("00825", "WF 4-1", "50"), ("00827", "WF 4-2", "50"), ("00278", "호스밴드", "×2")],
+                          "50 m 롤을 잇는 자리입니다. 꺾임에는 부속을 쓰지 않습니다 — 호스가 유연해 45° 이내는 현장에서 굽힙니다. 1개소 = WF 4-1 + WF 4-2 + 호스밴드 4."))
+        if S["n_tees"] and meta.get("tee_panel", True):
+            cards.append(("d", "주배관 T분기 세트 — %d개소" % S["n_tees"], S["sets"]["tee50"],
+                          [("00278", "호스밴드", "×2"), ("00827", "WF 4-2", "50"), ("01201", "CCCT 中", "T"), ("00827", "WF 4-2", "50"), ("00278", "호스밴드", "×2")],
+                          "한 줄이 여기서 양쪽으로 갈라집니다 — 되돌이(헤어핀) 배관을 만들지 않으려고 T를 씁니다. "
+                          "1개소 = CCCT 中 1 + 나가는 쪽 WF 4-2 2 + 들어오는 쪽 WF 4-4 1 + 호스밴드 6 "
+                          "(들어오는 쪽은 급수 계통 규격을 따르므로 매니폴드 면에 계상했습니다)."))
+        n = len(cards)
+        cw = (DS.SLIDE_W - DS.G.MARGIN_L - DS.G.MARGIN_R - 0.3 * (n - 1)) / n if n <= 2 else 4.0
+        for i, (ch, title, setname, parts, note) in enumerate(cards):
+            if n <= 2:
+                x, y = DS.G.MARGIN_L + i * (cw + 0.3), y0
+            else:
+                x, y = DS.G.MARGIN_L + (i % 3) * (cw + 0.28), y0 + (i // 3) * (DS.CARD.H + 0.3)
+            self.set_card(s, x, y, cw, ch, title, setname, parts, note, h=DS.CARD.H + 0.62)
+        y_tab = y0 + DS.CARD.H + 0.62 + (0 if n <= 3 else DS.CARD.H + 0.3) + 0.22
+        label(s, DS.G.MARGIN_L, y_tab, "연결부 요약 — 세트 · 개소 · 낱개 부속 (세트 단위로 받으시고, 낱개 수량은 검수용입니다)", size=12, w=9.0)
+        rows = [["연결부", "세트", "개소", "부속 (1개소당)", "합계 수량"]]
+        if tx.get("start_on_prev"):
+            rows.append(["a  시작부", "앞 면 참조", "-", "밭 입구 매니폴드 · 급수 계통 면", "-"])
+        else:
+            rows.append(["a  시작부", S["sets"]["inlet50"], "1", "WF 4-10 1 + E호스밸브 1 + 호스밴드 2", "-"])
+        if S["n_joints"]:
+            rows.append(["b  일자연결", S["sets"]["join50"], str(S["n_joints"]), "WF 4-1 1 + WF 4-2 1 + 호스밴드 4",
+                         "WF 4-1 %d · WF 4-2 %d · 밴드 %d" % (S["n_joints"], S["n_joints"], 4 * S["n_joints"])])
+        rows.append(["c  말단 마감", S["sets"]["end50"], str(S["n_ends"]), "E호스밸브 1 + 호스밴드 2",
+                     "E호스밸브 %d · 밴드 %d" % (S["n_ends"], 2 * S["n_ends"])])
+        if S["n_tees"]:
+            rows.append(["d  T분기", S["sets"]["tee50"], str(S["n_tees"]),
+                         "CCCT 中 1 + 나가는 쪽 WF 4-2 2 + 호스밴드 4 (들어오는 쪽 WF 4-4 1·밴드 2 = 매니폴드)",
+                         "CCCT %d · WF 4-2 %d · 밴드 %d" % (S["n_tees"], 2 * S["n_tees"], 4 * S["n_tees"])])
+        rows.append(["가지관 분기 · 말단", "%s / %s" % (S["sets"]["branch25"], S["sets"]["end25"]), str(S["n_lats"]),
+                     "루퍼젯 H25 1 + 지관 밸브 1 + 25 mm 마감 1 (열마다)",
+                     "H25 %d · 밸브 %d · 마감 %d" % (S["n_lats"], S["n_lats"], S["n_lats"])])
+        self._table(s, DS.G.MARGIN_L, y_tab + 0.32, [1.55, 2.05, 0.7, 4.3, 3.5], rows, head_h=0.26, row_h=0.22, size=9.5)
+
+        # 08 부속 설치 영상 QR — 대표 지시 2026-09-04 (연결부 상세 바로 뒤)
+        self.video_page(prs, P["가지관"], [b["code"] for b in S["bom"]])
+
+        # 09 가지관 연결
+        s = P["가지관"]
+        clear_slide(s)
+        fr = self.map.place(s, meta["map"]["crop_m"], "가지관")
+        self.draw_field(s, fr)
+        self.draw_main(s, fr)
+        self.draw_lats(s, fr)
+        self._dims(s, fr, heads=False)
+        _LL = sorted(l["len_m"] for l in self.lats)
+        _LN = sorted(l["n_heads"] for l in self.lats)
+        lat_cap = ["두둑(재배 열)과 평행 · 열 간격 10 m (직각)",
+                   "열 길이 %.0f~%.0f m · 열별 %d~%d두 — 긴 열부터 100 m 롤을 잘라 이어 씁니다"
+                   % (_LL[0], _LL[-1], _LN[0], _LN[-1]),
+                   "열마다 밸브 1개 — 부분 관수·수리 시 개별 차단 · 분기 세트 %s" % S["sets"]["branch25"],
+                   "한 열 최대 %d두 (25 mm 한계 7두)" % S["lat_max_heads"],
+                   "말단 %s 마감 %d개소" % (S["sets"]["end25"], S["n_lats"])]
+        if S["curved_n"]:
+            lat_cap.append("사선 분기 %d열 — 주배관에서 직각으로 뺀 뒤 둥글게 돌립니다(분기 부속 H25 목 보호 · 직각 이탈 최대 %.0f°)" % (S["curved_n"], S["dev_max"]))
+        lat_cap.append("흰 치수선 = 블록마다 한 줄 — 열 사이 간격과 **밭 경계까지의 이격**을 모두 적었습니다"
+                       .replace("**", ""))
+        caption(s, CAP_X, CAP_Y, CAP_W, "가지관 25 mm · %d열 · %d m" % (S["n_lats"], S["lat_total_m"]), lat_cap)
+
+        # 11 스프링클러 연결
+        s = P["스프링클러"]
+        clear_slide(s)
+        fr = self.map.place(s, meta["map"]["crop_m"], "헤드")
+        self.draw_field(s, fr)
+        self.draw_main(s, fr)
+        self.draw_lats(s, fr)
+        self.draw_heads(s, fr, 0.05)
+        self._dims(s, fr, heads=True)
+        caption(s, CAP_X, CAP_Y, CAP_W, "스프링클러 %d두 · 01998 세트" % S["n_heads"], [
+            "헤드 간격 10 m · 첫 헤드 %.1f~%.1f m (기준 5)" % (S["off_min"], S["off_max"]),
+            "경계 이격 %.1f m 이상 · 밭 커버율 %.0f %%" % (S["edge_min_m"], S["cover"] * 100),
+            "%s — H20+뽁뽁이+지주대+427B" % S["sets"]["head"],
+            "지관 15 mm 타공 · 케이블타이 140 mm 헤드당 2개 — 북주기·철거 때 호스가 당겨져도 루퍼젯이 버팁니다",
+            "흰 치수선 = 가운데 대표 열 한 줄 — 첫 헤드까지 여백, 그 뒤로 10 m 간격 (다른 열도 같은 방식입니다)",
+        ])
+
+        # 12 헤드 성능표 — 고정면 + 본 설계 반경 캡션
+        s = P["헤드성능"]
+        for sh in list(s.shapes):
+            if sh.has_text_frame and "촘촘 살수" in sh.text_frame.text:
+                sh._element.getparent().remove(sh._element)
+        caption(s, 9.9, 6.30, 3.3, "본 설계 살수 반경",
+                ["바깥 10 m (다이얼·처마 조절) · 안쪽 7 m"]
+                + (["말단 압력 %s bar — 다이얼을 조여 반경 10 m로 씁니다" % " · ".join("%.2f" % h["p_end"] for h in S["hydro"])] if S["hydro"] else []),
+                title_size=13, size=10.5, title_color=GRN)
+
+        # 14~ 구역 살수 예시 ×Z (마스터 8면 중 쓰는 만큼) + 전체
+        def spray_page(slide, title_new, ids, cap_title, cap_lines, only=None):
+            clear_slide(slide)
+            set_title(slide, title_new)
+            fr = self.map.place(slide, meta["map"]["crop_m"], title_new[:10])
+            self.draw_field(slide, fr)
+            for l in self.lats:
+                if l["id"] in ids:
+                    for hx, hy in l["heads"]:
+                        spray_double(slide, fr, hx, hy, 10.0, 7.0)
+            self.draw_main(slide, fr, only=only)
+            self.draw_lats(slide, fr)
+            self.draw_heads(slide, fr, 0.04)
+            caption(slide, CAP_X, CAP_Y, CAP_W, cap_title, cap_lines)
+
+        zs = S["zones"] if len(S["zones"]) > 1 else []
+        hyd = {r["zone"]: r for r in S["hydro"]}
+        for k, z in enumerate(zs[:8]):
+            h = hyd.get(z["zone"])
+            spray_page(P["구역"][k], "%s 살수 예시 (%d두)" % (z["zone"], z["n_heads"]), set(z["lat_ids"]),
+                       "%s · %d두" % (z["zone"], z["n_heads"]), [
+                           "동시 가동 %d두 — 최대 25두 이내" % z["n_heads"],
+                           z["how"] or "이 구역 밸브만 개방",
+                           "가지관 %d열" % len(z["lat_ids"]),
+                       ] + (["유량 %d L/분 · 시작 %.2f → 말단 %.2f bar (반경 %.1f m)" % (h["Q"], h["p_start"], h["p_end"], h["radius_end"])] if h else []),
+                       only=z["zone"])
+        for k in range(len(zs), 8):
+            delete_slide(prs, P["구역"][k])
+        for k in range(len(zs)):                      # 구역 예시 → 전체 예시 순(승인 지면 순서)
+            move_before(prs, P["구역"][k], P["전체"])
+        spray_page(P["전체"], "전체 살수 예시 (%d두)" % S["n_heads"], set(l["id"] for l in self.lats),
+                   "전체 %d두 살수 범위" % S["n_heads"], [
+                       "%d구역 %s가동" % (len(S["zones"]), "순차 " if len(S["zones"]) > 1 else "동시 "),
+                       "두둑과 평행 · 10 m 간격 — 전면 중첩 살수",
+                       "밭 커버율 약 %.0f %%" % (S["cover"] * 100),
+                   ] + self._runtime_lines())
+
+        # 17 총 소요 내역
+        s = P["총내역"]
+        for sh in list(s.shapes):
+            if sh.shape_type == 6 or (sh.has_text_frame and "촘촘" in sh.text_frame.text):
+                sh._element.getparent().remove(sh._element)
+        self._bom_tables(s, S["bom"])
+        replace_text(s, "{{합계금액}}", fmt_n(S["total"]))
+        for sh in s.shapes:                                       # 고정면 영세율 안내 = 견적 비고와 통일
+            if sh.has_text_frame and "영세율" in sh.text_frame.text and "적용 안내" in sh.text_frame.text:
+                set_paragraphs(sh, VAT_ZERO)
+                break
+        if S.get("won_per_py"):
+            label(s, 8.6, 6.38, "평당 약 %s원 (%s평)" % (fmt_n(S["won_per_py"]), fmt_n(S["area_py"])), size=10.5,
+                  color=DS.C.INK500, w=2.15, align=PP_ALIGN.RIGHT)
+        _l, _r = self._split_lines(self._bom_lines(S["bom"]))
+        h_left, h_right = self._bom_table_h(_l), self._bom_table_h(_r)
+        col_x = 0.6 if h_left <= h_right else 6.85                # 짧은 쪽 표 아래에 놓는다
+        y_next = 1.1 + min(h_left, h_right) + 0.18
+        steps = meta.get("next_steps") or [
+            "현장 실측 — 위성 축척으로 잡은 치수를 줄자로 확인합니다(호스는 롤 단위라 여유가 있습니다)",
+            "급수 연결부 규격 확정 — 매설관·파이프 구경을 보고 카플러·밸브 규격을 정합니다",
+            "시공 일정 — 자재 배송 뒤 현장 설치 지원 인력과 날짜를 잡습니다",
+        ]
+        # 아래 고정 블록(영세율 안내, y 5.71)은 옮기지 않는다 — 그 밑에 로고·각주가 있다. 넘치면 글자만 줄이고,
+        # 그래도 자리가 없으면 「다음 단계」를 면4(상호 확인사항) 각주 아래로 내린다(대표 폴백).
+        y_fixed = min([Emu(sh.top).inches for sh in s.shapes
+                       if sh.has_text_frame and "영세율" in sh.text_frame.text and "적용 안내" in sh.text_frame.text] or [5.71])
+        size, gap, line_h = 9.5, 2, 0.19
+        if y_next + 0.28 + len(steps) * line_h + 0.05 > y_fixed:
+            size, gap, line_h = 8.5, 1, 0.17
+        if y_next + 0.28 + len(steps) * line_h + 0.05 > y_fixed:
+            if self._steps_on_p4(P["상호확인"], steps):
+                self.log.append("면19: 표가 길어(BOM %d행) 「다음 단계」를 면4 상호 확인사항 아래로 내림" % len(S["bom"]))
+                steps = None
+            else:
+                self.log.append("면19: 다음 단계가 영세율 안내와 겹침(표가 김) — BOM %d행 · 면4에도 자리 없음" % len(S["bom"]))
+        if steps:
+            label(s, col_x, y_next, "다음 단계", size=11.5, w=3.0, color=ov.DIM)
+            bullets(s, col_x, y_next + 0.28, 5.9, steps, size=size, gap=gap)
+        label(s, 5.3, 6.84, "%s · 여분(세트 3 %%·자재 5 %%·롤 여유 12 %%) 포함 · 배송비·설치 인건비 별도 — 견적서(엑셀) 별도" % S["tier"],
+              size=10, color=DS.C.INK500, w=7.6, align=PP_ALIGN.RIGHT)
+
+        prs.save(self.out)
+        return self.out
+
+    def _steps_on_p4(self, slide, steps):
+        """면19 표가 길어 자리가 없을 때 「다음 단계」를 면4(상호 확인사항)로 내린다.
+        아래는 고정 로고(T6.70) · 위는 각주 — 그 사이에 들어갈 때만 놓고, 못 놓으면 False."""
+        n = len(steps)
+        for size, lh in ((9.5, 0.20), (8.5, 0.18)):
+            y = P4_LOGO_Y - 0.08 - n * lh                      # 로고 위에 바닥 정렬
+            if y >= getattr(self, "p4_free_y", 6.10) + 0.12:
+                label(slide, 0.60, y, "다음 단계", size=11.0, w=1.15, color=ov.DIM)
+                bullets(slide, 1.80, y, 10.90, steps, size=size, gap=1)
+                return True
+        return False
+
+    def _scan_copied(self, slide, tag):
+        """대표 작도 복사면의 「n두」가 이 설계의 두수(전체·구역·열)와 다르면 기록한다 — 죽은 숫자 방지(P4)."""
+        allowed = {self.S["n_heads"]} | {z["n_heads"] for z in self.S["zones"]} | {l["n_heads"] for l in self.lats}
+
+        def walk(shapes):
+            for sh in shapes:
+                if sh.shape_type == 6:
+                    walk(sh.shapes)
+                elif sh.has_text_frame:
+                    for m in re.finditer(r"(\d+)\s*두", sh.text_frame.text):
+                        if int(m.group(1)) not in allowed:
+                            self.log.append("복사면 %s: '%s' — 이 설계 두수와 다름(meta.replace 필요)" % (tag, m.group(0)))
+        walk(slide.shapes)
+
+    def _runtime_lines(self):
+        """살수강도와 운전 시간 — 10 mm 관수 기준(조건 병기). 구역별 헤드 토출로 계산한다."""
+        H = self.S["hydro"]
+        if not H:
+            return []
+        rates = [h["q_head"] * 60 / 100 for h in H]                  # mm/h (헤드 10×10 m 격자)
+        per = [10.0 / r * 60 for r in rates]                            # 10 mm에 드는 분
+        tot = sum(per)
+        return ["살수강도 약 %.1f mm/h (구역별 %s)" % (sum(rates) / len(rates), " · ".join("%.1f" % r for r in rates)),
+                "10 mm 주려면 구역당 약 %d분 · %d구역 순차 약 %d시간 %d분 (밭 상태에 따라 가감)"
+                % (round(sum(per) / len(per)), len(H), int(tot // 60), int(round(tot % 60)))]
+
+    # ── 치수(간격 표시 — 익산 정본식) ──
+    def _dims(self, s, fr, heads: bool):
+        """치수는 **적게 · 서로 멀리 · 이름을 달아** 놓는다 (대표 체크 2026-09-04).
+        여러 열에 나눠 찍으면 사선 열에서 치수선이 서로 겹쳐 무엇을 재는지 알 수 없다.
+          · 가지관 면 = 첫 여백 1곳 + 열 간격 1곳 (헤드 간격은 스프링클러 면의 몫)
+          · 스프링클러 면 = **가운데 대표 열 한 줄**에 첫 여백 + 헤드 간격 전부. 열 간격은 찍지 않는다.
+        대표 열 = 헤드가 가장 많은 열들 중 가운데 — 그 열이 이 밭의 표준 배치다."""
+        lats = [l for l in self.lats if l["heads"]]
+        if not lats:
+            return
+        n1 = lambda v: ("%.1f" % v).rstrip("0").rstrip(".")
+        mx = max(len(l["heads"]) for l in lats)
+        cand = [i for i, l in enumerate(lats) if len(l["heads"]) == mx]
+        mi = cand[len(cand) // 2]
+        mid = lats[mi]
+        hs = [tuple(h) for h in mid["heads"]]
+
+        if heads:                                   # 면13 — 대표 열 한 줄에 끝까지
+            dim_chain(s, fr, [tuple(mid["p0"])] + hs,
+                      ["첫 %s" % n1(mid["off"])] + ["10"] * (len(hs) - 1), off_m=3.2, side=-1)
+            return
+        self._lat_dims(s, fr, lats)
+
+    def _lat_dims(self, s, fr, lats):
+        """면11 — **블록마다 한 줄**로 「경계 → 열 → … → 열 → 경계」를 전부 잰다 (대표 지시 2026-09-04).
+        첫 헤드 여백은 여기 없다 — 그건 스프링클러 설치의 초기 간격이라 면13의 몫이다.
+        블록마다 축이 다르므로(a = p·n, n = perp(u)) 블록별로 자기 축 위에 놓는다."""
+        n1 = lambda v: ("%.1f" % v).rstrip("0").rstrip(".")
+        for blk in self.site.get("blocks", []):
+            rows = sorted([l for l in lats if l.get("block") == blk.get("name")], key=lambda r: r["a"])
+            poly = [tuple(q) for q in (blk.get("polygon") or [])]
+            if not rows or len(poly) < 3:
+                continue
+            u = G.unit(tuple(blk["u"]))
+            nv = G.perp(u)
+            av = [G.dot(q, nv) for q in poly]
+            a_lo, a_hi = min(av), max(av)
+            # 치수선을 놓을 열 방향 위치 = 열 길이의 3/4 지점(말단 쪽) — 주배관·분기 표기에서 멀어진다
+            t = sum(G.dot(r["p0"], u) + 0.75 * (G.dot(r["p1"], u) - G.dot(r["p0"], u))
+                    for r in rows) / len(rows)
+            xy = lambda a: (a * nv[0] + t * u[0], a * nv[1] + t * u[1])
+            aa = [a_lo] + [r["a"] for r in rows] + [a_hi]
+            pts = [xy(a) for a in aa]
+            # 경계 이격은 라벨이 길다 — 열 간격과 **반대쪽**에 놓아 서로 덮지 않게 한다
+            for i in range(len(aa) - 1):
+                d = aa[i + 1] - aa[i]
+                edge = i in (0, len(aa) - 2)
+                dim_side(s, fr, pts[i], pts[i + 1],
+                         ("경계 %s" % n1(d)) if edge else n1(d),
+                         off_m=0.0, side=(-1 if edge else 1), serif_m=1.4, size=9.0)
+
+    def _table(self, slide, left, top, widths, rows, head_h=0.36, row_h=0.32, size=11.5):
+        tb = slide.shapes.add_table(len(rows), len(widths), Inches(left), Inches(top),
+                                    Inches(sum(widths)), Inches(head_h + row_h * (len(rows) - 1)))
+        t = tb.table
+        t.first_row = True
+        for i, w in enumerate(widths):
+            t.columns[i].width = Inches(w)
+        for r, row in enumerate(rows):
+            t.rows[r].height = Inches(head_h if r == 0 else row_h)
+            for c, v in enumerate(row):
+                cell = t.cell(r, c)
+                cell.margin_left = cell.margin_right = Inches(0.06)
+                cell.margin_top = cell.margin_bottom = Inches(0.02)
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = RGBColor.from_string("EFEDE4") if r == 0 else DS.C.WHITE
+                p = cell.text_frame.paragraphs[0]
+                p.alignment = PP_ALIGN.LEFT if c in (0, 1, 3, 4) else PP_ALIGN.CENTER
+                run = p.add_run()
+                run.text = str(v)
+                run.font.name = DS.T.CAPTION
+                run.font.size = Pt(size)
+                run.font.bold = (r == 0)
+                run.font.color.rgb = DS.C.INK
+        return t
+
+    @staticmethod
+    def _bom_table_h(rows, rh=0.24):
+        """표 높이 어림 — 규격·비고가 접히면 PowerPoint가 행을 늘리므로 줄 수를 세어 더한다.
+        실측(8/7.5/7 pt · 05 숙진리): 비고 16자/줄 · 1줄 0.24 · 2줄 0.31 · 3줄 0.41 in."""
+        h = rh                                                     # 머리행
+        for r in rows:
+            if "_group" in r:
+                h += rh
+                continue
+            lines = max(-(-len(str(r["name"])) // 20), -(-len(str(r["spec"])) // 12), -(-len(str(r["note"])) // 16), 1)
+            h += max(rh, 0.10 + 0.105 * lines)
+        return h
+
+    # ── BOM 표(2단) ──
+    @staticmethod
+    def _bom_lines(bom):
+        """표 행 목록 — 분류가 바뀌는 자리에 머리행(group)을 끼운다."""
+        lines, g = [], None
+        for r in bom:
+            if r.get("group") != g:
+                g = r.get("group")
+                lines.append({"_group": r.get("group_label", g or "")})
+            lines.append(r)
+        return lines
+
+    @staticmethod
+    def _split_lines(lines):
+        """두 단으로 가른다 — 분류 머리행이 단 끝에 홀로 남지 않게."""
+        half = -(-len(lines) // 2)
+        while half < len(lines) and "_group" in lines[half - 1]:
+            half -= 1
+        return lines[:half], lines[half:]
+
+    def _bom_tables(self, slide, bom):
+        PANEL = RGBColor(0xF4, 0xF4, 0xF0)
+        GROUP_BG = RGBColor(0xFB, 0xF4, 0xC6)
+        for pi, part in enumerate(self._split_lines(self._bom_lines(bom))):
+            if not part:
+                continue
+            gf = slide.shapes.add_table(len(part) + 1, 5, Inches(0.6 + pi * 6.25), Inches(1.1),
+                                        Inches(6.05), Inches(0.24 * (len(part) + 1)))
+            t = gf.table
+            t.first_row = False
+            t.horz_banding = False
+            for w, col in zip((1.95, 1.15, 0.62, 0.78, 1.55), t.columns):
+                col.width = Inches(w)
+
+            def put(cell, text, size=8, bold=False, align=PP_ALIGN.LEFT, color=DS.C.INK, wrap=False):
+                tf = cell.text_frame
+                tf.margin_left = tf.margin_right = Pt(3)
+                tf.margin_top = tf.margin_bottom = Pt(0.5)
+                tf.word_wrap = wrap
+                p = tf.paragraphs[0]
+                p.alignment = align
+                r = p.add_run()
+                r.text = text
+                r.font.name = DS.T.CAPTION
+                r.font.size = Pt(size)
+                r.font.bold = bold
+                r.font.color.rgb = color
+            for c, tt in enumerate(["품목", "규격", "수량", "단가", "비고"]):
+                cell = t.cell(0, c)
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = DS.C.INK
+                put(cell, tt, size=9, bold=True, color=DS.C.WHITE, align=PP_ALIGN.CENTER if c else PP_ALIGN.LEFT)
+            for ri, row in enumerate(part, 1):
+                if "_group" in row:
+                    cell = t.cell(ri, 0)
+                    cell.merge(t.cell(ri, 4))
+                    cell.fill.solid()
+                    cell.fill.fore_color.rgb = GROUP_BG
+                    put(cell, row["_group"], size=8, bold=True)
+                    continue
+                for c in range(5):
+                    cell = t.cell(ri, c)
+                    cell.fill.solid()
+                    cell.fill.fore_color.rgb = DS.C.WHITE if ri % 2 else PANEL
+                put(t.cell(ri, 0), row["name"], size=8, wrap=True)
+                put(t.cell(ri, 1), str(row["spec"]), size=7.5, color=DS.C.INK500, wrap=True)
+                put(t.cell(ri, 2), "%s %s" % (format(row["qty"], ","), row["unit"]), size=8, align=PP_ALIGN.CENTER)
+                put(t.cell(ri, 3), format(row["price"] or 0, ","), size=8, align=PP_ALIGN.RIGHT)
+                put(t.cell(ri, 4), row["note"], size=7, color=DS.C.INK500, wrap=True)
+            for r_ in t.rows:
+                r_.height = Inches(0.24)
+
+
+# ══════════════ 후처리 (PowerPoint COM — 선택) ══════════════
+def export_pdf(pptx_path: str, pdf_path: Optional[str] = None) -> str:
+    import win32com.client
+    src = os.path.abspath(pptx_path)
+    dst = os.path.abspath(pdf_path or os.path.splitext(src)[0] + ".pdf")
+    app = win32com.client.Dispatch("PowerPoint.Application")
+    pres = app.Presentations.Open(src, WithWindow=False)
+    try:
+        pres.SaveAs(dst, 32)
+    finally:
+        pres.Close()
+        app.Quit()
+    return dst
+
+
+def export_png(pptx_path: str, out_dir: str, width: int = 1600) -> List[str]:
+    import win32com.client
+    src = os.path.abspath(pptx_path)
+    os.makedirs(out_dir, exist_ok=True)
+    app = win32com.client.Dispatch("PowerPoint.Application")
+    pres = app.Presentations.Open(src, WithWindow=False)
+    out = []
+    try:
+        for i in range(1, pres.Slides.Count + 1):
+            p = os.path.join(os.path.abspath(out_dir), "s%02d.png" % i)
+            pres.Slides(i).Export(p, "PNG", width, int(width * 9 / 16))
+            out.append(p)
+    finally:
+        pres.Close()
+        app.Quit()
+    return out
+
+
+def check_pages(pptx_path: str) -> Dict[int, List[str]]:
+    """정본 §9 기계 점검(표준_pptx.check_slide) — 지면별 위반 목록."""
+    prs = Presentation(pptx_path)
+    return {i: DS.check_slide(s, i) for i, s in enumerate(prs.slides, 1) if DS.check_slide(s, i)}
+
+
+__all__ = ["Renderer", "Map", "export_pdf", "export_png", "check_pages", "MASTER"]

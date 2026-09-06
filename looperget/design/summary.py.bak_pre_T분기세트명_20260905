@@ -1,0 +1,173 @@
+# -*- coding: utf-8 -*-
+"""
+looperget.design.summary — 설계 결과(job) → 지면·견적이 읽는 요약 (순수 함수).
+
+job = `looperget.design.job/1` = {"site", "design", "meta"} (publish.py 참조).
+여기서 나오는 숫자만 지면에 찍는다 — 렌더러는 값을 만들지 않는다(불변 원칙 1).
+
+  build(job) → {
+    area_m2, area_py, n_heads, n_lats, lat_total_m, main_total_m, rolls50, rolls25,
+    off_min, off_max, edge_min_m, cover, lat_max_heads, curved_n, dev_max,
+    zones: [{zone, n_heads, lat_ids, routes, how}], hydro: zones_report 행,
+    joints: [{pt, route}], ends: [pt], tees: [pt, tag], sources: [{name, pt}],
+    bom: money.rows(+note) , total, tier, sets: 세트명 매핑, warnings }
+"""
+from __future__ import annotations
+
+import math
+from typing import Dict, List, Sequence, Tuple
+
+from . import geom as G
+from . import hydro_zone as HZ
+
+PY = 3.3058                      # ㎡ → 평
+SPRAY_R = 10.0                   # 살수 반경(말단 1.5 bar)
+
+# 연결부 → 세트명 (규칙 8 · Sets 시트 정본. 랭킹 엔진 = tools/set_match.py — P3에서 연동)
+SETS = {
+    "head": "[LSS]S-H20N427b",            # 01998 헤드 세트
+    "tee50": "[LHC]T-1-505050",           # CCCT 1 + 나가는 쪽 WF 4-2 2 + 들어오는 쪽 WF 4-4 1 + 밴드 6.
+                                          # 엔진은 나가는 쪽(00827×2 + 00278×4)만 세고 들어오는 쪽은 water_items.
+                                          # ⚠ Sets 시트 레시피는 아직 {"00827": 3, "00278": 6} — 대표 확인 후 정정 대기.
+    "join50": "[LHC]1-1-5050",            # 00825 + 00827 + 00278×4
+    "inlet50": "[LHC]1-3-5050",           # 00970 + 01403 + 00278×2
+    "end50": "[세트 신설 제안]",           # 01403 + 00278×2 — Sets 미등재(set-builder 제기 중)
+    "branch25": "[LHC]B-50LV25",          # 01924 + 01786 — 주배관 20 mm 타공 분기 + 지관 밸브
+    "end25": "[LHC]E-25",                 # 02000 지관 말단
+    "join25": "[LHC]1-25",                # 01999 25 mm 일자
+}
+
+
+# 총 소요 내역·견적 정렬 (대표 지시 2026-09-03): 분류 → 명칭 → 규격 → 우선순위(루퍼젯·주력 제품 먼저, 가격순).
+# 분류 = Products 시트 「세부카테고리」(정본). 순서는 루퍼젯 브랜드 → 연결 부속 → 밸브 → 조임식 → 소모품·계측 → 장비.
+GROUP_ORDER = ["루퍼젯+", "루퍼젯+,송수호스", "루퍼젯", "스마트카플러", "노지스프링클러용부속",
+               "조임식부속", "기타부속", "여과기", "공구"]
+GROUP_LABEL = {"루퍼젯+": "루퍼젯+ 스프링클러 세트", "루퍼젯+,송수호스": "루퍼젯+ 송수호스",
+               "루퍼젯": "루퍼젯 H시리즈", "스마트카플러": "스마트카플러", "노지스프링클러용부속": "밸브",
+               "조임식부속": "조임식 부속", "기타부속": "고정 · 소모품 · 계측", "여과기": "여과기", "공구": "공구"}
+
+
+def _group_of(row: Dict) -> str:
+    sc = row.get("subcat") or ""
+    if sc in GROUP_ORDER:
+        return sc
+    n = row.get("name", "")
+    if "루퍼젯+" in n:
+        return "루퍼젯+,송수호스" if "호스" in n else "루퍼젯+"
+    if "루퍼젯" in n:
+        return "루퍼젯"
+    if "카플러" in n:
+        return "스마트카플러"
+    return "기타부속"
+
+
+def sort_bom(rows: List[Dict]) -> List[Dict]:
+    """분류 순서 → 루퍼젯 브랜드 먼저 → 가격 내림 → 명칭 → 규격. 각 행에 group·group_label을 붙인다."""
+    out = []
+    for r in rows:
+        g = _group_of(r)
+        out.append(dict(r, group=g, group_label=GROUP_LABEL.get(g, g)))
+    return sorted(out, key=lambda r: (GROUP_ORDER.index(r["group"]) if r["group"] in GROUP_ORDER else 99,
+                                      0 if "루퍼젯" in r["name"] else 1, -(r["price"] or 0), r["name"], str(r["spec"])))
+
+
+def _polys(site: Dict) -> List[List[Tuple[float, float]]]:
+    return [[tuple(p) for p in b["polygon"]] for b in site["blocks"]]
+
+
+def coverage(polys: Sequence[Sequence[Tuple[float, float]]], heads: Sequence[Tuple[float, float]],
+             r: float = SPRAY_R, step: float = 1.0) -> float:
+    """밭 안 1 m 격자점 중 헤드 반경 r 안에 드는 비율 (0~1)."""
+    inside = covered = 0
+    r2 = r * r
+    for poly in polys:
+        xs = [p[0] for p in poly]
+        ys = [p[1] for p in poly]
+        x = math.floor(min(xs))
+        while x <= max(xs):
+            y = math.floor(min(ys))
+            while y <= max(ys):
+                q = (x + 0.5, y + 0.5)
+                if G.contains(poly, q):
+                    inside += 1
+                    for h in heads:
+                        if (h[0] - q[0]) ** 2 + (h[1] - q[1]) ** 2 <= r2:
+                            covered += 1
+                            break
+                y += step
+            x += step
+    return covered / inside if inside else 0.0
+
+
+def edge_min(polys, heads) -> float:
+    best = None
+    for h in heads:
+        for poly in polys:
+            if G.contains(poly, h):
+                d = G.edge_dist(h, poly)
+                best = d if best is None else min(best, d)
+    return best if best is not None else 0.0
+
+
+def joint_points(site: Dict, design: Dict, roll_m: float = 50.0) -> List[Dict]:
+    """주배관 경로마다 50 m 롤이 끝나는 자리(일자연결 세트 위치)."""
+    out = []
+    for r_site, r_out in zip(site["routes"], design["mainline"]["routes"]):
+        pts = [tuple(p) for p in r_site["pts"]]
+        for k in range(1, r_out["joints"] + 1):
+            p, _ = G.point_at(pts, roll_m * k)
+            out.append({"pt": [round(p[0], 1), round(p[1], 1)], "route": r_site["name"]})
+    return out
+
+
+def build(job: Dict) -> Dict:
+    site, design, meta = job["site"], job["design"], job.get("meta", {})
+    polys = _polys(site)
+    area = sum(G.area(p) for p in polys)
+    lats = design["laterals"]
+    heads = [tuple(h["pt"]) for h in design["heads"]]
+    zones = []
+    for z in design["zones"]:
+        zones.append({"zone": str(z["zone"]), "n_heads": z["n_heads"], "lat_ids": list(z["laterals"]),
+                      "routes": list(z["routes"]),
+                      "how": (meta.get("texts", {}).get("zone_how", {}) or {}).get(str(z["zone"]), "")})
+    money = design.get("money") or {"rows": [], "total": 0, "tier": "소비자가"}
+    bom = []
+    for r in money["rows"]:
+        bom.append({"code": r["code"], "name": r.get("name", ""), "spec": r.get("spec", ""),
+                    "unit": r.get("unit", ""), "qty": int(r["qty"]), "price": r.get("price"),
+                    "amount": r.get("amount"), "note": r.get("note", ""),
+                    "cat": r.get("cat", ""), "subcat": r.get("subcat", "")})
+    bom = sort_bom(bom)
+    off = [l["off"] for l in lats]
+    return {
+        "name": meta.get("name") or design.get("name"),
+        "parcel": meta.get("parcel", ""), "site_label": meta.get("site_label", ""),
+        "area_m2": round(area), "area_py": round(area / PY),
+        "n_heads": design["n_heads"], "n_lats": design["n_laterals"],
+        "lat_total_m": round(sum(l["len_m"] for l in lats)),
+        "main_total_m": round(design["mainline"]["total_m"]),
+        "rolls50": next((b["qty"] for b in design["bom"] if b["code"] == "02051"), None),
+        "rolls25": next((b["qty"] for b in design["bom"] if b["code"] == "02044"), None),
+        "off_min": round(min(off), 1) if off else None, "off_max": round(max(off), 1) if off else None,
+        "edge_min_m": round(edge_min(polys, heads), 1),
+        "cover": round(coverage(polys, heads), 3),
+        "lat_max_heads": max((l["n_heads"] for l in lats), default=0),
+        "curved_n": sum(1 for l in lats if l.get("path")),
+        "dev_max": max((l.get("dev_deg") or 0 for l in lats), default=0),
+        "zones": zones,
+        "hydro": HZ.zones_report(design, site),
+        "joints": joint_points(site, design),
+        "ends": [list(p) for p in design["mainline"]["end_pts"]],
+        "tees": [[list(p), tag] for p, tag in design["mainline"]["tee_pts"]],
+        "n_tees": design["mainline"]["tees"], "n_ends": design["mainline"]["ends"],
+        "n_joints": design["mainline"]["joints"],
+        "sources": [{"name": s["name"], "pt": list(s["pt"])} for s in site["sources"]],
+        "bom": bom, "total": money.get("total", 0), "tier": money.get("tier", "소비자가"),
+        "won_per_py": round(money.get("total", 0) / (area / PY)) if area else None,
+        "missing": money.get("missing", []),
+        "sets": dict(SETS), "warnings": list(design.get("warnings", [])),
+    }
+
+
+__all__ = ["build", "coverage", "edge_min", "joint_points", "sort_bom", "SETS", "PY", "SPRAY_R", "GROUP_ORDER", "GROUP_LABEL"]

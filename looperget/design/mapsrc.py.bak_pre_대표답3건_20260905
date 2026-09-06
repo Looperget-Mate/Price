@@ -1,0 +1,387 @@
+# -*- coding: utf-8 -*-
+"""
+looperget.design.mapsrc — 지도 공급자 어댑터 (P3 · 신규 · 프로덕션 무수정).
+
+    from looperget.design import mapsrc
+    hit    = mapsrc.geocode("논산시 숙진리 211-1")      # 지번 → PNU·좌표
+    par    = mapsrc.parcel(pnu=hit[0]["pnu"])           # PNU → 필지 폴리곤
+    fr     = mapsrc.frame(par["center"], zoom=18)       # 위성 프레임(순수)
+    poly_m = mapsrc.to_local_m(par["rings"][0], fr["origin"])   # 로컬 미터(순수)
+    png    = mapsrc.print_tile(fr)                      # 위성 정지영상 PNG
+
+🔴 **필지 폴리곤은 설계 블록이 아니다.** 지적 경계는 소유 경계이고, 설계 블록은
+   대표가 위성 위에서 확정하는 **경작 구역**이다(2026-09-05 실측 — 승인본 5필지 중
+   숙진리 211-1은 지적 2,280 ㎡ · 승인본 4,351 ㎡, 212-31은 지적 34,084 ㎡ · 승인본 3,955 ㎡).
+   어댑터는 **참고 경계와 지리 기준**까지만 준다. `site.blocks[].polygon`은 대표 입력이다.
+
+계층 구분(역할 문서: 계산 엔진은 순수 함수):
+  · 순수 함수 — frame · to_px · to_lonlat · to_local_m · ring_area_m2 · webmercator · inv_webmercator
+  · 망 호출 — geocode · parcel · parcels_in_box · print_tile  (.secrets/map_keys.json 필요)
+
+확인된 공급자 제약(2026-09-05 실측 · 브이월드):
+  · 정지영상 zoom 7~18 · size <= 1024x1024 → **지상 해상도 상한 0.48 m/px**(위도 36도),
+    한 장이 덮는 최대 폭 **493 m**. 그보다 넓거나 더 선명해야 하면 frame을 나눠 여러 장 받는다.
+  · bbox 모드 없음 — center+zoom이 필수다. 그래서 지리 기준은 웹 메르카토르 해상도로 계산한다.
+  · **고도(DEM)는 아직 경로가 없다** — data LT_C_DEM · wcs · req/dem 세 후보 모두 실패. elevation() 참조.
+"""
+from __future__ import annotations
+
+import json
+import math
+import ssl
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Tuple
+
+VERSION = "0.1.0"
+SCHEMA = "looperget.design.mapsrc/1"
+
+_R = 6378137.0                      # 웹 메르카토르 기준 반경
+_TILE = 256
+VWORLD_BASE = "https://api.vworld.kr/req"
+PARCEL_LAYER = "LP_PA_CBND_BUBUN"   # 지적도 부분(필지)
+ZOOM_RANGE = (7, 18)
+SIZE_MAX = 1024
+
+_KEYS: Optional[Dict] = None
+
+
+# ────────────────────────────── 순수 함수 ──────────────────────────────
+
+def webmercator(lon: float, lat: float) -> Tuple[float, float]:
+    """위경도 → 웹 메르카토르(m). EPSG:4326 → EPSG:3857."""
+    return (math.radians(lon) * _R,
+            math.log(math.tan(math.pi / 4 + math.radians(lat) / 2)) * _R)
+
+
+def inv_webmercator(mx: float, my: float) -> Tuple[float, float]:
+    """웹 메르카토르(m) → 위경도."""
+    return (math.degrees(mx / _R),
+            math.degrees(2 * math.atan(math.exp(my / _R)) - math.pi / 2))
+
+
+def zoom_resolution(zoom: int) -> float:
+    """줌 단계의 메르카토르 해상도(m/px). 지상 해상도는 여기에 cos(위도)를 곱한다."""
+    return 2 * math.pi * _R / (_TILE * 2 ** zoom)
+
+
+def frame(center: Sequence[float], zoom: int = 18,
+          size: Sequence[int] = (1024, 1024)) -> Dict:
+    """위성 프레임 = 「화소 ↔ 지리」 변환의 정본. 순수 함수 — 망을 타지 않는다.
+
+    center = (lon, lat) · size = (w, h).
+    공급자 제약을 넘으면 ValueError — 미확정 입력으로는 진행하지 않는다(불변 원칙 1).
+    """
+    lon, lat = float(center[0]), float(center[1])
+    w, h = int(size[0]), int(size[1])
+    if not (ZOOM_RANGE[0] <= zoom <= ZOOM_RANGE[1]):
+        raise ValueError(f"zoom {zoom} — 공급자 허용 범위는 {ZOOM_RANGE[0]}~{ZOOM_RANGE[1]}")
+    if not (1 <= w <= SIZE_MAX and 1 <= h <= SIZE_MAX):
+        raise ValueError(f"size {w}x{h} — 공급자 상한은 {SIZE_MAX}x{SIZE_MAX}")
+    res = zoom_resolution(zoom)
+    ground = res * math.cos(math.radians(lat))
+    mx, my = webmercator(lon, lat)
+    sw = inv_webmercator(mx - res * w / 2, my - res * h / 2)
+    ne = inv_webmercator(mx + res * w / 2, my + res * h / 2)
+    return {
+        "schema": SCHEMA, "kind": "vworld_photo", "center": [lon, lat], "zoom": zoom,
+        "size": [w, h], "res_mercator": res, "m_per_px": ground,
+        "span_m": [ground * w, ground * h],
+        "bbox": [sw[0], sw[1], ne[0], ne[1]],
+        "origin": [lon, lat],          # 로컬 미터 좌표계의 원점
+        "_mxy": [mx, my],
+    }
+
+
+def to_px(fr: Dict, lon: float, lat: float) -> Tuple[float, float]:
+    """위경도 → 프레임 화소 좌표(좌상단 원점 · y 아래로 증가)."""
+    mx, my = webmercator(lon, lat)
+    cx, cy = fr.get("_mxy") or webmercator(*fr["center"])
+    r = fr["res_mercator"]
+    w, h = fr["size"]
+    return ((mx - cx) / r + w / 2, h / 2 - (my - cy) / r)
+
+
+def to_lonlat(fr: Dict, x: float, y: float) -> Tuple[float, float]:
+    """프레임 화소 좌표 → 위경도. to_px의 역."""
+    cx, cy = fr.get("_mxy") or webmercator(*fr["center"])
+    r = fr["res_mercator"]
+    w, h = fr["size"]
+    return inv_webmercator(cx + (x - w / 2) * r, cy + (h / 2 - y) * r)
+
+
+def to_local_m(ring: Sequence[Sequence[float]], origin: Sequence[float]) -> List[List[float]]:
+    """위경도 고리 → 로컬 미터 폴리곤(site.blocks[].polygon 형식 · x 동쪽 · y 북쪽).
+
+    원점 부근 등거리 근사 — 대상지 규모(4 km 이하)에서 오차 0.1 % 미만이다.
+    닫힌 고리로 들어오면 마지막 중복점을 뗀다(site 스키마는 열린 폴리곤).
+    """
+    lon0, lat0 = float(origin[0]), float(origin[1])
+    kx = 111320.0 * math.cos(math.radians(lat0))
+    ky = 110574.0
+    pts = [[round((p[0] - lon0) * kx, 2), round((p[1] - lat0) * ky, 2)] for p in ring]
+    if len(pts) > 2 and abs(pts[0][0] - pts[-1][0]) < 1e-6 and abs(pts[0][1] - pts[-1][1]) < 1e-6:
+        pts.pop()
+    return pts
+
+
+def ring_area_m2(ring: Sequence[Sequence[float]],
+                 origin: Optional[Sequence[float]] = None) -> float:
+    """고리의 면적(㎡). 위경도면 origin(없으면 첫 점) 기준 로컬 미터로 바꿔 잰다."""
+    pts = to_local_m(ring, origin or ring[0])
+    return abs(sum(pts[i][0] * pts[i - 1][1] - pts[i - 1][0] * pts[i][1]
+                   for i in range(len(pts)))) / 2
+
+
+# ────────────────────────────── 망 호출 ──────────────────────────────
+
+def _keys(path: str = ".secrets/map_keys.json") -> Dict:
+    """키 적재(1회). 값은 반환만 하고 **로그·예외 문구에 절대 싣지 않는다**(불변 원칙 4)."""
+    global _KEYS
+    if _KEYS is None:
+        p = Path(path)
+        if not p.exists():
+            raise FileNotFoundError(f"{path} 없음 — 지도 키는 .secrets/ 에만 둔다(불변 원칙 4)")
+        _KEYS = json.loads(p.read_text(encoding="utf-8"))
+    return _KEYS
+
+
+def _vworld(kind: str = "vworld") -> Tuple[str, str]:
+    k = _keys().get(kind) or {}
+    if not k.get("key"):
+        raise KeyError(f"map_keys.json 에 '{kind}'.key 없음")
+    return k["key"], k.get("service_url", "")
+
+
+def _err_text(body: bytes) -> str:
+    try:
+        e = json.loads(body.decode("utf-8", "replace"))["response"]["error"]
+        return f"{e.get('code')}: {e.get('text')}"
+    except Exception:
+        return body[:200].decode("utf-8", "replace")
+
+
+def _call(path: str, params: Dict, raw: bool = False, timeout: int = 30):
+    url = f"{VWORLD_BASE}/{path}?" + urllib.parse.urlencode(params, encoding="utf-8")
+    req = urllib.request.Request(url, headers={"User-Agent": f"looperget-mapsrc/{VERSION}"})
+    with urllib.request.urlopen(req, timeout=timeout, context=ssl.create_default_context()) as r:
+        body = r.read()
+    if raw:
+        if body[:4] == b"\x89PNG" or body[:2] == b"\xff\xd8":
+            return body
+        raise RuntimeError("영상 대신 오류 응답 — " + _err_text(body))
+    j = json.loads(body.decode("utf-8", "replace"))
+    res = j.get("response", {})
+    if res.get("status") == "ERROR":
+        e = res.get("error") or {}
+        raise RuntimeError(f"브이월드 오류 {e.get('code')}: {e.get('text')}")
+    return res
+
+
+def geocode(query: str, size: int = 5, key_kind: str = "vworld") -> List[Dict]:
+    """지번 주소 → [{pnu, address, center}] (없으면 빈 목록).
+
+    ⚠ 상위 행정구역을 틀리게 붙이면 NOT_FOUND가 난다(2026-09-05 실측: 「부적면 숙진리」 실패,
+      「논산시 숙진리」 성공 → 실제는 **상월면**). **읍·면은 추측해서 붙이지 않는다.**
+    """
+    key, dom = _vworld(key_kind)
+    res = _call("search", {
+        "service": "search", "request": "search", "version": "2.0", "crs": "EPSG:4326",
+        "size": str(size), "page": "1", "query": query, "type": "address",
+        "category": "parcel", "format": "json", "errorformat": "json",
+        "key": key, "domain": dom})
+    if res.get("status") != "OK":
+        return []
+    out = []
+    for it in ((res.get("result") or {}).get("items") or []):
+        pt = it.get("point") or {}
+        out.append({"pnu": it.get("id"),
+                    "address": (it.get("address") or {}).get("parcel"),
+                    "center": [float(pt["x"]), float(pt["y"])]})
+    return out
+
+
+def _feature_to_parcel(f: Dict, origin: Optional[Sequence[float]] = None) -> Dict:
+    pr = f.get("properties", {})
+    g = f.get("geometry", {})
+    coords = g.get("coordinates") or []
+    rings = coords if g.get("type") == "Polygon" else [r for poly in coords for r in poly]
+    rings = [[[float(p[0]), float(p[1])] for p in ring] for ring in rings]
+    outer = rings[0]
+    o = origin or outer[0]
+    cx = sum(p[0] for p in outer) / len(outer)
+    cy = sum(p[1] for p in outer) / len(outer)
+    return {
+        "schema": SCHEMA, "pnu": pr.get("pnu"), "address": pr.get("addr"),
+        "jibun": pr.get("jibun"), "geom_type": g.get("type"),
+        "rings": rings, "center": [cx, cy],
+        "area_m2": round(ring_area_m2(outer, o), 1),
+        "n_pts": len(outer) - 1,
+        "source": {"provider": "vworld", "layer": PARCEL_LAYER,
+                   "gosi": f"{pr.get('gosi_year')}-{pr.get('gosi_month')}"},
+    }
+
+
+def parcel(pnu: Optional[str] = None, center: Optional[Sequence[float]] = None,
+           key_kind: str = "vworld") -> Optional[Dict]:
+    """PNU(또는 좌표) → 필지 1개. **설계 블록이 아니라 참고 경계다**(모듈 docstring)."""
+    if not pnu and not center:
+        raise ValueError("pnu 또는 center 중 하나는 필요하다")
+    key, dom = _vworld(key_kind)
+    p = {"service": "data", "request": "GetFeature", "data": PARCEL_LAYER,
+         "key": key, "domain": dom, "format": "json", "errorformat": "json",
+         "crs": "EPSG:4326", "geometry": "true", "attribute": "true",
+         "size": "5", "page": "1"}
+    if pnu:
+        p["attrFilter"] = f"pnu:=:{pnu}"
+    else:
+        p["geomFilter"] = f"POINT({center[0]} {center[1]})"
+    res = _call("data", p)
+    feats = ((res.get("result") or {}).get("featureCollection") or {}).get("features") or []
+    return _feature_to_parcel(feats[0]) if feats else None
+
+
+def parcels_in_box(center: Sequence[float], radius_m: float = 250.0,
+                   max_pages: int = 5, key_kind: str = "vworld") -> List[Dict]:
+    """중심에서 반경(정사각 박스) 안의 필지 목록. PNU로 중복을 제거한다.
+
+    ⚠ 페이지를 넘겨도 같은 묶음이 다시 오는 일이 있다(2026-09-05 실측) —
+      **새 PNU가 하나도 없으면 멈춘다.**
+    """
+    key, dom = _vworld(key_kind)
+    lon, lat = float(center[0]), float(center[1])
+    kx = 111320.0 * math.cos(math.radians(lat))
+    dlon, dlat = radius_m / kx, radius_m / 110574.0
+    box = f"BOX({lon-dlon:.8f},{lat-dlat:.8f},{lon+dlon:.8f},{lat+dlat:.8f})"
+    seen: Dict[str, Dict] = {}
+    for page in range(1, max_pages + 1):
+        res = _call("data", {
+            "service": "data", "request": "GetFeature", "data": PARCEL_LAYER,
+            "key": key, "domain": dom, "format": "json", "errorformat": "json",
+            "crs": "EPSG:4326", "geometry": "true", "attribute": "true",
+            "geomFilter": box, "size": "100", "page": str(page)})
+        feats = ((res.get("result") or {}).get("featureCollection") or {}).get("features") or []
+        new = 0
+        for f in feats:
+            pc = _feature_to_parcel(f, origin=(lon, lat))
+            if pc["pnu"] and pc["pnu"] not in seen:
+                seen[pc["pnu"]] = pc
+                new += 1
+        if not feats or new == 0:
+            break
+    return list(seen.values())
+
+
+def print_tile(fr: Dict, basemap: str = "PHOTO", fmt: str = "png",
+               key_kind: str = "vworld") -> bytes:
+    """프레임 그대로의 위성 정지영상(bytes). frame()이 이미 공급자 제약을 지켰다.
+
+    basemap: PHOTO(위성) · PHOTO_HYBRID(위성+주기) · GRAPHIC · BASE.
+    """
+    key, dom = _vworld(key_kind)
+    lon, lat = fr["center"]
+    w, h = fr["size"]
+    return _call("image", {
+        "service": "image", "request": "getmap", "key": key, "domain": dom,
+        "format": fmt, "basemap": basemap, "crs": "EPSG:4326",
+        "center": f"{lon},{lat}", "zoom": str(fr["zoom"]), "size": f"{w},{h}"},
+        raw=True, timeout=60)
+
+
+def elevation(points: Sequence[Sequence[float]]) -> None:
+    """고도(DEM) — **경로 미확인. 추정하지 않는다**(불변 원칙 1).
+
+    2026-09-05 실측으로 막힌 후보 3:
+      data?data=LT_C_DEM (INVALID_RANGE) · req/wcs (404) · req/dem (404).
+    남은 후보 = 국토정보플랫폼 수치표고모델 별도 신청 · 브이월드 3D · 공공데이터포털 DEM.
+    낙차는 펌프 양정에 바로 들어가므로 **값이 확정되기 전에는 설계를 진행하지 않는다.**
+    """
+    raise NotImplementedError(
+        "고도(DEM) 공급자 미확정 — 브이월드 3개 경로 실패(2026-09-05). "
+        "낙차는 대표 실측/현장 입력으로 받는다.")
+
+
+# ────────────────────────────── CLI ──────────────────────────────
+
+def site_seed(query: str, zoom: int = 18, size: int = 1024,
+              radius_m: float = 150.0) -> Dict:
+    """지번 → 「설계 착수 씨앗」. 대표가 위성 위에 블록을 그릴 판을 깔아 준다.
+
+    🔴 blocks 는 **비워서** 낸다 — 경작 구역은 대표 판단이고 지적 경계가 대신할 수 없다.
+       (site.validate 는 blocks 가 비면 거부한다. 그것이 맞는 동작이다.)
+    """
+    hits = geocode(query)
+    if not hits:
+        raise LookupError(f"지번을 찾지 못했다: {query} — 읍·면을 추측해 붙이지 않는다")
+    hit = hits[0]
+    par = parcel(pnu=hit["pnu"])
+    if par is None:
+        raise LookupError(f"필지 폴리곤 없음: {hit['pnu']}")
+    fr = frame(par["center"], zoom=zoom, size=(size, size))
+    near = parcels_in_box(par["center"], radius_m=radius_m)
+    return {
+        "schema": "looperget.design.site/1", "name": par["address"],
+        "map": {"frame": {k: v for k, v in fr.items() if not k.startswith("_")},
+                "query": query, "provider": "vworld",
+                "m_per_px": round(fr["m_per_px"], 4)},
+        "reference_parcels": [
+            {"pnu": p["pnu"], "address": p["address"], "jibun": p["jibun"],
+             "area_m2": p["area_m2"], "outline_m": to_local_m(p["rings"][0], fr["origin"]),
+             "outline_px": [[round(x, 1), round(y, 1)]
+                            for x, y in (to_px(fr, *q) for q in p["rings"][0][:-1])]}
+            for p in sorted(near, key=lambda q: q["pnu"] != par["pnu"])],
+        "blocks": [], "routes": [], "sources": [],
+        "_note": "blocks·routes·sources 는 대표 입력이다(불변 원칙 1 · site.py). "
+                 "reference_parcels 는 지적 경계일 뿐 경작 구역이 아니다.",
+    }
+
+
+def _main(argv: List[str]) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(
+        prog="python -m looperget.design.mapsrc",
+        description="지번 → 필지 폴리곤·위성 프레임(P3 지도 어댑터). 설계 블록은 만들지 않는다.")
+    ap.add_argument("query", help='지번 주소. 예: "논산시 숙진리 211-1" (읍·면은 추측해 붙이지 않는다)')
+    ap.add_argument("--zoom", type=int, default=18, help=f"{ZOOM_RANGE[0]}~{ZOOM_RANGE[1]} (기본 18 = 최고 해상도)")
+    ap.add_argument("--size", type=int, default=1024, help=f"한 변 화소, 최대 {SIZE_MAX}")
+    ap.add_argument("--radius", type=float, default=150.0, help="주변 참고 필지 반경 m")
+    ap.add_argument("--out", default=None, help="출력 폴더(주면 site 씨앗 json + 위성 png 를 쓴다)")
+    ap.add_argument("--basemap", default="PHOTO_HYBRID", help="PHOTO · PHOTO_HYBRID · GRAPHIC · BASE")
+    a = ap.parse_args(argv)
+
+    seed = site_seed(a.query, zoom=a.zoom, size=a.size, radius_m=a.radius)
+    fr = seed["map"]["frame"]
+    main_p = seed["reference_parcels"][0]
+    print(f"지번   {a.query}")
+    print(f"필지   {main_p['address']} ({main_p['jibun']}) · PNU {main_p['pnu']}")
+    print(f"지적   {main_p['area_m2']:,.0f} ㎡ ({main_p['area_m2']/3.3058:,.0f} 평) · 점 {len(main_p['outline_m'])}개")
+    print(f"프레임 zoom {fr['zoom']} · {fr['size'][0]}×{fr['size'][1]} px · "
+          f"{seed['map']['m_per_px']} m/px · {fr['span_m'][0]:.0f}×{fr['span_m'][1]:.0f} m")
+    print(f"참고   반경 {a.radius:.0f} m 안 필지 {len(seed['reference_parcels'])}개")
+    print("🔴 blocks 는 비어 있다 — 경작 구역은 대표가 위성 위에서 확정한다(지적 경계 ≠ 설계 블록).")
+
+    if a.out:
+        out = Path(a.out)
+        out.mkdir(parents=True, exist_ok=True)
+        stem = (main_p["pnu"] or "site")
+        (out / f"{stem}_site_seed.json").write_text(
+            json.dumps(seed, ensure_ascii=False, indent=1), encoding="utf-8")
+        png = print_tile(frame(fr["center"], fr["zoom"], fr["size"]), basemap=a.basemap)
+        (out / f"{stem}_{a.basemap}.png").write_bytes(png)
+        print("")
+        print(f"저장 → {out / (stem + '_site_seed.json')}")
+        print(f"     → {out / (stem + '_' + a.basemap + '.png')} ({len(png):,} bytes)")
+    return 0
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _sys.stdout.reconfigure(encoding="utf-8")
+    raise SystemExit(_main(_sys.argv[1:]))
+
+
+__all__ = ["VERSION", "SCHEMA", "ZOOM_RANGE", "SIZE_MAX",
+           "webmercator", "inv_webmercator", "zoom_resolution",
+           "frame", "to_px", "to_lonlat", "to_local_m", "ring_area_m2",
+           "geocode", "parcel", "parcels_in_box", "print_tile", "elevation", "site_seed"]

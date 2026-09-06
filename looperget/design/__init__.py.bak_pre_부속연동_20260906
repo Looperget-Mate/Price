@@ -1,0 +1,90 @@
+# -*- coding: utf-8 -*-
+"""
+looperget.design — 지도 입력 → 설계·견적 자동 생성 엔진 (P1 · 신규 패키지 · 프로덕션 무수정).
+
+    from looperget.design import design
+    out = design(site)          # site = looperget.design.site/1 (site.py 참조)
+    out["n_heads"], out["laterals"], out["mainline"], out["zones"], out["bom"], out["money"]
+
+계산은 코드가 한다(불변 원칙 1). 대표 판단 항목(운전 구역·주배관 경로·계통도)은 입력으로 받는다.
+모듈: geom(기하) · layout(열·헤드 배치, 규칙 5·11) · branch(탭·곡선 분기, 규칙 14) ·
+      mainline(주배관 물량, 규칙 1·2·3) · bom(수량, 규칙 8·17·18) · quote(단가) · reproduce(5필지 재현 검증).
+배포 시 `looperget/__init__.py` PKG_VER 올림은 대표 배포 루틴에 맡긴다(P1에서는 손대지 않음).
+"""
+from __future__ import annotations
+
+from typing import Dict, List, Optional
+
+from . import geom, layout, branch, mainline, bom as _bom, quote as _quote, site as _site
+from .layout import RowPolicy, rows_from_polygon
+
+VERSION = "0.1.0"
+SCHEMA_OUT = "looperget.design.answer/1"
+
+
+def design(site: Dict, price_db: Optional[Dict] = None, tier: str = "소비자가") -> Dict:
+    site = _site.validate(site)
+    route_pts = [[tuple(p) for p in r["pts"]] for r in site["routes"]]
+    warnings: List[str] = []
+
+    laterals: List[Dict] = []
+    heads: List[Dict] = []
+    for blk in site["blocks"]:
+        pol = RowPolicy(**(blk.get("policy") or {}))
+        bars = [(tuple(a), tuple(b)) for a, b in (blk.get("bars") or [])] or None
+        rows = rows_from_polygon([tuple(p) for p in blk["polygon"]], tuple(blk["u"]), pol,
+                                 bars=bars, mains=route_pts)
+        for r in rows:
+            d = r.to_dict()
+            d["block"] = blk["name"]
+            tap = branch.find_tap(r.p0, r.dir, route_pts)
+            if tap is None:
+                warnings.append(f"{blk['name']} 열 a={r.a:.1f}: 주배관에 닿지 않음(급수 불가) — 경로 검토")
+                d.update(tap=None, route=None, zone=None)
+            else:
+                rt = site["routes"][tap["route"]]
+                d.update(tap=[round(tap["pt"][0], 1), round(tap["pt"][1], 1)], tap_how=tap["how"],
+                         route=rt["name"], zone=rt["zone"])
+            pts, Lp, extra, dev = branch.branch_path(r.p0, r.p1, r.off, route_pts)
+            d.update(path=[list(p) for p in pts] if extra > 0 else None,
+                     len_m=round(Lp, 1), extra_m=round(extra, 2), dev_deg=dev)
+            laterals.append(d)
+
+    for i, l in enumerate(laterals, 1):
+        l["id"] = i
+        for k, h in enumerate(l["heads"], 1):
+            heads.append({"lat": i, "k": k, "pt": h})
+
+    main = mainline.analyze(site["routes"], site["sources"])
+    warnings += main.pop("warnings")
+
+    zones: Dict[str, Dict] = {}
+    for r in site["routes"]:
+        if r["zone"] is None:                     # 공통 구간(펌프→매니폴드)
+            continue
+        zones.setdefault(str(r["zone"]), {"zone": r["zone"], "routes": [], "laterals": [], "n_heads": 0})
+        zones[str(r["zone"])]["routes"].append(r["name"])
+    for l in laterals:
+        if l["zone"] is None:
+            if l["route"] is not None:
+                warnings.append(f"열 {l['id']}: 공통 구간 '{l['route']}'에 탭 — 구역 없음")
+            continue
+        z = zones[str(l["zone"])]
+        z["laterals"].append(l["id"])
+        z["n_heads"] += l["n_heads"]
+
+    n_heads = len(heads)
+    bom = _bom.build(n_heads, [l["len_m"] for l in laterals], main, site)
+    money = _quote.price(bom, price_db, tier) if price_db else None
+    if money and money["missing"]:
+        warnings.append("단가 없음: " + ", ".join(money["missing"]))
+
+    return {
+        "schema": SCHEMA_OUT, "engine": f"looperget.design {VERSION}", "name": site.get("name"),
+        "laterals": laterals, "heads": heads, "n_heads": n_heads, "n_laterals": len(laterals),
+        "mainline": main, "zones": list(zones.values()), "bom": bom, "money": money,
+        "warnings": warnings,
+    }
+
+
+__all__ = ["design", "VERSION", "RowPolicy", "rows_from_polygon", "geom", "layout", "branch", "mainline"]

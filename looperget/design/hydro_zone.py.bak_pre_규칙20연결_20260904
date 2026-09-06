@@ -1,0 +1,147 @@
+# -*- coding: utf-8 -*-
+"""
+looperget.design.hydro_zone — 운전 구역별 수리 검증 (순수 함수 · 계산은 코드가 한다).
+
+정본 이식 = `_설계/배추밭스프링클러_20260824/10_계산/_계산_펌프_통합.py`(sys_head · operating_point)
+· `_계산_수리_숙진리.py`(solve_zone). 손실은 프로덕션 `looperget.hydro`가 계산한다.
+
+    zone_point(n_heads, main_m, lat_n, lat_m, pump_curve)  → 펌프 곡선 ∩ 시스템 곡선 = 실제 운전점
+    zone_demand(n_heads, main_m, lat_n, lat_m)             → 말단 1.5 bar를 지키는 펌프 요구 사양
+    zones_report(design, site)                              → 구역별 표 (제안서 상호확인·급수 지면용)
+
+기준(대표 확정 · 08-26): 말단 헤드 1.5 bar = 살수 반경 10 m · 427B 노즐(매뉴얼 1030 L/h @ 3 bar) ·
+주배관 50 mm · 가지관 25 mm · 여과기·부속 여유 2 m. 반경 보간 10 + 2·(bar − 1.5)는 대표 실증값.
+펌프 곡선은 **입력**(site["pump"])이다 — 없으면 요구 사양만 내고 펌프는 `[미확정]`.
+"""
+from __future__ import annotations
+
+import math
+from typing import Dict, List, Optional, Sequence, Tuple
+
+from .. import hydro as H
+
+NOZZLE_K = H.nozzle_k(1030 / 60, 3.0)     # 427B 4.0 mm
+P_END_TARGET = 1.5                        # bar → 살수 반경 10 m
+SUCTION_MARGIN_M = 2.0                    # 여과기·부속 여유
+MAIN_MM, LAT_MM = 50, 25
+V50_LIMIT = 2.0                           # 권장 유속 상한(m/s)
+
+# 대표 확인(08-27) 농가 보유 펌프 — 곡선은 `_계산_PU3000.py` 디지타이즈(명판 일치)
+PUMP_CURVES = {
+    "PU-3000I/P": {
+        "흡상 0.5 m": [(0, 44), (100, 41), (200, 36), (300, 29), (350, 24), (400, 19), (450, 12), (480, 5)],
+        "흡상 6 m": [(0, 44), (100, 41), (200, 36), (300, 28), (330, 25), (350, 22), (365, 12), (375, 5)],
+    },
+}
+
+
+def radius_m(p_end_bar: float) -> float:
+    """말단압 → 살수 반경 (대표 실증 보간: 1.5 bar = 10 m · 2.5 bar = 12 m)."""
+    return 10.0 + 2.0 * (p_end_bar - P_END_TARGET)
+
+
+def pump_head(curve: Sequence[Tuple[float, float]], q_lpm: float) -> float:
+    if q_lpm <= 0:
+        return curve[0][1]
+    for (qa, ha), (qb, hb) in zip(curve, curve[1:]):
+        if q_lpm <= qb:
+            return ha + (hb - ha) * (q_lpm - qa) / (qb - qa)
+    return 0.0
+
+
+def sys_head(n_heads: int, main_m: float, lat_n: int, lat_m: float, p_end: float) -> Dict:
+    """말단압 p_end를 만들려면 펌프가 내야 하는 양정(m)과 그때의 유량(L/분).
+    임계 열(두수·길이 최대)로 가지관 손실을, 열 수만큼의 분기로 주배관 손실(Christiansen)을 본다."""
+    p_avg = p_end
+    for _ in range(200):
+        q1 = H.nozzle_flow_lpm(NOZZLE_K, p_avg)
+        hf_lat = H.lateral_loss_m(lat_n * q1, LAT_MM, lat_m, lat_n)
+        p_in_lat = p_end + H.head_m_to_bar(hf_lat)
+        new = (p_in_lat + p_end) / 2
+        if abs(new - p_avg) < 1e-7:
+            break
+        p_avg = new
+    q1 = H.nozzle_flow_lpm(NOZZLE_K, p_avg)
+    Q = n_heads * q1
+    n_branch = max(2, int(math.ceil(n_heads / max(1, lat_n))))
+    hf_main = H.lateral_loss_m(Q, MAIN_MM, main_m, n_branch)
+    p_start = p_in_lat + H.head_m_to_bar(hf_main)
+    return {"need_head_m": H.bar_to_head_m(p_start) + SUCTION_MARGIN_M, "Q": Q, "q_head": q1,
+            "p_start": p_start, "p_in_lat": p_in_lat, "hf_lat": hf_lat, "hf_main": hf_main,
+            "v50": H.velocity_ms(Q, MAIN_MM)}
+
+
+def zone_point(n_heads: int, main_m: float, lat_n: int, lat_m: float,
+               curve: Sequence[Tuple[float, float]]) -> Dict:
+    """펌프 곡선 ∩ 시스템 곡선 — 실제 말단압을 이분법으로 찾는다."""
+    lo, hi = 0.2, 4.0
+    for _ in range(80):
+        p_end = (lo + hi) / 2
+        s = sys_head(n_heads, main_m, lat_n, lat_m, p_end)
+        if pump_head(curve, s["Q"]) >= s["need_head_m"]:
+            lo = p_end
+        else:
+            hi = p_end
+    p_end = lo
+    s = sys_head(n_heads, main_m, lat_n, lat_m, p_end)
+    verdict = "OK" if p_end >= P_END_TARGET else ("주의" if p_end >= 1.2 else "부족")
+    return {"heads": n_heads, "main_m": round(main_m, 1), "lat_n": lat_n, "lat_m": round(lat_m, 1),
+            "Q": round(s["Q"]), "q_head": round(s["q_head"], 1),
+            "p_start": round(s["p_start"], 2), "p_end": round(p_end, 2),
+            "hf_lat": round(s["hf_lat"], 1), "hf_main": round(s["hf_main"], 1),
+            "need_head_m": round(s["need_head_m"]), "have_head_m": round(pump_head(curve, s["Q"]), 1),
+            "radius_end": round(radius_m(p_end), 1), "v50": round(s["v50"], 2), "verdict": verdict}
+
+
+def zone_demand(n_heads: int, main_m: float, lat_n: int, lat_m: float) -> Dict:
+    """펌프가 없을 때 — 말단 1.5 bar를 지키는 요구 사양(유량·양정·축동력)."""
+    s = sys_head(n_heads, main_m, lat_n, lat_m, P_END_TARGET)
+    return {"heads": n_heads, "main_m": round(main_m, 1), "lat_n": lat_n, "lat_m": round(lat_m, 1),
+            "Q": round(s["Q"]), "q_head": round(s["q_head"], 1),
+            "p_start": round(s["p_start"], 2), "p_end": P_END_TARGET,
+            "hf_lat": round(s["hf_lat"], 1), "hf_main": round(s["hf_main"], 1),
+            "need_head_m": round(s["need_head_m"]), "need_hp": round(H.pump_shaft_hp(s["Q"], s["need_head_m"]), 1),
+            "radius_end": radius_m(P_END_TARGET), "v50": round(s["v50"], 2), "verdict": "[미확정 펌프]"}
+
+
+def cap_heads_15bar(main_m: float, lat_n: int, lat_m: float, curve, n_from: int) -> int:
+    """말단 1.5 bar를 지키는 동시 두수 상한(미달 구역의 대안 수치)."""
+    for n in range(n_from, 3, -1):
+        if zone_point(n, main_m, lat_n, lat_m, curve)["p_end"] >= P_END_TARGET:
+            return n
+    return 0
+
+
+def zones_report(design: Dict, site: Dict) -> List[Dict]:
+    """엔진 출력(zones·laterals·mainline)과 site(routes·pump)로 구역별 운전점 표를 만든다.
+    구역 주배관 길이 = 그 구역 경로 길이 + 공통 구간(zone None) 길이."""
+    routes = {r["name"]: r for r in design["mainline"]["routes"]}
+    common_m = sum(r["len_m"] for r in routes.values() if r.get("zone") is None)
+    lats = {l["id"]: l for l in design["laterals"]}
+    pump = site.get("pump") or {}
+    curve = None
+    if pump.get("curve"):
+        curve = [tuple(p) for p in pump["curve"]]
+    elif pump.get("model") in PUMP_CURVES:
+        curve = PUMP_CURVES[pump["model"]][pump.get("case", "흡상 0.5 m")]
+    out = []
+    for z in design["zones"]:
+        rows = [lats[i] for i in z["laterals"]]
+        if not rows:
+            continue
+        crit = max(rows, key=lambda r: (r["n_heads"], r["len_m"]))
+        main_m = sum(routes[n]["len_m"] for n in z["routes"]) + common_m
+        if curve:
+            r = zone_point(z["n_heads"], main_m, crit["n_heads"], crit["len_m"], curve)
+            if r["verdict"] != "OK":
+                r["cap_15bar"] = cap_heads_15bar(main_m, crit["n_heads"], crit["len_m"], curve, z["n_heads"])
+        else:
+            r = zone_demand(z["n_heads"], main_m, crit["n_heads"], crit["len_m"])
+        r["zone"] = str(z["zone"])
+        r["pump"] = pump.get("model", "[미확정]")
+        out.append(r)
+    return out
+
+
+__all__ = ["zone_point", "zone_demand", "zones_report", "sys_head", "pump_head", "radius_m",
+           "PUMP_CURVES", "P_END_TARGET", "V50_LIMIT"]

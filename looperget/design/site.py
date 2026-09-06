@@ -1,0 +1,65 @@
+# -*- coding: utf-8 -*-
+"""
+looperget.design.site — 설계 입력(대상지) 스키마 `looperget.design.site/1` 와 검증.
+
+대표 판단으로만 채워지는 항목(규칙 6·7·12·13)은 **입력**이다 — 엔진이 임의로 만들지 않는다:
+  운전 구역(routes[].zone) · 주배관 경로(routes[].pts) · 급수 계통 공용(water_items) · 밸브 배치(valves_01403).
+
+site = {
+  "schema": "looperget.design.site/1", "name": str,
+  "blocks":  [{"name", "polygon": [[x,y],...] (로컬 m), "u": [ux,uy] (열 방향),
+               "bars": [[[x,y],[x,y]],...]? (두둑 선, 규칙 11), "policy": {RowPolicy 덮어쓰기}?,
+               "crop": str? (작물 — 처음에 물어보고 알면 넣는다. 지역·작물별 데이터 축적용, 대표 지시 2026-09-05)}],
+  "routes":  [{"name", "zone", "pts": [[x,y],...], "by_ceo": true}],        # 규칙 13
+  "sources": [{"name", "pt": [x,y], "tees_here": int?, "start_bands": int}],  # 급수점·진입점
+  "water_items": [{"code","qty","note"}],                                    # 규칙 7 계통도 통과 품목
+  "valves_01403": {"start": 0|1, "zones": int},
+}
+"""
+from __future__ import annotations
+
+from typing import Dict, List
+
+SCHEMA = "looperget.design.site/1"
+
+
+def validate(site: Dict) -> Dict:
+    """필수 항목·형식 검사. 문제가 있으면 ValueError — 미확정 입력으로는 설계를 진행하지 않는다(불변 원칙 1)."""
+    errs: List[str] = []
+    if site.get("schema") != SCHEMA:
+        errs.append(f"schema != {SCHEMA}")
+    blocks = site.get("blocks") or []
+    if not blocks:
+        errs.append("blocks 비어 있음")
+    for b in blocks:
+        poly = b.get("polygon") or []
+        if len(poly) < 3:
+            errs.append(f"block '{b.get('name')}': polygon 점 3개 미만")
+        u = b.get("u")
+        if not u or len(u) != 2 or (u[0] == 0 and u[1] == 0):
+            errs.append(f"block '{b.get('name')}': u(열 방향) 없음")
+    routes = site.get("routes") or []
+    if not routes:
+        errs.append("routes 비어 있음 — 주배관 경로는 대표 입력(규칙 13)")
+    for r in routes:
+        if len(r.get("pts") or []) < 2:
+            errs.append(f"route '{r.get('name')}': pts 2점 미만")
+        if "zone" not in r:                      # None = 공통(펌프→매니폴드) 구간
+            errs.append(f"route '{r.get('name')}': zone 없음 — 운전 구역은 대표 판단(규칙 6)")
+    for b in blocks:                              # 작물은 선택 항목 — 모르면 비운다(대표 지시 2026-09-05)
+        c = b.get("crop")
+        if c is not None and (not isinstance(c, str) or not c.strip()):
+            errs.append(f"block '{b.get('name')}': crop 은 비어 있지 않은 문자열이어야 한다")
+    if not site.get("sources"):
+        errs.append("sources 비어 있음")
+    for w in site.get("water_items", []):
+        if not w.get("code") or int(w.get("qty", 0)) <= 0:
+            errs.append(f"water_items 항목 불량: {w}")
+    if errs:
+        raise ValueError("site 입력 오류: " + " / ".join(errs))
+    site.setdefault("valves_01403", {"start": 1, "zones": 0})
+    site.setdefault("water_items", [])
+    crops = sorted({b["crop"].strip() for b in blocks if b.get("crop")})
+    if crops:                                     # 지역·작물별 축적을 위해 한곳에 모아 둔다
+        site["crops"] = crops
+    return site

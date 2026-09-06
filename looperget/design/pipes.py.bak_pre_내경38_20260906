@@ -1,0 +1,121 @@
+# -*- coding: utf-8 -*-
+"""
+looperget.design.pipes — 취급 관(송수호스) 정본과 관경 선정 (§5 행 1 ⓑ · 프로덕션 무수정).
+
+    from looperget.design import pipes
+    r = pipes.select_main(q_lpm=301, length_m=54.7, p_in_bar=2.64, p_end_min_bar=1.5)
+    r["d_mm"]        # 50
+    r["item"]        # {"code": "02051", "roll_m": 50, ...}
+
+**물리 판정은 프로덕션 `looperget.hydro.select_diameter`가 한다.** 이 모듈이 갖는 것은 제품 데이터뿐이다.
+
+정본 = Google Sheets `Looperget_DB` · `Products` 시트 세부카테고리 **송수호스**(2026-09-05 실측).
+취급 관경은 **정확히 3종**이다 — 25 · 40 · 50 mm. 그보다 굵은 관은 **없다.**
+
+🔴 **내경 가정** — 아래 `id_mm`은 규격의 호칭값을 그대로 내경으로 쓴다.
+   프로덕션 `hydro_zone.MAIN_MM/LAT_MM = 50/25`가 같은 가정으로 승인본 5필지를 재현했으므로
+   **25·50 mm는 그 범위에서 검증된 값**이다. **40 mm는 검증된 적이 없다** —
+   40 mm 송수호스의 실제 내경은 **매뉴얼·실측이 정본**이고, 확인 전에는 추정하지 않는다(불변 원칙 2).
+   확인되면 `id_mm`만 고치면 된다. 선정 로직은 손댈 필요가 없다.
+
+⚠ **관경을 바꾸면 부속도 바뀐다.** 현재 BOM(`bom.py`)은 25 mm 가지관(`02044`·`20916` 고정)과
+   40·50 mm 관(`02038` 고정)을 전제로 짜여 있다. 이 모듈은 **관경을 고르기만 하고 BOM을 바꾸지 않는다** —
+   40 mm 주배관 채택은 부속 연동까지 확인한 뒤의 별건이다.
+"""
+from __future__ import annotations
+
+from typing import Dict, List, Optional, Sequence
+
+from .. import hydro as H
+
+SCHEMA = "looperget.design.pipes/1"
+SOURCE = "Products 시트 · 세부카테고리 송수호스 · 2026-09-05 실측"
+
+# 규격 · 1롤길이 · 소비자가 = 시트 원문. id_mm 은 위 docstring의 가정.
+PIPES: List[Dict] = [
+    {"code": "02044", "name": "송수호스, 루퍼젯+", "spec": "25mm*100M",
+     "nominal_mm": 25, "id_mm": 25.0, "roll_m": 100.0, "price": 125000, "verified": True},
+    {"code": "02070", "name": "송수호스, 루퍼젯+", "spec": "40mm*50M",
+     "nominal_mm": 40, "id_mm": 40.0, "roll_m": 50.0, "price": 108000, "verified": False},
+    {"code": "02051", "name": "송수호스, 루퍼젯+", "spec": "50mm*50M",
+     "nominal_mm": 50, "id_mm": 50.0, "roll_m": 50.0, "price": 133000, "verified": True},
+]
+
+# 승인본이 실제로 쓴 조합(2026-09-05 정답지) — 재현 기준이다.
+APPROVED_MAIN_MM = 50
+APPROVED_LATERAL_MM = 25
+
+# 유속 권장 상한. **탈락선이 아니라 경고선**이다 — hydro.select_diameter docstring 참조.
+V_WARN = 2.0
+
+
+def by_diameter(d_mm: Optional[float]) -> Optional[Dict]:
+    """내경 → 품목. 없으면 None."""
+    if d_mm is None:
+        return None
+    for p in PIPES:
+        if abs(p["id_mm"] - float(d_mm)) < 1e-9:
+            return p
+    return None
+
+
+def price_per_m(p: Dict) -> float:
+    """m당 소비자가 — 관경을 낮췄을 때 얼마가 주는지를 말할 수 있어야 한다."""
+    return p["price"] / p["roll_m"]
+
+
+def candidates(verified_only: bool = False) -> List[float]:
+    """고를 수 있는 내경 목록. `verified_only=True` 면 승인본으로 검증된 25·50 만 쓴다."""
+    return [p["id_mm"] for p in PIPES if (p["verified"] or not verified_only)]
+
+
+def _select(q_lpm: float, length_m: float, p_in_bar: float, p_end_min_bar: float,
+            n_outlets: int, elev_drop_m: float, verified_only: bool,
+            only_mm: Optional[Sequence[float]] = None) -> Dict:
+    cands = list(only_mm) if only_mm else candidates(verified_only)
+    r = H.select_diameter(q_lpm, length_m, cands, p_in_bar, p_end_min_bar,
+                          n_outlets=n_outlets, elev_drop_m=elev_drop_m, v_warn=V_WARN)
+    item = by_diameter(r["d_mm"])
+    r["schema"] = SCHEMA
+    r["item"] = item
+    r["source"] = SOURCE
+    if item is not None:
+        r["price_per_m"] = round(price_per_m(item), 1)
+        r["rolls"] = -(-length_m // item["roll_m"]) if length_m else 0
+        if not item["verified"]:
+            r["warn"] = list(r["warn"]) + [
+                "%d mm 는 내경이 확인되지 않았다 — 매뉴얼·실측 확인 전에는 채택하지 않는다(불변 원칙 2)"
+                % item["nominal_mm"]]
+        if item["id_mm"] != APPROVED_MAIN_MM and n_outlets == 0:
+            r["warn"] = list(r["warn"]) + [
+                "승인본은 주배관 %d mm 를 썼다 — 부속(02038 등)이 관경에 묶여 있어 BOM 연동 확인이 필요하다"
+                % APPROVED_MAIN_MM]
+    return r
+
+
+def select_main(q_lpm: float, length_m: float, p_in_bar: float,
+                p_end_min_bar: float = 1.5, elev_drop_m: float = 0.0,
+                verified_only: bool = True) -> Dict:
+    """주배관 관경 — 중간 분출이 없는 단일 관로."""
+    return _select(q_lpm, length_m, p_in_bar, p_end_min_bar, 0, elev_drop_m, verified_only)
+
+
+def select_lateral(q_lpm: float, length_m: float, n_heads: int, p_in_bar: float,
+                   p_end_min_bar: float = 1.5, elev_drop_m: float = 0.0,
+                   verified_only: bool = True) -> Dict:
+    """가지관 관경 — 헤드가 균등 분출하므로 Christiansen F 가 걸린다."""
+    if n_heads < 1:
+        raise ValueError("n_heads 는 1 이상이어야 한다")
+    return _select(q_lpm, length_m, p_in_bar, p_end_min_bar, n_heads, elev_drop_m, verified_only)
+
+
+def savings_per_m(from_mm: float, to_mm: float) -> Optional[float]:
+    """관경을 낮췄을 때 m당 절감액(원). 품목이 없으면 None."""
+    a, b = by_diameter(from_mm), by_diameter(to_mm)
+    return None if (a is None or b is None) else round(price_per_m(a) - price_per_m(b), 1)
+
+
+__all__ = ["SCHEMA", "SOURCE", "PIPES", "V_WARN",
+           "APPROVED_MAIN_MM", "APPROVED_LATERAL_MM",
+           "by_diameter", "price_per_m", "candidates",
+           "select_main", "select_lateral", "savings_per_m"]

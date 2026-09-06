@@ -945,6 +945,33 @@ def aq_update_item_cell(code, col_name, value):
             return True
     return False
 
+def aq_sync_item_names(pairs):
+    """[V78] AQ_Items.품목명_AQ ← Products.제품명 일괄 동기화. pairs=[(품목코드, 정본명)].
+    품목명_AQ는 Products 제품명의 **복사본**이라 정본이 바뀌면 어긋난다 — 2026-08-28 실측 33건
+    (2026-07-21 NAS 동기화가 남긴 `퀸-유니온밸브` 등). 아쿠나리스 화면·스티커·가이드북·진열도면이
+    모두 이 컬럼을 쓰므로, 맞춰 두지 않으면 옛 이름이 그대로 인쇄된다. 품목 정본 = Looperget_DB(Products).
+    ※ 대상 셀만 batch_update — 전체 재기록(§2-2 clear+update)이 아니다. 반환: 반영 셀 수."""
+    ws = _aq_sh().worksheet("AQ_Items")
+    vals = ws.get_all_values()
+    hdr = vals[0] if vals else []
+    if "품목명_AQ" not in hdr:
+        return 0
+    ci, col, n = hdr.index("품목명_AQ"), "", hdr.index("품목명_AQ") + 1
+    while n:                                   # 0기반 열 인덱스 → A1 열 문자
+        n, rmd = divmod(n - 1, 26)
+        col = chr(65 + rmd) + col
+    rowof = {}
+    for i, row in enumerate(vals[1:], start=2):
+        c = str(row[0]).strip().zfill(5) if row and str(row[0]).strip() else ""
+        if c and c not in rowof:
+            rowof[c] = i
+    reqs = [{"range": f"{col}{rowof[c]}", "values": [[nm]]}
+            for c, nm in pairs if c in rowof and nm]
+    if not reqs:
+        return 0
+    ws.batch_update(reqs, value_input_option="RAW")
+    return len(reqs)
+
 def _aq_grid_precheck(grid, ws_name):
     """[V68] clear() 前 사전 검증 — 구글시트 한도(셀 50,000자)를 넘는 셀이 있으면 시트를 건드리기 전에
     차단한다. 2026-07-24 실사고: clear 성공 후 update가 400으로 거부되어 AQ_Sites가 통째로 지워짐
@@ -1026,7 +1053,7 @@ from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 �
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
 if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V77)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V80)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1039,8 +1066,8 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 77:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V77)와 짝이 맞지 않습니다.\n\n"
+if _LG_VER < 79:
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V78)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -3197,7 +3224,8 @@ with st.sidebar:
 
     if st.session_state.app_lang == "KR":
         # [V48] 권한 필터: 계정 로그인 시 권한 있는 모드만 노출 (공용 로그인 = 전체, 기존 동작)
-        _mode_opts = [m for m, p in [("견적 작성", "quote"), ("🏪 아쿠나리스", "aqunaris"),
+        _mode_opts = [m for m, p in [("견적 작성", "quote"), ("🗺️ 설계(P3)", "quote"),
+                                     ("🏪 아쿠나리스", "aqunaris"),
                                      ("관리자 모드", "admin"), ("🇯🇵 일본 수출 분석", "jp")] if aq_can(p)]
         if not _mode_opts: _mode_opts = ["견적 작성"]
         if st.session_state.get("main_sidebar_mode") not in _mode_opts:
@@ -3291,6 +3319,9 @@ with st.sidebar:
         st.info("저장된 견적이 없습니다.")
         
     st.divider()
+
+# [V79] 「설계(P3)」 ③ 작도 결과 JSON 견본 — 화면에 그대로 보여 준다
+P3_DRAWN_SAMPLE = '{\n "blocks": [\n  {\n   "name": "A",\n   "polygon": [\n    [\n     0,\n     0\n    ],\n    [\n     40,\n     0\n    ],\n    [\n     40,\n     30\n    ],\n    [\n     0,\n     30\n    ]\n   ],\n   "u": [\n    1,\n    0\n   ]\n  }\n ],\n "routes": [\n  {\n   "name": "R1",\n   "zone": 1,\n   "pts": [\n    [\n     0,\n     0\n    ],\n    [\n     40,\n     0\n    ]\n   ],\n   "by_ceo": true\n  }\n ],\n "sources": [\n  {\n   "name": "관정",\n   "pt": [\n    0,\n    0\n   ],\n   "start_bands": 1\n  }\n ],\n "valves_01403": {\n  "start": 1,\n  "zones": 1\n },\n "water_items": []\n}'
 
 if mode == "관리자 모드" or mode == "管理者モード":
     st.header("🛠 관리자 모드")
@@ -4139,8 +4170,14 @@ elif mode == "🏪 아쿠나리스":
                     loc = "-".join(str(x) for x in [r.get("섹션", ""), r.get("단", ""), r.get("열", "")] if str(x).strip())
                     if _ib_assign: loc = ""   # 사이트 기준인데 미배치 → 빈칸
                     _bx0 = str(r.get("기본상자", "") or "")
+                # [V78] 정본 대조 — 품목명_AQ가 Products 제품명과 다르면 그 자리에서 보이게 한다
+                _anm78 = str(r.get("품목명_AQ", "") or "")
+                _pnm78 = str(p.get("name", "") or "")
+                _chk78 = ("미연결" if not p else
+                          (f"⚠ {_pnm78}" if _pnm78 and _pnm78 != _anm78 else ""))
                 rows_view.append({
-                    "품목코드": r["품목코드"], "품목명": str(r.get("품목명_AQ", "") or ""), "규격": str(r.get("규격_AQ", "") or ""),
+                    "품목코드": r["품목코드"], "품목명": _anm78, "정본대조(Products)": _chk78,
+                    "규격": str(r.get("규격_AQ", "") or ""),
                     "진열분류": str(r.get("진열분류", "") or ""),
                     ("배치(랙-단)" if _ib_assign else "위치(섹션-단-열)"): loc,
                     "상자": _bx0, "기본수량": str(r.get("기본수량", "") or ""),
@@ -4153,6 +4190,36 @@ elif mode == "🏪 아쿠나리스":
                        + (" (저장 배치·사이트 상자 반영)" if _ib_assign else " (AQ_Items 표준 위치)")
                        + " · 매입가 미표시 · 수용기록=축적된 상자별 수용량 데이터 수")
             st.dataframe(pd.DataFrame(rows_view), hide_index=True, height=480)
+
+            # ── [V78] 품목명 정본 대조·동기화 (대표님 승인 2026-08-28) ──
+            #  품목명_AQ는 Products 제품명의 복사본이라 정본이 바뀌면 어긋난다. 화면·스티커·가이드북·도면이
+            #  전부 이 컬럼을 쓰므로, 어긋난 채 두면 옛 이름이 농협 현장에 인쇄돼 나간다.
+            _nm_gap = []
+            for r in aq_items:
+                _p78 = prod_by_code.get(r["품목코드"]) or {}
+                _pn78 = str(_p78.get("name", "") or "")
+                _an78 = str(r.get("품목명_AQ", "") or "")
+                if _pn78 and _pn78 != _an78:
+                    _nm_gap.append((r["품목코드"], _an78, _pn78))
+            if _nm_gap:
+                with st.expander(f"⚠ 품목명이 정본(Products)과 다른 품목 {len(_nm_gap)}건 — 정본명으로 동기화",
+                                 expanded=False):
+                    st.caption("품목 정본은 **Looperget_DB(Products)** 입니다. 아쿠나리스 화면·스티커·가이드북·"
+                               "진열도면은 모두 AQ_Items `품목명_AQ`를 쓰므로, 여기서 맞춰 두지 않으면 "
+                               "옛 이름이 그대로 인쇄됩니다. (Products에 없는 품목은 대상이 아닙니다)")
+                    st.dataframe(pd.DataFrame([{"품목코드": c, "현재 (AQ_Items)": a, "정본 (Products)": b}
+                                               for c, a, b in _nm_gap]), hide_index=True,
+                                 height=min(360, 45 + 35 * len(_nm_gap)))
+                    if not aq_can("aqunaris"):   # 같은 탭의 품목 등재와 동일 기준(공용 로그인 허용)
+                        st.caption("※ 동기화는 아쿠나리스 권한 계정에서만 실행됩니다.")
+                    elif st.button(f"🔄 {len(_nm_gap)}건 정본명으로 동기화", key="aq_nmsync_go", type="primary"):
+                        try:
+                            _n78 = aq_sync_item_names([(c, b) for c, _a, b in _nm_gap])
+                            aq_load_all.clear()
+                            st.success(f"{_n78}건 동기화 완료 — 품목명_AQ ← Products 제품명")
+                            time.sleep(0.5); st.rerun()
+                        except Exception as _e78:
+                            st.error(f"동기화 실패: {aq_err_str(_e78)}")
 
             # ── [V61] Looperget_DB 절대값(대표님 승인 2026-07-23) — Products에서 진열 품목 추가(흡수 1단계) ──
             with st.expander("➕ 진열 품목 추가 — Looperget_DB(Products)에서", expanded=False):
@@ -5897,6 +5964,188 @@ elif mode == "🏪 아쿠나리스":
                             time.sleep(0.5); st.rerun()
                     except Exception as e:
                         st.error(f"저장 실패: {aq_err_str(e)}")
+
+# ══════════════════════════════════════════════════════════════════════════
+# [V79] 🗺️ 설계(P3) — 접수 → 작도판 → 확인 → 설계·견적
+#   [V80] 관경 자동 선정(#52) · 유량·수압 필수화 + 넘기기(#53)
+#   흐름 정본 = `_설계/_문진표/문진표_v1_농지.md` · 대표 확답 #43·#44
+#   🔴 캔버스를 새로 만들지 않는다(파일 기반 1안 · 대표 선택 2026-09-06).
+#      작도판 PNG를 내려받아 농민 확인 → 확인된 blocks/routes JSON을 올린다.
+#   🔴 계산은 전부 `looperget/design` 이 한다 — 이 화면은 입력을 받고 결과를 보여줄 뿐이다.
+# ══════════════════════════════════════════════════════════════════════════
+elif mode == "🗺️ 설계(P3)":
+    from looperget.design import intake as _p3i, mapsrc as _p3m
+    from looperget.design import design as _p3_design, hydro_zone as _p3hz, pipes as _p3p
+
+    st.title("🗺️ 설계 (P3)")
+    st.caption("접수 → 작도판 → 확인 → 설계·견적.  **계산은 엔진이 한다** — 이 화면은 값을 만들지 않는다.")
+
+    _p3_steps = st.tabs(["① 문진표", "② 작도판", "③ 확인 결과 올리기", "④ 설계·견적"])
+
+    # ── ① 문진표 ──────────────────────────────────────────────────────
+    with _p3_steps[0]:
+        st.markdown("**통화로 물어보고 그대로 채웁니다.** 🔴 표시는 없으면 설계하지 않습니다.")
+        st.caption("🔴 없으면 설계하지 않습니다 · 🟠 필수지만 **모르면 뜻을 밝히고 넘어갈 수 있습니다**.")
+        _ans = dict(st.session_state.get("p3_answers", {}))
+        _waived = []
+        _grp = None
+        for _q in _p3i.QUESTIONS:
+            if _q["group"] != _grp:
+                _grp = _q["group"]
+                st.markdown("##### " + _grp)
+            _mark = "🟠 " if _q.get("waivable") else ("🔴 " if _q["req"] else "")
+            _ans[_q["key"]] = st.text_input(_mark + _q["ask"], value=_ans.get(_q["key"], ""),
+                                            key="p3_q_" + _q["key"], help=_q["why"])
+            if _q["key"] in _p3i.WAIVABLE and not str(_ans[_q["key"]] or "").strip():
+                if st.checkbox("이 값 없이 진행합니다 (모르는 채로 설계 — 기록에 남습니다)",
+                               key="p3_w_" + _q["key"]):
+                    _waived.append(_q["key"])
+        st.session_state.p3_answers = _ans
+        st.session_state.p3_waived = _waived
+        _chk = _p3i.check(_ans, _waived)
+        if _chk["ok"]:
+            st.success("✅ " + _chk["verdict"])
+        else:
+            st.error("🔴 " + _chk["verdict"])
+            st.info("다음에 물을 것 — " + str(_chk["ask_next"]))
+        for _w in _chk["warn"]:
+            st.warning(_w)
+        with st.expander("통화 대본 (그대로 읽으시면 됩니다)"):
+            st.code(_p3i.script(), language=None)
+
+    # ── ② 작도판 ──────────────────────────────────────────────────────
+    with _p3_steps[1]:
+        _addr = (st.session_state.get("p3_answers", {}) or {}).get("address", "").strip()
+        if not _addr:
+            st.warning("①에서 **지번**을 먼저 채워 주세요.")
+        else:
+            st.markdown("지번 **" + _addr + "**")
+            st.caption("브이월드에서 필지·위성을 받아 판을 깝니다. 받은 PNG를 농민에게 보내 확인받으세요.")
+            if st.button("작도판 만들기", type="primary", key="p3_draft_btn"):
+                try:
+                    _p3m.set_keys(dict(st.secrets["map_keys"]) if "map_keys" in st.secrets else None)
+                except Exception:
+                    _p3m.set_keys(None)
+                with st.spinner("필지·위성 받는 중…"):
+                    try:
+                        _d = _p3m.draft_from_address(_addr)
+                        st.session_state.p3_draft = {
+                            "png": _d["png"], "address": _d["parcel"]["address"],
+                            "pnu": _d["parcel"]["pnu"], "area_m2": _d["parcel"]["area_m2"],
+                            "seed": _d["seed"]}
+                    except FileNotFoundError:
+                        st.session_state.p3_draft = None
+                        st.error("🚨 **지도 키가 없습니다.** 배포 환경에서는 Streamlit `secrets` 에 "
+                                 "`[map_keys]` 를 넣어 주세요(키는 저장소에 올리지 않습니다 · 불변 원칙 4).")
+                    except LookupError as _e:
+                        st.session_state.p3_draft = None
+                        st.error("🔴 " + str(_e))
+                    except Exception as _e:
+                        st.session_state.p3_draft = None
+                        st.error("작도판 실패: " + str(_e))
+            _dr = st.session_state.get("p3_draft")
+            if _dr:
+                st.success("%s · PNU %s · 지적 %s ㎡ (%s 평)"
+                           % (_dr["address"], _dr["pnu"], format(round(_dr["area_m2"]), ","),
+                              format(round(_dr["area_m2"] / 3.3058), ",")))
+                st.image(_dr["png"], caption="작도판 — 농민 확인용", width="stretch")
+                _c1, _c2 = st.columns(2)
+                _c1.download_button("작도판 PNG 내려받기", _dr["png"],
+                                    file_name=(_dr["pnu"] or "site") + "_작도판.png",
+                                    mime="image/png", key="p3_dl_png")
+                _c2.download_button("site 씨앗 JSON 내려받기",
+                                    json.dumps(_dr["seed"], ensure_ascii=False, indent=1).encode("utf-8"),
+                                    file_name=(_dr["pnu"] or "site") + "_site_seed.json",
+                                    mime="application/json", key="p3_dl_seed")
+                st.info("🔴 **경작 구역은 지적 경계가 대신하지 못합니다.** 확인된 판 위에서 "
+                        "블록·주배관·운전 구역을 정하고, 그 결과를 ③에 올려 주세요.")
+
+    # ── ③ 확인 결과 올리기 ────────────────────────────────────────────
+    with _p3_steps[2]:
+        st.markdown("확인된 **작도 결과 JSON** 을 올려 주세요. 형식:")
+        st.code(P3_DRAWN_SAMPLE, language="json")
+        st.caption("blocks 는 `mapsrc.blocks_from_pixels()` 로 화소에서 뽑습니다. "
+                   "routes·zone·water_items·valves 는 **대표 입력**입니다(설계 규칙 6·7·12·13). "
+                   "주배관 관경은 **엔진이 스스로 고릅니다** — 지정하시려면 main_mm 을 넣으세요.")
+        _up = st.file_uploader("작도 결과 JSON", type=["json"], key="p3_drawn_up")
+        if _up is not None:
+            try:
+                st.session_state.p3_drawn = json.loads(_up.getvalue().decode("utf-8"))
+                st.success("올렸습니다.")
+            except Exception as _e:
+                st.error("JSON 읽기 실패: " + str(_e))
+        _dw = st.session_state.get("p3_drawn")
+        if _dw:
+            st.write({"blocks": len(_dw.get("blocks") or []), "routes": len(_dw.get("routes") or []),
+                      "sources": len(_dw.get("sources") or []),
+                      "주배관 호칭": _dw.get("main_mm") or "엔진 선정"})
+
+    # ── ④ 설계·견적 ───────────────────────────────────────────────────
+    with _p3_steps[3]:
+        _ans = st.session_state.get("p3_answers", {}) or {}
+        _dw = st.session_state.get("p3_drawn")
+        if not _p3i.check(_ans, st.session_state.get("p3_waived") or [])["ok"]:
+            st.warning("①의 필수 칸을 먼저 채워 주세요.")
+        elif not _dw:
+            st.warning("③에서 작도 결과를 올려 주세요.")
+        elif st.button("설계 실행", type="primary", key="p3_run"):
+            _site = None
+            try:
+                _site = _p3i.validate(_ans, _dw, name=_ans.get("address"),
+                                      waived=st.session_state.get("p3_waived") or [])
+            except ValueError as _e:
+                st.error("🔴 입력이 부족합니다 — " + str(_e))
+            if _site:
+                _pdb = {}
+                for _pr in st.session_state.db.get("products", []):
+                    _cd = str(_pr.get("code", "")).strip().zfill(5)
+                    if _cd:
+                        _pdb[_cd] = {"name": _pr.get("name", ""), "spec": _pr.get("spec", ""),
+                                     "unit": _pr.get("unit", "EA"),
+                                     "소비자가": int(_pr.get("price_cons", 0) or 0)}
+                try:
+                    _res = _p3_design(_site, _pdb)
+                    st.session_state.p3_result = _res
+                    st.session_state.p3_site = _site
+                except Exception as _e:
+                    st.error("설계 실패: " + str(_e))
+        _res = st.session_state.get("p3_result")
+        if _res:
+            _site = st.session_state.get("p3_site") or {}
+            _m1, _m2, _m3, _m4 = st.columns(4)
+            _m1.metric("헤드", "%d 두" % _res["n_heads"])
+            _m2.metric("가지관 열", "%d 열" % _res["n_laterals"])
+            _m3.metric("주배관", "%.0f m" % _res["mainline"]["total_m"])
+            _m4.metric("자재 합계", format((_res["money"] or {}).get("total", 0), ",") + " 원")
+            _mm = int(_res.get("main_mm") or _p3p.APPROVED_MAIN_MM)
+            st.caption("주배관 %s — **%s**. 여유 하한은 두지 않습니다: 말단 1.5 bar 를 지키는 "
+                       "가장 가는 관을 고릅니다."
+                       % (_p3p.id_note(_p3p.by_nominal(_mm)["id_mm"]), _res.get("main_mm_source", "-")))
+            if _res.get("main_mm_picks"):
+                with st.expander("구역별 관경 선정 근거"):
+                    st.dataframe(pd.DataFrame(_res["main_mm_picks"]), width="stretch", hide_index=True)
+            for _w in ((_site.get("intake") or {}).get("warn") or []):
+                st.warning("문진표 — " + _w)
+            for _w in _res.get("warnings", []):
+                st.warning(_w)
+            try:
+                _zr = _p3hz.zones_report(_res, _site)
+            except Exception:
+                _zr = []
+            if _zr:
+                st.markdown("##### 구역별 운전점")
+                st.dataframe(pd.DataFrame(_zr), width="stretch", hide_index=True)
+            st.markdown("##### 자재 목록")
+            _rows = (_res.get("money") or {}).get("rows") or _res["bom"]
+            st.dataframe(pd.DataFrame(_rows), width="stretch", hide_index=True)
+            _c1, _c2 = st.columns(2)
+            _c1.download_button("설계 결과 JSON",
+                                json.dumps(_res, ensure_ascii=False, indent=1).encode("utf-8"),
+                                file_name="설계결과.json", mime="application/json", key="p3_dl_res")
+            _c2.download_button("site JSON",
+                                json.dumps(_site, ensure_ascii=False, indent=1).encode("utf-8"),
+                                file_name="site.json", mime="application/json", key="p3_dl_site")
+            st.info("제안서·견적서 발행은 **대표 전담**입니다(불변 원칙 3). 이 화면은 초안까지입니다.")
 
 elif mode == "🇯🇵 일본 수출 분석":
     st.header("🇯🇵 일본 수출 이익 분석 (HQ Profit Analysis)")

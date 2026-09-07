@@ -46,17 +46,14 @@ QUESTIONS: List[Dict] = [
      "why": "site.blocks[].crop → 지역·작물별 축적(대표 지시 2026-09-05). 열 간격을 만들지는 않는다."},
     {"key": "n_blocks", "group": "대상지", "req": False,
      "ask": "밭이 몇 개로 나뉘어 있습니까? 사이에 **통로**가 있습니까?",
-     "quick": ["나뉘지 않음", "통로 없음", "나뉘지 않음 · 통로 없음"],
      "why": "blocks 개수 · 통로는 주배관 공유로 표현한다(#42 — 스키마 무수정)."},
     {"key": "elev_note", "group": "대상지", "req": False,
      "ask": "밭 안에 **높낮이 차**가 있습니까? 있다면 어디가 몇 m쯤 높습니까?",
-     "quick": ["없음"],
      "why": "hydro.select_diameter(elev_drop_m). 🔴 DEM 은 폐기했다 — **소비자 고지·실측만** 쓴다(#44)."},
 
     # ── C. 급수 — 여기가 설계의 전부를 결정한다 ──
     {"key": "source_kind", "group": "급수", "req": True,
-     "ask": "물은 어디서 옵니까?",
-     "choices": ["관정", "상수도", "하천·저수지", "물탱크", "기타"], "other": "기타",
+     "ask": "물은 어디서 옵니까? (관정 / 상수도 / 하천·저수지 / 물탱크)",
      "why": "site.sources · water_items(규칙 7). 급수원이 정해져야 계통 부속 규격이 정해진다."},
     {"key": "source_where", "group": "급수", "req": True,
      "ask": "급수 지점이 밭의 **어느 쪽**입니까? 밭 가장 먼 끝까지 대략 몇 m입니까?",
@@ -79,15 +76,9 @@ QUESTIONS: List[Dict] = [
     # ── D. 운전 ──
     {"key": "zones_wish", "group": "운전", "req": False,
      "ask": "한 번에 밭 **전체**에 물을 주시겠습니까, **나눠서** 주시겠습니까?",
-     "choices": ["한 번에", "되도록 한 번에", "나눠서", "기타"], "other": "기타",
      "why": "site.routes[].zone(운전 구역 · 규칙 6) — 대표 판단이고 엔진이 만들지 않는다."},
     {"key": "auto", "group": "운전", "req": False,
      "ask": "밸브를 사람이 여닫아도 됩니까, 자동이 필요하십니까?",
-     "choices": ["수동", "자동"],
-     # 🔴 대표 확답 2026-09-07 — 「자동은 우리가 현재로서는 대응이 잘 안 돼」.
-     #    고른 자리에서 바로 말한다. 못 하는 것을 견적 뒤에 알리면 그건 사고다.
-     "warn_if": {"자동": "🔴 **자동 제어는 현재 대응이 어렵습니다**(대표 확답 2026-09-07). "
-                         "수동 밸브로 설계하고, 자동이 꼭 필요하시면 **별건으로 협의**합니다."},
      "why": "valves_01403 · 자동 밸브 품목. 구역이 여럿이면 사람이 매번 돌려야 한다."},
 
     # ── E. 기존 시설 ──
@@ -95,14 +86,6 @@ QUESTIONS: List[Dict] = [
      "ask": "지금 쓰시는 관수 시설이 있습니까? (스프링클러 · 점적 · 살수차 · 매설관)",
      "why": "기존 매설관은 무절단 분기 대상이 될 수 있다. 활용 여부는 대표 판단."},
 ]
-
-# 🔵 통화로 자주 나오는 답은 **버튼**으로 받는다(대표 지시 2026-09-07 · #61).
-#    `choices` = 보기(고른 문자열이 그대로 답) · `other` = 직접 입력을 여는 보기 이름
-#    `quick`   = 자유 입력 위의 한 번에 채우기 단추 · `warn_if` = 그 답을 고르면 그 자리에서 알릴 사실
-#    🔴 **버튼은 문항을 바꾸지 않는다** — 답의 형식은 여전히 문자열이고 `to_site` 는 그대로 읽는다.
-CHOICES = {q["key"]: q["choices"] for q in QUESTIONS if q.get("choices")}
-QUICK = {q["key"]: q["quick"] for q in QUESTIONS if q.get("quick")}
-WARN_IF = {q["key"]: q["warn_if"] for q in QUESTIONS if q.get("warn_if")}
 
 REQUIRED = [q["key"] for q in QUESTIONS if q["req"]]
 

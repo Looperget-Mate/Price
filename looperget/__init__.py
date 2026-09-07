@@ -12,7 +12,7 @@ app.py에서 **자립도가 높은 출력 엔진**을 기계적으로 추출해 
 📌 모듈을 추가/변경할 때는 `PKG_VER`를 올리고, app.py의 가드 기준도 함께 올린다.
 """
 
-PKG_VER = 82   # [V83, 2026-09-07] 배경 정본 Esri(tile_mosaic·basemap_image) · draft_from_center · ㎡ 글리프 결손 수정
+PKG_VER = 83   # [V84, 2026-09-07] fit_frame(그린 것에 맞춰 판을 잡는다) · intake 보기 버튼(CHOICES·QUICK·WARN_IF)
 #              [V79, 2026-09-06] design 패키지 — 「설계(P3)」 모드 연결(intake·mapsrc·design·bom)
 #              [V77, 2026-08-11] aq_print 가이드북 지면 — 통로 묶음(그룹명 '통로-쪽')·한 펼침면 한 통로
 

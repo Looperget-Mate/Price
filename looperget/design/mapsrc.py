@@ -145,6 +145,34 @@ def tile_grid(fr: Dict) -> Dict:
             "n": (x1 - x0 + 1) * (y1 - y0 + 1)}
 
 
+def fit_frame(pts_m: Sequence[Sequence[float]], origin: Sequence[float],
+              size: int = 1024, margin: float = 1.35, pad_m: float = 30.0,
+              zoom_max: int = 18, zoom_min: int = 13) -> Dict:
+    """**그린 것에 맞춰 판을 잡는다**(순수). 로컬 미터 점들 → 그 전부가 들어가는 frame.
+
+    지도를 손으로 옮겨 그렸으면 원점은 엉뚱한 데 있을 수 있다 — 판의 중심은
+    **원점이 아니라 그린 것**이어야 한다(2026-09-07 대표 「애매한 곳으로 지도가 나오네」).
+    줌은 **가장 크게 보이는 단계**를 고른다(공급자 상한 18).
+    """
+    pts = [q for q in (pts_m or []) if q is not None and len(q) >= 2]
+    if not pts:
+        raise ValueError("맞출 점이 없다 — 먼저 지도에서 그린다")
+    xs = [float(q[0]) for q in pts]
+    ys = [float(q[1]) for q in pts]
+    cx, cy = (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
+    span = max(max(xs) - min(xs), max(ys) - min(ys)) * margin + pad_m
+    lon, lat = from_local_m([[cx, cy]], origin)[0]
+    k = math.cos(math.radians(lat))
+    zoom = zoom_min
+    for z in range(zoom_max, zoom_min - 1, -1):
+        if zoom_resolution(z) * k * size >= span:
+            zoom = z
+            break
+    fr = frame((lon, lat), zoom=zoom, size=(size, size))
+    fr["fit_span_m"] = round(span, 1)
+    return fr
+
+
 def to_px(fr: Dict, lon: float, lat: float) -> Tuple[float, float]:
     """위경도 → 프레임 화소 좌표(좌상단 원점 · y 아래로 증가)."""
     mx, my = webmercator(lon, lat)
@@ -676,7 +704,16 @@ def _safe(text):
     return text
 
 
-def _label(d, xy, text, size, fill, bg, center=False):
+def _hit(a, b):
+    return not (a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1])
+
+
+def _label(d, xy, text, size, fill, bg, center=False, used=None):
+    """이름표 하나. `used` 를 주면 **이미 놓인 이름표를 피해** 위아래로 비켜 앉는다.
+
+    🔴 2026-09-07 실측: 밭 이름표와 급수점·주배관 이름표가 겹쳐 「6 급수 지점 1,963 평)」처럼
+      읽을 수 없는 판이 나왔다. **농민이 보고 확인하는 그림**이라 겹침은 결함이다.
+    """
     f = _font(size)
     text = _safe(text)
     x, y = xy
@@ -684,8 +721,20 @@ def _label(d, xy, text, size, fill, bg, center=False):
     w, h = box[2] - box[0], box[3] - box[1]
     if center:
         x, y = x - w / 2, y - h / 2
+    if used is not None:
+        step = h + 12
+        for k in range(0, 10):
+            for dy in ((0.0,) if k == 0 else (k * step, -k * step)):
+                if not any(_hit((x - 6, y - 5 + dy, x + w + 6, y + h + 7 + dy), u) for u in used):
+                    y += dy
+                    k = -1
+                    break
+            if k == -1:
+                break
+        used.append((x - 6, y - 5, x + w + 6, y + h + 7))
     d.rectangle([x - 6, y - 5, x + w + 6, y + h + 7], fill=bg)
     d.multiline_text((x - box[0], y - box[1]), text, font=f, fill=fill, align="center")
+    return (x - 6, y - 5, x + w + 6, y + h + 7)
 
 
 def _scale_bar(d, fr, W, H):
@@ -731,6 +780,8 @@ def draft_sheet(fr, parcels=None, blocks_px=None, basemap="PHOTO_HYBRID", title=
     im = Image.open(_io.BytesIO(basemap_bytes)).convert("RGB")
     d = ImageDraw.Draw(im, "RGBA")
     W, H = im.size
+    # 고정 자리(제목 · 방위 · 축척·각주)를 먼저 막아 둔다 — 이름표가 그 위로 오지 않게.
+    used = [(0, 0, 560, 46), (W - 76, 0, W, 76), (0, H - 76, 320, H)]
 
     # 지적 참고선 — 경계일 뿐 대상지가 아니다. 그래서 얇고 흐리게.
     for pc in (parcels or []):
@@ -742,7 +793,7 @@ def draft_sheet(fr, parcels=None, blocks_px=None, basemap="PHOTO_HYBRID", title=
         cy = sum(y for _, y in pts) / len(pts)
         if 30 <= cx <= W - 30 and 30 <= cy <= H - 30:
             _label(d, (cx, cy), str(pc.get("jibun") or ""), 16,
-                   (235, 245, 255), (0, 0, 0, 130), center=True)
+                   (235, 245, 255), (0, 0, 0, 130), center=True, used=used)
 
     # 우리가 그린 대상지 — 굵고 선명하게, 면적을 함께 적는다.
     # 미터로 그린 것(④ 지도에서 그리기)도 여기서 화소로 합류한다 — 그리는 코드는 하나다.
@@ -766,7 +817,7 @@ def draft_sheet(fr, parcels=None, blocks_px=None, basemap="PHOTO_HYBRID", title=
         cy = sum(y for _, y in pp) / len(pp)
         _label(d, (cx, cy), "%s\n%s ㎡ (%s 평)" % (name, format(round(area), ","),
                                                    format(round(area / 3.3058), ",")),
-               20, col, (0, 0, 0, 175), center=True)
+               20, col, (0, 0, 0, 175), center=True, used=used)
 
     # 주배관 — 굵은 붉은 선. 그린 순서를 알 수 있게 이름을 얹는다.
     for _rt in (routes_m or []):
@@ -775,9 +826,11 @@ def draft_sheet(fr, parcels=None, blocks_px=None, basemap="PHOTO_HYBRID", title=
             continue
         _pp = [to_px(fr, q[0], q[1]) for q in _ll]
         d.line(_pp, fill=(255, 75, 75, 255), width=6, joint="curve")
-        _mid = _pp[len(_pp) // 2]
-        _label(d, _mid, str(_rt.get("name") or "주배관"), 17,
-               (255, 220, 220), (0, 0, 0, 165), center=True)
+        # 이름은 **1/4 지점 위쪽**에 둔다 — 한가운데 두면 밭 이름표와 겹친다(2026-09-07 실측).
+        _at = _pp[max(1, len(_pp) // 4)] if len(_pp) > 2 else (
+            ((_pp[0][0] + _pp[1][0]) / 2, (_pp[0][1] + _pp[1][1]) / 2))
+        _label(d, (_at[0], _at[1] - 20), str(_rt.get("name") or "주배관"), 16,
+               (255, 220, 220), (0, 0, 0, 175), center=True, used=used)
 
     # 급수원·급수 지점 — 농민이 「저기 물탱크」라고 짚는 자리다. 가장 눈에 띄어야 한다.
     for _sc in (sources_m or []):
@@ -787,7 +840,7 @@ def draft_sheet(fr, parcels=None, blocks_px=None, basemap="PHOTO_HYBRID", title=
                   outline=(120, 220, 255, 255), width=4)
         d.ellipse([_x - 4, _y - 4, _x + 4, _y + 4], fill=(120, 220, 255, 255))
         _label(d, (_x, _y - 30), str(_sc.get("name") or "급수점"), 19,
-               (170, 235, 255), (0, 0, 0, 180), center=True)
+               (170, 235, 255), (0, 0, 0, 180), center=True, used=used)
 
     _scale_bar(d, fr, W, H)
     _north(d, W)

@@ -1053,7 +1053,7 @@ from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 �
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
 if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V80)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V81)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1066,8 +1066,8 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 79:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V78)와 짝이 맞지 않습니다.\n\n"
+if _LG_VER < 80:
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V81)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -5966,8 +5966,9 @@ elif mode == "🏪 아쿠나리스":
                         st.error(f"저장 실패: {aq_err_str(e)}")
 
 # ══════════════════════════════════════════════════════════════════════════
-# [V79] 🗺️ 설계(P3) — 접수 → 작도판 → 확인 → 설계·견적
+# [V79] 🗺️ 설계(P3) — 접수 → 작도판 → 지도에서 찍기 → 설계·견적
 #   [V80] 관경 자동 선정(#52) · 유량·수압 필수화 + 넘기기(#53)
+#   [V81] 작도판 502 방어(#56) · ④ 지도에서 찍기(#57 · 대표 지시 2026-09-07)
 #   흐름 정본 = `_설계/_문진표/문진표_v1_농지.md` · 대표 확답 #43·#44
 #   🔴 캔버스를 새로 만들지 않는다(파일 기반 1안 · 대표 선택 2026-09-06).
 #      작도판 PNG를 내려받아 농민 확인 → 확인된 blocks/routes JSON을 올린다.
@@ -5980,7 +5981,8 @@ elif mode == "🗺️ 설계(P3)":
     st.title("🗺️ 설계 (P3)")
     st.caption("접수 → 작도판 → 확인 → 설계·견적.  **계산은 엔진이 한다** — 이 화면은 값을 만들지 않는다.")
 
-    _p3_steps = st.tabs(["① 문진표", "② 작도판", "③ 확인 결과 올리기", "④ 설계·견적"])
+    _p3_steps = st.tabs(["① 문진표", "② 작도판", "③ 블록 올리기",
+                         "④ 지도에서 찍기", "⑤ 설계·견적"])
 
     # ── ① 문진표 ──────────────────────────────────────────────────────
     with _p3_steps[0]:
@@ -6032,7 +6034,8 @@ elif mode == "🗺️ 설계(P3)":
                         st.session_state.p3_draft = {
                             "png": _d["png"], "address": _d["parcel"]["address"],
                             "pnu": _d["parcel"]["pnu"], "area_m2": _d["parcel"]["area_m2"],
-                            "seed": _d["seed"]}
+                            "seed": _d["seed"],
+                            "frame": _d["frame"]}      # [V81] ④ 지도에서 찍기의 기준점
                     except FileNotFoundError:
                         st.session_state.p3_draft = None
                         st.error("🚨 **지도 키가 없습니다.** 배포 환경에서는 Streamlit `secrets` 에 "
@@ -6043,6 +6046,25 @@ elif mode == "🗺️ 설계(P3)":
                     except Exception as _e:
                         st.session_state.p3_draft = None
                         st.error("작도판 실패: " + str(_e))
+                        st.info("공급자(브이월드) 게이트웨이 쪽 응답이면 **잠시 뒤 다시 누르면 대개 통합니다** "
+                                "— 이미 2회 되쏘고 나온 결과입니다. 계속 막히면 아래 "
+                                "**지도 연결 점검**을 눌러 어느 호출이 죽는지 알려 주세요.")
+            with st.expander("🩺 지도 연결 점검 — 어느 호출이 죽는지 봅니다"):
+                st.caption("지번 검색 → 필지 → 주변 필지 → 위성(JPEG) → 위성(PNG) 을 **따로따로** 찔러 봅니다. "
+                           "작도판은 이 순서로 돕니다.")
+                if st.button("점검 실행", key="p3_probe_btn"):
+                    try:
+                        _p3m.set_keys(dict(st.secrets["map_keys"]) if "map_keys" in st.secrets else None)
+                    except Exception:
+                        _p3m.set_keys(None)
+                    with st.spinner("찔러 보는 중…"):
+                        try:
+                            _pb = _p3m.probe(_addr or "논산시 상월면 상도리 482-42")
+                        except Exception as _e:
+                            _pb = [{"step": "키 적재", "ok": False, "ms": 0, "detail": str(_e)}]
+                    st.dataframe(pd.DataFrame([{"단계": r["step"], "결과": "✅" if r["ok"] else "🔴",
+                                                "ms": r["ms"], "내용": str(r["detail"])} for r in _pb]),
+                                 width="stretch", hide_index=True)
             _dr = st.session_state.get("p3_draft")
             if _dr:
                 st.success("%s · PNU %s · 지적 %s ㎡ (%s 평)"
@@ -6060,9 +6082,10 @@ elif mode == "🗺️ 설계(P3)":
                 st.info("🔴 **경작 구역은 지적 경계가 대신하지 못합니다.** 확인된 판 위에서 "
                         "블록·주배관·운전 구역을 정하고, 그 결과를 ③에 올려 주세요.")
 
-    # ── ③ 확인 결과 올리기 ────────────────────────────────────────────
+    # ── ③ 블록 올리기 ─────────────────────────────────────────────────
     with _p3_steps[2]:
-        st.markdown("확인된 **작도 결과 JSON** 을 올려 주세요. 형식:")
+        st.markdown("확인된 **작도 결과 JSON**(밭 구역 = `blocks`)을 올려 주세요. 형식:")
+        st.caption("급수원·급수 지점·주배관은 **④에서 지도로 찍습니다** — 여기에 넣지 않아도 됩니다.")
         st.code(P3_DRAWN_SAMPLE, language="json")
         st.caption("blocks 는 `mapsrc.blocks_from_pixels()` 로 화소에서 뽑습니다. "
                    "routes·zone·water_items·valves 는 **대표 입력**입니다(설계 규칙 6·7·12·13). "
@@ -6080,8 +6103,181 @@ elif mode == "🗺️ 설계(P3)":
                       "sources": len(_dw.get("sources") or []),
                       "주배관 호칭": _dw.get("main_mm") or "엔진 선정"})
 
-    # ── ④ 설계·견적 ───────────────────────────────────────────────────
+    # ── ④ 지도에서 찍기 ───────────────────────────────────────────────
+    #   [V81] 대표 지시 2026-09-07 「물탱크나 펌프 위치는 말로 설명하기 어렵다 — 지도에서 찍자」
+    #   🔴 이 화면이 만드는 것은 **좌표뿐**이다. 계산은 엔진이 한다(불변 원칙 1).
+    #   🔴 타일은 **브라우저가 직접** 받는다 — ②가 공급자 502로 막혀도 지도는 뜬다.
     with _p3_steps[3]:
+        st.markdown("**지도를 눌러 급수원·급수 지점을 찍고, 주배관은 선으로 그립니다.**")
+        st.caption("말로 설명하기 어려운 자리를 지도가 대신 말합니다. 찍은 점은 `sources[].pt` · "
+                   "그린 선은 `routes[].pts` 로 ⑤에 그대로 들어갑니다.")
+        _dr = st.session_state.get("p3_draft")
+        _fr = (_dr or {}).get("frame")
+        _mapmod = None
+        try:
+            import folium as _fo
+            from folium.plugins import Draw as _FoDraw
+            from streamlit_folium import st_folium as _st_folium
+            _mapmod = True
+        except Exception as _e:
+            _map_err = str(_e)
+        if not _fr:
+            st.warning("②에서 **작도판**을 먼저 만들어 주세요 — 좌표의 원점이 거기서 나옵니다.")
+        elif not _mapmod:
+            st.error("🚨 지도 부품이 없습니다 — `folium` · `streamlit-folium` 이 필요합니다 (" + _map_err + ").")
+            st.caption("requirements.txt 에 들어 있습니다. 배포 후에도 이 문구가 보이면 재배포가 필요합니다.")
+        else:
+            _org = _fr["origin"]
+            _pins = st.session_state.setdefault("p3_pins", {"sources": [], "routes": []})
+
+            # 찍기 전에 무엇을 찍을지 정한다 — 이름이 곧 설계서의 이름이 된다.
+            _k1, _k2, _k3 = st.columns([2, 1, 1])
+            _kind = _k1.selectbox("찍을 것", ["💧 물탱크", "💧 관정", "⚙ 펌프", "🚰 상수도 인입",
+                                              "🎯 급수 지점(밭 진입)", "✍ 직접 입력"], key="p3_pin_kind")
+            _bands = _k2.number_input("시작 밴드", 0, 12, 4, key="p3_pin_bands",
+                                      help="급수점에서 나가는 밴드 수 — 자재(BOM)에 그대로 들어갑니다.")
+            _tees = _k3.number_input("이 자리 T", 0, 12, 0, key="p3_pin_tees",
+                                     help="급수점에 T 분기가 있으면 개수. 없으면 0.")
+            # 🔴 위젯에 key 를 주면 value 는 첫 렌더에만 먹는다 — 「찍을 것」을 바꿔도 이름이 안 따라온다.
+            #    그래서 종류가 바뀐 순간에만 이름 칸을 갈아 끼운다(대표가 손으로 고친 이름은 지키면서).
+            if st.session_state.get("p3_pin_kind_prev") != _kind:
+                st.session_state.p3_pin_kind_prev = _kind
+                st.session_state.p3_pin_name = ("" if _kind == "✍ 직접 입력"
+                                                else _kind.split(" ", 1)[-1])
+            _nm = st.text_input("이름", key="p3_pin_name")
+
+            # 지도 — 타일은 브라우저가 받는다(서버 502와 무관하다)
+            try:
+                _sat = _p3m.wmts_url("Satellite")
+                _hyb = _p3m.wmts_url("Hybrid")
+            except Exception:
+                _sat = _hyb = ""
+            _esri = ("https://server.arcgisonline.com/ArcGIS/rest/services/"
+                     "World_Imagery/MapServer/tile/{z}/{y}/{x}")
+            _M = _fo.Map(location=[_org[1], _org[0]], zoom_start=18, max_zoom=20,
+                         tiles=None, control_scale=True)
+            if _sat:
+                _fo.TileLayer(tiles=_sat, attr="VWorld", name="위성 (브이월드)",
+                              max_native_zoom=19, max_zoom=20).add_to(_M)
+            _fo.TileLayer(tiles=_esri, attr="Esri", name="위성 (Esri · 예비)",
+                          max_native_zoom=19, max_zoom=20, show=(not _sat)).add_to(_M)
+            if _hyb:
+                _fo.TileLayer(tiles=_hyb, attr="VWorld", name="주기 (지번·도로)",
+                              overlay=True, show=True, max_native_zoom=19, max_zoom=20).add_to(_M)
+
+            # 지적 참고선 — 경계일 뿐 대상지가 아니다(mapsrc 정본과 같은 말).
+            for _rp in ((_dr.get("seed") or {}).get("reference_parcels") or [])[:60]:
+                _ll = _p3m.from_local_m(_rp.get("outline_m") or [], _org)
+                if len(_ll) >= 3:
+                    _fo.Polygon([[_q[1], _q[0]] for _q in _ll], color="#7cc4ff", weight=2,
+                                fill=False, opacity=0.75,
+                                tooltip="지적 " + str(_rp.get("jibun") or "")).add_to(_M)
+
+            # ③에서 올린 밭 구역
+            for _bk in ((st.session_state.get("p3_drawn") or {}).get("blocks") or []):
+                _ll = _p3m.from_local_m(_bk.get("polygon") or [], _org)
+                if len(_ll) >= 3:
+                    _fo.Polygon([[_q[1], _q[0]] for _q in _ll], color="#ffd600", weight=4,
+                                fill=True, fill_opacity=0.15,
+                                tooltip="밭 " + str(_bk.get("name") or "")).add_to(_M)
+
+            # 이미 찍은 것
+            for _i, _sc in enumerate(_pins["sources"]):
+                _lo, _la = _p3m.from_local_m([_sc["pt"]], _org)[0]
+                _fo.Marker([_la, _lo], tooltip="%d. %s" % (_i + 1, _sc["name"]),
+                           icon=_fo.Icon(color="red", icon="tint", prefix="fa")).add_to(_M)
+            for _rt in _pins["routes"]:
+                _ll = _p3m.from_local_m(_rt.get("pts") or [], _org)
+                if len(_ll) >= 2:
+                    _fo.PolyLine([[_q[1], _q[0]] for _q in _ll], color="#ff4b4b", weight=5,
+                                 tooltip=str(_rt.get("name") or "")).add_to(_M)
+
+            _FoDraw(export=False, position="topleft",
+                    draw_options={"polyline": {"shapeOptions": {"color": "#ff4b4b", "weight": 5}},
+                                  "polygon": False, "rectangle": False, "circle": False,
+                                  "marker": False, "circlemarker": False},
+                    edit_options={"edit": True, "remove": True}).add_to(_M)
+            _fo.LayerControl(collapsed=True).add_to(_M)
+
+            _out = _st_folium(_M, height=560, width=None, key="p3_map",
+                              returned_objects=["last_clicked", "all_drawings"])
+
+            # 클릭 → 급수점. 같은 클릭이 두 번 들어오지 않게 좌표로 걸러 낸다.
+            _clk = (_out or {}).get("last_clicked")
+            if _clk:
+                _sig = [round(float(_clk["lat"]), 8), round(float(_clk["lng"]), 8)]
+                if st.session_state.get("p3_map_click") != _sig:
+                    st.session_state.p3_map_click = _sig
+                    _x, _y = _p3m.to_local_m([[_sig[1], _sig[0]]], _org)[0]
+                    _pins["sources"].append({"name": (_nm or "급수점").strip(),
+                                             "pt": [_x, _y], "start_bands": int(_bands),
+                                             "tees_here": int(_tees)})
+                    st.session_state.p3_pins = _pins
+                    st.rerun()
+
+            _b1, _b2, _b3 = st.columns(3)
+            if _b1.button("↩ 마지막 점 지우기", key="p3_pin_undo") and _pins["sources"]:
+                _pins["sources"].pop()
+                st.session_state.p3_pins = _pins
+                st.rerun()
+            if _b2.button("🗑 점 전부 지우기", key="p3_pin_clear"):
+                _pins["sources"] = []
+                st.session_state.p3_pins = _pins
+                st.rerun()
+            _dws = [_f for _f in ((_out or {}).get("all_drawings") or [])
+                    if ((_f or {}).get("geometry") or {}).get("type") == "LineString"]
+            if _b3.button("📐 그린 선 %d개를 주배관으로" % len(_dws), key="p3_pin_routes"):
+                _pins["routes"] = [
+                    {"name": "R%d" % (_i + 1), "zone": None,
+                     "pts": _p3m.to_local_m(_f["geometry"]["coordinates"], _org), "by_ceo": True}
+                    for _i, _f in enumerate(_dws)]
+                st.session_state.p3_pins = _pins
+                st.rerun()
+
+            # 찍은 결과 — 거리는 엔진이 쓰는 좌표 그대로 잰다.
+            if _pins["sources"]:
+                st.markdown("##### 찍은 급수점")
+                _prows = []
+                for _i, _sc in enumerate(_pins["sources"]):
+                    _r = {"#": _i + 1, "이름": _sc["name"],
+                          "x(동, m)": round(_sc["pt"][0], 1), "y(북, m)": round(_sc["pt"][1], 1),
+                          "시작 밴드": _sc["start_bands"], "T": _sc.get("tees_here", 0)}
+                    _bl = ((st.session_state.get("p3_drawn") or {}).get("blocks") or [])
+                    _qs = [_q for _b in _bl for _q in (_b.get("polygon") or [])]
+                    if _qs:
+                        _r["가장 가까운 밭까지(m)"] = round(min(
+                            ((_sc["pt"][0] - _q[0]) ** 2 + (_sc["pt"][1] - _q[1]) ** 2) ** 0.5
+                            for _q in _qs), 1)
+                    _prows.append(_r)
+                st.dataframe(pd.DataFrame(_prows), width="stretch", hide_index=True)
+            if _pins["routes"]:
+                st.markdown("##### 그린 주배관")
+                st.caption("**구역(zone)** 은 대표 입력입니다 — 비우면 공통 구간(펌프→매니폴드)입니다.")
+                _rt_rows = [{"이름": _r["name"], "점": len(_r["pts"]),
+                             "길이(m)": round(sum(
+                                 ((_r["pts"][_i][0] - _r["pts"][_i - 1][0]) ** 2 +
+                                  (_r["pts"][_i][1] - _r["pts"][_i - 1][1]) ** 2) ** 0.5
+                                 for _i in range(1, len(_r["pts"]))), 1),
+                             "구역": _r.get("zone")} for _r in _pins["routes"]]
+                _ed = st.data_editor(pd.DataFrame(_rt_rows), width="stretch", hide_index=True,
+                                     disabled=["이름", "점", "길이(m)"], key="p3_rt_ed")
+                for _i, _z in enumerate(list(_ed["구역"])):
+                    if _i < len(_pins["routes"]):
+                        _pins["routes"][_i]["zone"] = None if pd.isna(_z) else int(_z)
+
+            st.divider()
+            if st.button("✅ 이 좌표를 ⑤ 설계에 씁니다", type="primary", key="p3_pin_apply"):
+                _dw = dict(st.session_state.get("p3_drawn") or {})
+                _dw["sources"] = [dict(_x) for _x in _pins["sources"]]
+                if _pins["routes"]:
+                    _dw["routes"] = [dict(_x) for _x in _pins["routes"]]
+                st.session_state.p3_drawn = _dw
+                st.success("넣었습니다 — 급수점 %d · 주배관 %d. ⑤에서 설계를 실행하세요."
+                           % (len(_dw.get("sources") or []), len(_dw.get("routes") or [])))
+            st.caption("🔴 좌표만 만듭니다 — 관경·유량·수량은 **엔진이 정합니다**(불변 원칙 1).")
+
+    # ── ⑤ 설계·견적 ───────────────────────────────────────────────────
+    with _p3_steps[4]:
         _ans = st.session_state.get("p3_answers", {}) or {}
         _dw = st.session_state.get("p3_drawn")
         if not _p3i.check(_ans, st.session_state.get("p3_waived") or [])["ok"]:

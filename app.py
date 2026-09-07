@@ -1053,7 +1053,7 @@ from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 �
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
 if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V83)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V84)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1066,8 +1066,8 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 82:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V83)와 짝이 맞지 않습니다.\n\n"
+if _LG_VER < 83:
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V84)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -3321,6 +3321,72 @@ with st.sidebar:
     st.divider()
 
 # [V79] 「설계(P3)」 ③ 작도 결과 JSON 견본 — 화면에 그대로 보여 준다
+# [V84] 지도 안 「지번 검색」 — **브라우저가 직접 브이월드에 묻는다**(JSONP · #62).
+#   🔴 배포 서버는 브이월드에 못 닿지만(#58) 대표님 브라우저는 한국에서 나가므로 통한다.
+#      브이월드가 `callback=` 을 지원해서(2026-09-07 실측) CORS 없이 <script> 로 부를 수 있다.
+#   ⚠ 클라이언트 지도는 키가 페이지에 실린다 — **도메인 제한이 걸린 키만** 여기에 쓴다(원칙 4).
+P3_SEARCH_JS = """
+{% macro script(this, kwargs) %}
+(function(){
+  var map = {{this._parent.get_name()}};
+  var KEY = "__KEY__";
+  var mark = null;
+  var Box = L.Control.extend({
+    options: {position: 'topright'},
+    onAdd: function(){
+      var d = L.DomUtil.create('div', 'leaflet-bar');
+      d.style.cssText = 'background:#fff;padding:6px 8px;box-shadow:0 1px 5px rgba(0,0,0,.4);border-radius:4px';
+      d.innerHTML =
+        '<input id="p3vwq" placeholder="\uc9c0\ubc88 \uac80\uc0c9 \u2014 \uc608: \uc0c1\uc6d4\uba74 \uc0c1\ub3c4\ub9ac 482-42" ' +
+        'style="width:270px;border:1px solid #ccc;border-radius:3px;padding:4px 7px;font-size:13px">' +
+        '<div id="p3vwm" style="font:11px sans-serif;color:#666;margin-top:3px">' +
+        '\uc5d4\ud130\ub85c \uac80\uc0c9 (\ube0c\uc774\uc6d4\ub4dc)</div>';
+      L.DomEvent.disableClickPropagation(d);
+      L.DomEvent.disableScrollPropagation(d);
+      return d;
+    }
+  });
+  map.addControl(new Box());
+  function say(t){ var m = document.getElementById('p3vwm'); if (m) m.textContent = t; }
+  function go(q){
+    say('\ucc3e\ub294 \uc911...');
+    var cb = 'p3vw' + Math.random().toString(36).slice(2);
+    var sc = document.createElement('script');
+    window[cb] = function(r){
+      try {
+        var res = r && r.response;
+        var items = res && res.result && res.result.items;
+        if (!res || res.status !== 'OK' || !items || !items.length) {
+          say('\ubabb \ucc3e\uc558\uc2b5\ub2c8\ub2e4 \u2014 \uc74d\u00b7\uba74\uc744 \ubd99\uc5ec \ubcf4\uc138\uc694');
+        } else {
+          var it = items[0], ll = [parseFloat(it.point.y), parseFloat(it.point.x)];
+          map.setView(ll, 18);
+          if (mark) { map.removeLayer(mark); }
+          mark = L.circleMarker(ll, {radius: 10, color: '#00e5ff', weight: 3, fill: false}).addTo(map);
+          say((it.address && it.address.parcel) ? it.address.parcel : '\ucc3e\uc558\uc2b5\ub2c8\ub2e4');
+        }
+      } catch (e) { say('\uac80\uc0c9 \uc624\ub958'); }
+      try { delete window[cb]; } catch (e) { window[cb] = undefined; }
+      if (sc.parentNode) { sc.parentNode.removeChild(sc); }
+    };
+    sc.src = 'https://api.vworld.kr/req/search?service=search&request=search&version=2.0' +
+             '&crs=EPSG:4326&size=5&page=1&type=address&category=parcel&format=json' +
+             '&query=' + encodeURIComponent(q) + '&key=' + encodeURIComponent(KEY) +
+             '&callback=' + cb;
+    sc.onerror = function(){ say('\ube0c\uc774\uc6d4\ub4dc\uc5d0 \ub2ff\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4'); };
+    document.head.appendChild(sc);
+  }
+  setTimeout(function(){
+    var el = document.getElementById('p3vwq');
+    if (!el) { return; }
+    el.addEventListener('keydown', function(e){
+      if (e.key === 'Enter') { e.preventDefault(); var v = el.value.trim(); if (v) { go(v); } }
+    });
+  }, 400);
+})();
+{% endmacro %}
+"""
+
 P3_DRAWN_SAMPLE = '{\n "blocks": [\n  {\n   "name": "A",\n   "polygon": [\n    [\n     0,\n     0\n    ],\n    [\n     40,\n     0\n    ],\n    [\n     40,\n     30\n    ],\n    [\n     0,\n     30\n    ]\n   ],\n   "u": [\n    1,\n    0\n   ]\n  }\n ],\n "routes": [\n  {\n   "name": "R1",\n   "zone": 1,\n   "pts": [\n    [\n     0,\n     0\n    ],\n    [\n     40,\n     0\n    ]\n   ],\n   "by_ceo": true\n  }\n ],\n "sources": [\n  {\n   "name": "관정",\n   "pt": [\n    0,\n    0\n   ],\n   "start_bands": 1\n  }\n ],\n "valves_01403": {\n  "start": 1,\n  "zones": 1\n },\n "water_items": []\n}'
 
 if mode == "관리자 모드" or mode == "管理者モード":
@@ -5971,6 +6037,7 @@ elif mode == "🏪 아쿠나리스":
 #   [V81] 작도판 502 방어(#56) · ④ 지도에서 찍기(#57 · 대표 지시 2026-09-07)
 #   [V82] 점검이 접혀서 안 보이던 것 수정 · 망 도달 점검(#58) · ④를 작도판 없이도 연다
 #   [V83] 문진표 안내 · **지도가 입구가 된다**(#59 · 대표 지시 2026-09-07) · 배경 정본 Esri
+#   [V84] 문진표 보기 버튼(#61) · 지도가 본 자리를 지킨다 · 작도판이 그린 것에 맞춰 잡힌다
 #   흐름 정본 = `_설계/_문진표/문진표_v1_농지.md` · 대표 확답 #43·#44
 #   🔴 캔버스를 새로 만들지 않는다(파일 기반 1안 · 대표 선택 2026-09-06).
 #      작도판 PNG를 내려받아 농민 확인 → 확인된 blocks/routes JSON을 올린다.
@@ -5999,17 +6066,49 @@ elif mode == "🗺️ 설계(P3)":
         _ans = dict(st.session_state.get("p3_answers", {}))
         _waived = []
         _grp = None
+        # [V84] 통화로 자주 나오는 답은 **버튼**으로 받는다(대표 지시 2026-09-07 · #61).
+        #   🔴 문항·보기의 정본은 `intake.QUESTIONS` 다 — 이 화면은 거기 적힌 대로 그릴 뿐이다.
         for _q in _p3i.QUESTIONS:
             if _q["group"] != _grp:
                 _grp = _q["group"]
                 st.markdown("##### " + _grp)
             _mark = "🟠 " if _q.get("waivable") else ("🔴 " if _q["req"] else "")
-            _ans[_q["key"]] = st.text_input(_mark + _q["ask"], value=_ans.get(_q["key"], ""),
-                                            key="p3_q_" + _q["key"], help=_q["why"])
-            if _q["key"] in _p3i.WAIVABLE and not str(_ans[_q["key"]] or "").strip():
+            _qk, _cur = _q["key"], str(_ans.get(_q["key"], "") or "")
+            _ch = _q.get("choices")
+            if _ch:
+                _other = _q.get("other")
+                # 이미 있는 답이 보기에 없으면 「기타」로 본다 — 예전 자유 입력을 잃지 않는다.
+                if _cur in _ch:
+                    _ix = _ch.index(_cur)
+                elif _cur and _other:
+                    _ix = _ch.index(_other)
+                else:
+                    _ix = None
+                _sel = st.radio(_mark + _q["ask"], _ch, index=_ix, horizontal=True,
+                                key="p3_c_" + _qk, help=_q["why"])
+                if _other and _sel == _other:
+                    _ans[_qk] = st.text_input("어떤 것인지 적어 주세요",
+                                              value=("" if _cur in _ch else _cur),
+                                              key="p3_o_" + _qk).strip()
+                else:
+                    _ans[_qk] = _sel or ""
+            else:
+                if _q.get("quick"):
+                    # 🔴 단추는 **입력칸보다 먼저** 그린다 — 이미 만들어진 위젯의 상태는 못 바꾼다.
+                    _qc = st.columns(len(_q["quick"]) + 2)
+                    for _i, _qq in enumerate(_q["quick"]):
+                        if _qc[_i].button(_qq, key="p3_qk_%s_%d" % (_qk, _i)):
+                            st.session_state["p3_q_" + _qk] = _qq
+                            st.rerun()
+                _ans[_qk] = st.text_input(_mark + _q["ask"], value=_cur,
+                                          key="p3_q_" + _qk, help=_q["why"])
+            for _cond, _msg in (_q.get("warn_if") or {}).items():
+                if str(_ans.get(_qk, "")).strip() == _cond:
+                    st.warning(_msg)
+            if _qk in _p3i.WAIVABLE and not str(_ans[_qk] or "").strip():
                 if st.checkbox("↑ 이 값 없이 진행합니다 — 모르는 채로 설계 (기록에 남습니다)",
-                               key="p3_w_" + _q["key"]):
-                    _waived.append(_q["key"])
+                               key="p3_w_" + _qk):
+                    _waived.append(_qk)
         st.session_state.p3_answers = _ans
         st.session_state.p3_waived = _waived
         _chk = _p3i.check(_ans, _waived)
@@ -6049,6 +6148,7 @@ elif mode == "🗺️ 설계(P3)":
         try:
             import folium as _fo
             from folium.plugins import Draw as _FoDraw, Geocoder as _FoGeo
+            from branca.element import Template as _BrancaTemplate
             _mapmod = True
         except Exception as _e:
             _mapmod, _map_err = False, str(_e)
@@ -6092,15 +6192,24 @@ elif mode == "🗺️ 설계(P3)":
                         st.rerun()
                     else:
                         st.warning("주소로는 못 찾았습니다 — 아래 좌표를 넣거나 지도 안 검색창을 쓰세요.")
-                _q1, _q2, _q3 = st.columns([2, 2, 1])
-                _clat = _q1.number_input("중심 위도", value=float((_fr or {}).get("center", [0, 36.32167])[1]),
-                                         format="%.5f", key="p3_mc_lat")
-                _clon = _q2.number_input("중심 경도", value=float((_fr or {}).get("center", [127.17736])[0]),
-                                         format="%.5f", key="p3_mc_lon")
-                if _q3.button("이 좌표로", key="p3_map_open"):
-                    st.session_state.p3_map_frame = _p3m.frame((float(_clon), float(_clat)),
-                                                               zoom=18, size=(1024, 1024))
-                    st.rerun()
+                _q1, _q2 = st.columns([3, 1])
+                _pst = _q1.text_input("좌표 붙여넣기 (위도, 경도)", value="",
+                                      placeholder="36.32167, 127.17736", key="p3_mc_paste",
+                                      help="다른 지도에서 찍은 좌표를 그대로 붙이면 됩니다.")
+                if _q2.button("이 좌표로", key="p3_map_open"):
+                    try:
+                        _a, _b = [float(_v) for _v in _pst.replace(" ", "").split(",")[:2]]
+                        # 위도·경도를 바꿔 넣어도 바로잡는다(한국은 위도 33~39 · 경도 124~132).
+                        _lat, _lon = (_a, _b) if _a < _b else (_b, _a)
+                        st.session_state.p3_map_frame = _p3m.frame((_lon, _lat), zoom=18,
+                                                                   size=(1024, 1024))
+                        st.session_state.p3_view = {"center": [_lat, _lon], "zoom": 18}
+                        st.session_state.p3_map_how = "좌표 직접 입력"
+                        st.rerun()
+                    except Exception:
+                        st.error("좌표를 못 읽었습니다 — 「36.32167, 127.17736」 처럼 넣어 주세요.")
+                st.caption("🔵 **지도 안 오른쪽 위 「지번 검색」이 가장 빠릅니다** — 그 검색은 "
+                           "대표님 **브라우저가 직접** 브이월드에 묻기 때문에 서버가 막혀 있어도 됩니다.")
                 if st.session_state.get("p3_map_how"):
                     st.caption("현재 중심 출처 — " + st.session_state.p3_map_how)
 
@@ -6131,7 +6240,12 @@ elif mode == "🗺️ 설계(P3)":
                     _sat, _hyb = _p3m.wmts_url("Satellite"), _p3m.wmts_url("Hybrid")
                 except Exception:
                     _sat = _hyb = ""
-                _M = _fo.Map(location=[_org[1], _org[0]], zoom_start=18, max_zoom=21,
+                # 🔴 st_folium 은 다시 그릴 때마다 `location` 으로 돌아간다 — 급수점 하나 찍을 때마다
+                #    지도가 처음 자리로 튀었다. 마지막으로 **본 자리**를 기억해 거기서 다시 연다.
+                _vw = st.session_state.get("p3_view") or {}
+                _loc = _vw.get("center") or [_org[1], _org[0]]
+                _zm = int(_vw.get("zoom") or 18)
+                _M = _fo.Map(location=_loc, zoom_start=_zm, max_zoom=21,
                              tiles=None, control_scale=True)
                 if _sat:
                     _fo.TileLayer(tiles=_sat, attr="VWorld", name="위성 (브이월드)",
@@ -6173,11 +6287,25 @@ elif mode == "🗺️ 설계(P3)":
                                       "rectangle": False, "circle": False,
                                       "marker": False, "circlemarker": False},
                         edit_options={"edit": True, "remove": True}).add_to(_M)
-                _FoGeo(collapsed=False, position="topright", add_marker=False, zoom=18).add_to(_M)
+                _FoGeo(collapsed=True, position="topright", add_marker=False, zoom=18).add_to(_M)
+                try:
+                    _vkey = (_p3m._keys().get("vworld") or {}).get("key", "")
+                except Exception:
+                    _vkey = ""
+                if _vkey:
+                    _sr = _fo.MacroElement()
+                    _sr._template = _BrancaTemplate(P3_SEARCH_JS.replace("__KEY__", _vkey))
+                    _M.add_child(_sr)
                 _fo.LayerControl(collapsed=True).add_to(_M)
 
                 _out = _st_folium(_M, height=600, width=None, key="p3_map",
-                                  returned_objects=["last_clicked", "all_drawings"])
+                                  returned_objects=["last_clicked", "all_drawings",
+                                                    "center", "zoom"])
+                # 본 자리를 기억한다 — rerun 은 부르지 않는다(다음에 그릴 때 여기서 연다).
+                if _out and _out.get("center"):
+                    _c = _out["center"]
+                    st.session_state.p3_view = {"center": [_c["lat"], _c["lng"]],
+                                                "zoom": _out.get("zoom") or _zm}
 
                 _clk = (_out or {}).get("last_clicked")
                 if _clk:
@@ -6341,10 +6469,27 @@ elif mode == "🗺️ 설계(P3)":
                            "브이월드 고정": "vworld"}[_bg]
                 with st.spinner("위성 받는 중…"):
                     try:
-                        _d = _p3m.draft_from_center(_fr["center"], zoom=_fr["zoom"],
-                                                    size=_fr["size"][0], blocks_m=_bl,
-                                                    sources_m=_sc, routes_m=_rt,
-                                                    title=_ttl, prefer=_prefer)
+                        # 🔴 판의 중심은 **원점이 아니라 그린 것**이다 — 지도를 옮겨 가며
+                        #    그렸으면 원점은 엉뚱한 데 있다(대표 2026-09-07 「애매한 곳으로 나오네」).
+                        #    좌표는 원점 기준 미터라 판이 옮겨지면 **새 원점 기준으로 옮겨** 넘긴다.
+                        _all = ([_q for _b in _bl for _q in (_b.get("polygon") or [])]
+                                + [_x["pt"] for _x in _sc]
+                                + [_q for _r in _rt for _q in (_r.get("pts") or [])])
+                        _o0 = _fr["origin"]
+                        if _all:
+                            _ffr = _p3m.fit_frame(_all, _o0, size=_fr["size"][0])
+                        else:
+                            _ffr = _fr
+
+                        def _mv(_pts):
+                            return _p3m.to_local_m(_p3m.from_local_m(_pts, _o0), _ffr["origin"])
+
+                        _d = _p3m.draft_from_center(
+                            _ffr["center"], zoom=_ffr["zoom"], size=_ffr["size"][0],
+                            blocks_m=[dict(_b, polygon=_mv(_b["polygon"])) for _b in _bl],
+                            sources_m=[dict(_x, pt=_mv([_x["pt"]])[0]) for _x in _sc],
+                            routes_m=[dict(_r, pts=_mv(_r["pts"])) for _r in _rt],
+                            title=_ttl, prefer=_prefer)
                         st.session_state.p3_sheet = _d
                     except Exception as _e:
                         st.session_state.p3_sheet = None

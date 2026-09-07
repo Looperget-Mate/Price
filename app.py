@@ -1053,7 +1053,7 @@ from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 �
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
 if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V90)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V92)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1066,8 +1066,8 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 84:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V90)와 짝이 맞지 않습니다.\n\n"
+if _LG_VER < 85:
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V92)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -6144,6 +6144,8 @@ elif mode == "🏪 아쿠나리스":
 #   [V88] **밭 모서리 둥글게**(#67) — 그린 그대로를 남기고 표에서 0~3 · 점 편집 안내
 #   [V89] 왼쪽 도구에 **한국어 이름표**(#68) — 아이콘만으로는 못 찾는다
 #   [V90] **점 편집이 폴리곤에 안 되던 것 수정**(#69) — edit_options 가 잘못이었다
+#   [V91] 둥글게 **기본 0**(#70) · 운전 구역·밸브를 지도 화면에서(#71)
+#   [V92] 밭만 그려도 **열·헤드·유량·권고 구역**이 나온다(#72)
 #   흐름 정본 = `_설계/_문진표/문진표_v1_농지.md` · 대표 확답 #43·#44
 #   🔴 캔버스를 새로 만들지 않는다(파일 기반 1안 · 대표 선택 2026-09-06).
 #      작도판 PNG를 내려받아 농민 확인 → 확인된 blocks/routes JSON을 올린다.
@@ -6152,6 +6154,7 @@ elif mode == "🏪 아쿠나리스":
 elif mode == "🗺️ 설계(P3)":
     from looperget.design import intake as _p3i, mapsrc as _p3m
     from looperget.design import design as _p3_design, hydro_zone as _p3hz, pipes as _p3p
+    from looperget.design import preview as _p3v
 
     def _p3_keys():
         """지도 키 주입 — 배포 환경엔 `.secrets/` 가 없다(불변 원칙 4)."""
@@ -6479,7 +6482,9 @@ elif mode == "🗺️ 설계(P3)":
                     _pins["blocks"] = []
                     for _i, _f in enumerate(_polys):
                         _raw = _p3m.to_local_m(_f["geometry"]["coordinates"][0], _org)
-                        _sm = 1                      # 기본 1단계 — 0 으로 두면 그린 그대로
+                        # 🔴 [V91] 기본은 **0 = 그린 그대로**다. 1 로 두었더니 점이 적은 밭이
+                        #    「계란 모양」이 됐다(대표 2026-09-07). 둥글게는 **골라서 쓰는 것**이다.
+                        _sm = 0
                         _pg = _p3m.smooth_ring(_raw, _sm)
                         _pins["blocks"].append(
                             {"id": "B%d" % (_i + 1), "name": chr(65 + _i),
@@ -6546,7 +6551,8 @@ elif mode == "🗺️ 설계(P3)":
 
             if _pins["blocks"]:
                 st.markdown("##### 🟨 밭 구역")
-                st.caption("**둥글게 0~3** — 모서리를 깎아 실제 밭선에 가깝게 만듭니다(0 = 그린 그대로, 기본 1). "
+                st.caption("**둥글게 0~3** — 기본은 **0(그린 그대로)** 입니다. 올리면 모서리가 깎여 "
+                           "부드러워지지만 **점이 적으면 계란처럼 됩니다** — 면적을 보고 정하세요. "
                            "🔴 **고랑(열) 방향은 대표 입력입니다** — 0°=동 · 90°=북. "
                            "작물은 알면 넣습니다. 줄을 지우면 없어집니다.")
                 _bdf = pd.DataFrame([{"id": _b.get("id") or "B%d" % (_i + 1), "이름": _b["name"],
@@ -6621,6 +6627,84 @@ elif mode == "🗺️ 설계(P3)":
                     st.session_state.p3_pins = _pins
                     st.rerun()
                 _pins["routes"] = _new
+            # ── 이 밭에 무엇이 들어가는가 (밭만 그려도 나온다 · #72) ──────
+            # 🔴 구역·경로·밸브는 대표 판단이지만, **그 판단에 필요한 숫자는 엔진이 먼저 낸다.**
+            #    주배관을 그리기 전에도 열·헤드·요구 유량·권고 구역 수가 나온다.
+            #    ⚠ 열 배치 계산이 몇 초 걸린다 — **밭이 바뀔 때만** 다시 계산한다(그대로면 캐시).
+            if _pins["blocks"]:
+                st.markdown("##### 📊 이 밭에 무엇이 들어가는가")
+                _flow = _p3v.parse_flow_lpm((st.session_state.get("p3_answers") or {})
+                                            .get("flow_lpm"))
+                _sig = json.dumps([[_b.get("polygon"), _b.get("u")] for _b in _pins["blocks"]],
+                                  sort_keys=True) + "|%s" % _flow
+                if st.session_state.get("p3_prev_sig") != _sig:
+                    with st.spinner("열·헤드·유량 계산 중… (몇 초 걸립니다)"):
+                        try:
+                            st.session_state.p3_preview = _p3v.block_preview(
+                                _pins["blocks"], flow_lpm=_flow)
+                        except Exception as _e:
+                            st.session_state.p3_preview = {"error": str(_e)}
+                    st.session_state.p3_prev_sig = _sig
+                _pv = st.session_state.get("p3_preview") or {}
+                if _pv.get("error"):
+                    st.error("미리보기 실패: " + _pv["error"])
+                elif _pv.get("n_heads"):
+                    _m1, _m2, _m3, _m4 = st.columns(4)
+                    _m1.metric("스프링클러", "%d 두" % _pv["n_heads"])
+                    _m2.metric("가지관 열", "%d 열" % _pv["n_rows"])
+                    _m3.metric("전부 한 번에", "%s L/분" % format(_pv["q_all_ref"], ","),
+                               help="설계점 %.1f bar 기준. 보증 1.5 bar 로는 %s L/분."
+                                    % (_pv["p_ref_bar"], format(_pv["q_all_min"], ",")))
+                    _zb = _pv.get("zones_min") or _pv.get("zones_by_pressure")
+                    _m4.metric("권고 구역", ("%d 구역" % _zb) if _zb else "—",
+                               help="유량을 알면 유량 기준, 모르면 **관이 감당하는 한계**로 냅니다. "
+                                    "확정은 ④의 구역별 말단압입니다.")
+                    st.caption("헤드 간격 %.0f m · 열 간격 %.0f m · 살수 반경 %.0f m "
+                               "(427B · 보증 1.5 bar) · 가지관 합계 %s m"
+                               % (_pv["spacing"]["head_m"], _pv["spacing"]["row_m"],
+                                  _pv["spacing"]["radius_m"], format(round(_pv["lat_total_m"]), ",")))
+                    if len(_pv.get("blocks") or []) > 1:
+                        st.dataframe(pd.DataFrame(
+                            [{"밭": _x.get("name"), "작물": _x.get("crop", ""),
+                              "면적(m²)": _x.get("area_m2"), "열": _x.get("rows"),
+                              "헤드(두)": _x.get("heads"), "가지관(m)": _x.get("lat_m"),
+                              "고랑(도)": _x.get("u_deg")} for _x in _pv["blocks"]]),
+                            width="stretch", hide_index=True)
+                    for _n in _pv.get("notes", []):
+                        (st.error if _n.startswith("🔴") else
+                         st.info if _n.startswith("🔵") else st.caption)(_n)
+                    st.caption("🔴 **구역을 어디서 어떻게 나눌지는 대표 판단입니다**(설계 규칙 6) — "
+                               "위 숫자는 그 판단의 근거이고, 되는지는 ④가 판정합니다.")
+
+            # ── 운전 구역 · 밸브 ──────────────────────────────────────────
+            # 🔴 [V91] 구역·경로·밸브는 **대표 입력**이다(설계 규칙 6·13 · `site.py`) —
+            #    엔진은 주배관을 스스로 나누지 않는다. 대신 그 구성이 **되는지**(말단 1.5 bar)를
+            #    계산하고, 안 되면 「구역을 나누거나 펌프를 키워야 한다」고 말한다.
+            #    그런데 밸브 칸이 JSON 업로드에만 있어 지도에서 넣을 수 없었다 — 그 자리를 만든다.
+            if _pins["routes"] or _pins["blocks"]:
+                st.markdown("##### 🚰 운전 구역 · 밸브")
+                _zs = sorted({_r.get("zone") for _r in _pins["routes"]
+                              if _r.get("zone") is not None})
+                _nz = len(_zs)
+                st.caption("그린 주배관의 구역 — %s. **한 번에 다 주면 1구역**이고, 나눠 주시려면 "
+                           "주배관을 **여러 선으로 그려** 위 표에서 구역 번호를 1·2… 로 넣으세요. "
+                           "🔴 **엔진은 스스로 나누지 않습니다**(설계 규칙 6) — 나눠야 하는지는 "
+                           "④에서 구역별 말단압으로 알려 드립니다."
+                           % ("· ".join(str(_z) + "구역" for _z in _zs) if _zs
+                              else "**지정 없음**(전부 공통 구간)"))
+                _vv = _pins.setdefault("valves", {"start": 1, "zones": 0})
+                _v1, _v2 = st.columns(2)
+                _vv["start"] = int(_v1.number_input(
+                    "시작부 밸브 (급수점)", 0, 1, int(_vv.get("start", 1)), key="p3_v_start",
+                    help="급수점 바로 뒤에 여닫는 밸브를 두면 1."))
+                _vv["zones"] = int(_v2.number_input(
+                    "구역 밸브 개수", 0, 12, int(_vv.get("zones") or _nz), key="p3_v_zones",
+                    help="구역마다 하나씩 두는 것이 보통입니다. 자재(BOM)에 그대로 들어갑니다."))
+                st.session_state.p3_pins = _pins
+                if _nz and int(_vv["zones"]) != _nz:
+                    st.warning("구역은 **%d개**인데 구역 밸브가 **%d개**입니다 — 뜻이 있으면 그대로 두세요."
+                               % (_nz, int(_vv["zones"])))
+
             st.divider()
             # 다음 한 걸음만 말한다 — 목록을 늘어놓지 않는다.
             _nb, _ns, _nr = len(_pins["blocks"]), len(_pins["sources"]), len(_pins["routes"])
@@ -6648,10 +6732,15 @@ elif mode == "🗺️ 설계(P3)":
                 if _pins["routes"]:
                     _dw["routes"] = [{_k: _v for _k, _v in _x.items() if _k != "id"}
                                      for _x in _pins["routes"]]
+                if _pins.get("valves"):
+                    _dw["valves_01403"] = {"start": int(_pins["valves"].get("start", 1)),
+                                           "zones": int(_pins["valves"].get("zones", 0))}
                 st.session_state.p3_drawn = _dw
-                st.success("넣었습니다 — 밭 %d · 급수점 %d · 주배관 %d."
+                st.success("넣었습니다 — 밭 %d · 급수점 %d · 주배관 %d · 밸브 시작 %s · 구역 %s."
                            % (len(_dw.get("blocks") or []), len(_dw.get("sources") or []),
-                              len(_dw.get("routes") or [])))
+                              len(_dw.get("routes") or []),
+                              (_dw.get("valves_01403") or {}).get("start", "-"),
+                              (_dw.get("valves_01403") or {}).get("zones", "-")))
             st.caption("🔴 좌표만 만듭니다 — 관경·유량·수량은 **엔진이 정합니다**(불변 원칙 1).")
 
             with st.expander("보조 — 작도 결과 JSON 올리기 (예전 방식)"):

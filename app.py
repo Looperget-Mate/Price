@@ -1053,7 +1053,7 @@ from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 �
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
 if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V89)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V90)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1067,7 +1067,7 @@ try:
 except Exception:
     _LG_VER = 0
 if _LG_VER < 84:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V89)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V90)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -3405,7 +3405,13 @@ try {
     '.leaflet-draw-edit-edit::after{content:"'     + L4 + '";' + chip + '}' +
     '.leaflet-draw-edit-remove::after{content:"'   + L5 + '";' + chip + '}' +
     // 못 쓰는 상태(그린 것이 없을 때)는 흐리게 — 왜 안 눌리는지 보이게.
-    '.leaflet-disabled::after{opacity:.45}';
+    '.leaflet-disabled::after{opacity:.45}' +
+    // 🔴 꼭짓점 손잡이가 너무 작아 못 잡는다(대표 2026-09-07) — 8 px → 15 px.
+    //    흰 네모 = 꼭짓점(끌어 옮김) · 회색 네모 = 변 가운데(끌면 점이 새로 생김).
+    '.leaflet-editing-icon{width:15px!important;height:15px!important;' +
+    'margin-left:-7px!important;margin-top:-7px!important;' +
+    'border:2px solid #111!important;border-radius:3px!important;' +
+    'box-shadow:0 0 0 1px rgba(255,255,255,.7)}';
   document.head.appendChild(st);
 } catch (e) {}
 {% endmacro %}
@@ -6137,6 +6143,7 @@ elif mode == "🏪 아쿠나리스":
 #   [V87] **급수원도 왼쪽 도구로**(#66) — 지도 클릭 처리 제거 · 깜빡임 제거 · 줄 지우기
 #   [V88] **밭 모서리 둥글게**(#67) — 그린 그대로를 남기고 표에서 0~3 · 점 편집 안내
 #   [V89] 왼쪽 도구에 **한국어 이름표**(#68) — 아이콘만으로는 못 찾는다
+#   [V90] **점 편집이 폴리곤에 안 되던 것 수정**(#69) — edit_options 가 잘못이었다
 #   흐름 정본 = `_설계/_문진표/문진표_v1_농지.md` · 대표 확답 #43·#44
 #   🔴 캔버스를 새로 만들지 않는다(파일 기반 1안 · 대표 선택 2026-09-06).
 #      작도판 PNG를 내려받아 농민 확인 → 확인된 blocks/routes JSON을 올린다.
@@ -6363,10 +6370,10 @@ elif mode == "🗺️ 설계(P3)":
                 "3. **📐 주배관** — **「주배관 (선)」** → 물길을 따라 찍고 **마지막 점을 두 번 눌러** 끝냅니다.")
             st.info("🔵 **도구를 켜지 않으면 지도를 눌러도 아무 일도 일어나지 않습니다.** "
                     "확대·이동은 마음껏 하셔도 됩니다. 잘못 그린 것은 왼쪽 **🗑(지우기)** 로 지웁니다.\n\n"
-                    "✏ **점 편집** — 왼쪽 아래 **「점 편집」**(지우기 바로 위)을 누르면 꼭짓점을 "
-                    "**끌어 옮길 수 있고**, 변 가운데의 **흐린 점을 끌면 점이 새로 생깁니다**"
-                    "(파워포인트 점편집과 같습니다). 끝나면 **저장**을 누릅니다. "
-                    "밭 표의 **「둥글게 0~3」** 으로도 모서리를 깎을 수 있습니다.\n\n"
+                    "✏ **점 편집** — 왼쪽 아래 **「점 편집」**(지우기 바로 위)을 누르면 밭 테두리가 "
+                    "**점선으로 바뀌고 네모 손잡이**가 생깁니다. **흰 네모 = 꼭짓점**(끌어 옮김) · "
+                    "**회색 네모 = 변 가운데**(끌면 점이 새로 생김) — 파워포인트 점편집과 같습니다. "
+                    "끝나면 **저장**을 누릅니다. 밭 표의 **「둥글게 0~3」** 으로도 모서리를 깎을 수 있습니다.\n\n"
                     "🔴 다 그린 뒤 **아래 「반영」 단추**를 눌러야 목록으로 들어갑니다.")
 
             try:
@@ -6418,7 +6425,17 @@ elif mode == "🗺️ 설계(P3)":
                                   "polygon": {"shapeOptions": {"color": "#ffd600", "weight": 4}},
                                   "marker": True,          # 급수원 — 도구를 켜야만 찍힌다(#66)
                                   "rectangle": False, "circle": False, "circlemarker": False},
-                    edit_options={"edit": True, "remove": True}).add_to(_M)
+                    # 🔴 [V90] `edit_options={"edit": True, ...}` 가 **점 편집을 죽이고 있었다**.
+                    #    leaflet.draw 의 EditToolbar 는 `options.edit` 를 **객체로** 받아
+                    #    거기 있는 `selectedPathOptions` 로 `layer.options.editing` 을 채운다.
+                    #    `True` 를 주면 그 객체가 사라져 `options.editing.className` 에서 TypeError 가 나고
+                    #    **꼭짓점 손잡이가 하나도 안 생긴다**(마커는 이 경로를 안 타서 혼자만 됐다).
+                    #    2026-09-07 브라우저 재현 — A(지금) 0개 · B(옵션 없음) 8개 · C(제대로된 객체) 8개.
+                    edit_options={
+                        "poly": {"allowIntersection": False},
+                        "selectedPathOptions": {"dashArray": "10, 10", "fill": True,
+                                                "fillColor": "#78dcff", "fillOpacity": 0.12,
+                                                "maintainColor": False}}).add_to(_M)
             _FoGeo(collapsed=True, position="topright", add_marker=False, zoom=18).add_to(_M)
             try:
                 _vkey = (_p3m._keys().get("vworld") or {}).get("key", "")

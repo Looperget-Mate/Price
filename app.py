@@ -1053,7 +1053,7 @@ from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 �
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
 if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V87)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V88)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1066,8 +1066,8 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 83:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V87)와 짝이 맞지 않습니다.\n\n"
+if _LG_VER < 84:
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V88)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -6115,6 +6115,7 @@ elif mode == "🏪 아쿠나리스":
 #   [V85] **지도는 늘 열린다**(#64) — 주소 이동이 막혀도 작업이 멈추지 않는다
 #   [V86] **그리는 법을 화면이 말한다**(#65) · 그리기 단추 한국어화 · 다음 한 걸음 안내
 #   [V87] **급수원도 왼쪽 도구로**(#66) — 지도 클릭 처리 제거 · 깜빡임 제거 · 줄 지우기
+#   [V88] **밭 모서리 둥글게**(#67) — 그린 그대로를 남기고 표에서 0~3 · 점 편집 안내
 #   흐름 정본 = `_설계/_문진표/문진표_v1_농지.md` · 대표 확답 #43·#44
 #   🔴 캔버스를 새로 만들지 않는다(파일 기반 1안 · 대표 선택 2026-09-06).
 #      작도판 PNG를 내려받아 농민 확인 → 확인된 blocks/routes JSON을 올린다.
@@ -6339,6 +6340,9 @@ elif mode == "🗺️ 설계(P3)":
                 "3. **📐 주배관** — 왼쪽 **╱(선)** → 물길을 따라 찍고 **마지막 점을 두 번 눌러** 끝냅니다.")
             st.info("🔵 **도구를 켜지 않으면 지도를 눌러도 아무 일도 일어나지 않습니다.** "
                     "확대·이동은 마음껏 하셔도 됩니다. 잘못 그린 것은 왼쪽 **🗑(지우기)** 로 지웁니다.\n\n"
+                    "✏ **점 편집** — 왼쪽 **연필**을 누르면 꼭짓점을 **끌어 옮길 수 있고**, "
+                    "변 가운데의 **흐린 점을 끌면 점이 새로 생깁니다**(파워포인트 점편집과 같습니다). "
+                    "끝나면 **저장**을 누릅니다.\n\n"
                     "🔴 다 그린 뒤 **아래 「반영」 단추**를 눌러야 목록으로 들어갑니다.")
 
             try:
@@ -6359,7 +6363,7 @@ elif mode == "🗺️ 설계(P3)":
 
             # 이미 「반영」된 것 — 지도에 얹되 **손대지 않는다**(고치려면 아래 표에서 지운다).
             for _i, _bk in enumerate(_pins["blocks"]):
-                _ll = _p3m.from_local_m(_bk.get("polygon") or [], _org)
+                _ll = _p3m.from_local_m(_bk.get("polygon") or [], _org)   # 이미 둥글게 반영된 값
                 if len(_ll) >= 3:
                     _fo.Polygon([[_q[1], _q[0]] for _q in _ll], color="#ffd600", weight=4,
                                 fill=True, fill_opacity=0.18,
@@ -6430,12 +6434,17 @@ elif mode == "🗺️ 설계(P3)":
                           type="primary", key="p3_take_all",
                           disabled=not (_points or _polys or _lines)):
                 if _polys:
-                    _pins["blocks"] = [
-                        {"id": "B%d" % (_i + 1), "name": chr(65 + _i),
-                         "polygon": _p3m.to_local_m(_f["geometry"]["coordinates"][0], _org),
-                         "area_m2": round(_p3m.ring_area_m2(_f["geometry"]["coordinates"][0], _org), 1),
-                         "u": [1.0, 0.0], "crop": ""}
-                        for _i, _f in enumerate(_polys)]
+                    # 🔴 **그린 그대로**(`polygon_raw`)를 남긴다 — 둥글게는 언제든 되돌릴 수 있어야 한다.
+                    _pins["blocks"] = []
+                    for _i, _f in enumerate(_polys):
+                        _raw = _p3m.to_local_m(_f["geometry"]["coordinates"][0], _org)
+                        _sm = 1                      # 기본 1단계 — 0 으로 두면 그린 그대로
+                        _pg = _p3m.smooth_ring(_raw, _sm)
+                        _pins["blocks"].append(
+                            {"id": "B%d" % (_i + 1), "name": chr(65 + _i),
+                             "polygon_raw": _raw, "smooth": _sm, "polygon": _pg,
+                             "area_m2": round(_p3m.polygon_area_m2(_pg), 1),
+                             "u": [1.0, 0.0], "crop": ""})
                 if _lines:
                     _pins["routes"] = [
                         {"id": "R%d" % (_i + 1), "name": "R%d" % (_i + 1), "zone": None,
@@ -6496,19 +6505,26 @@ elif mode == "🗺️ 설계(P3)":
 
             if _pins["blocks"]:
                 st.markdown("##### 🟨 밭 구역")
-                st.caption("🔴 **고랑(열) 방향은 대표 입력입니다** — 0°=동 · 90°=북. "
+                st.caption("**둥글게 0~3** — 모서리를 깎아 실제 밭선에 가깝게 만듭니다(0 = 그린 그대로, 기본 1). "
+                           "🔴 **고랑(열) 방향은 대표 입력입니다** — 0°=동 · 90°=북. "
                            "작물은 알면 넣습니다. 줄을 지우면 없어집니다.")
                 _bdf = pd.DataFrame([{"id": _b.get("id") or "B%d" % (_i + 1), "이름": _b["name"],
+                                      "둥글게": int(_b.get("smooth", 0)),
                                       "면적(m²)": _b["area_m2"],
                                       "평": round(_b["area_m2"] / 3.3058),
+                                      "점": len(_b.get("polygon") or []),
                                       "작물": _b.get("crop", ""),
                                       "고랑 방향(도)": round(math.degrees(
                                           math.atan2(_b["u"][1], _b["u"][0])))}
                                      for _i, _b in enumerate(_pins["blocks"])])
-                _bed = st.data_editor(_bdf, width="stretch", hide_index=True, num_rows="dynamic",
-                                      disabled=["id", "면적(m²)", "평"], key="p3_bl_ed")
+                _bed = st.data_editor(
+                    _bdf, width="stretch", hide_index=True, num_rows="dynamic",
+                    disabled=["id", "면적(m²)", "평", "점"], key="p3_bl_ed",
+                    column_config={"둥글게": st.column_config.NumberColumn(
+                        min_value=0, max_value=_p3m.SMOOTH_MAX, step=1,
+                        help="0 = 그린 그대로 · 1~3 = 모서리를 점점 더 둥글게")})
                 _byid = {_b.get("id"): _b for _b in _pins["blocks"]}
-                _new = []
+                _new, _chg = [], False
                 for _, _r in _bed.iterrows():
                     _b = _byid.get(_r["id"])
                     if not _b:
@@ -6518,8 +6534,15 @@ elif mode == "🗺️ 설계(P3)":
                     _dg = _r["고랑 방향(도)"]
                     _th = math.radians(0.0 if pd.isna(_dg) else float(_dg))
                     _b["u"] = [round(math.cos(_th), 6), round(math.sin(_th), 6)]
+                    # 둥글게는 **매번 그린 그대로에서 다시 만든다** — 깎은 것을 또 깎지 않는다.
+                    _sm = 0 if pd.isna(_r["둥글게"]) else int(_r["둥글게"])
+                    if _sm != int(_b.get("smooth", -1)) or not _b.get("polygon"):
+                        _b["smooth"] = _sm
+                        _b["polygon"] = _p3m.smooth_ring(_b.get("polygon_raw") or _b["polygon"], _sm)
+                        _b["area_m2"] = round(_p3m.polygon_area_m2(_b["polygon"]), 1)
+                        _chg = True
                     _new.append(_b)
-                if len(_new) != len(_pins["blocks"]):
+                if _chg or len(_new) != len(_pins["blocks"]):
                     _pins["blocks"] = _new
                     st.session_state.p3_pins = _pins
                     st.rerun()

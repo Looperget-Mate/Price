@@ -49,15 +49,6 @@ RETRIES = 2                         # 502 는 게이트웨이 답 — 되쏜다
 RETRY_WAIT_S = 0.8
 RETRY_CODES = (429, 500, 502, 503, 504)
 CONTROL_HOST = ("pypi.org", 443)    # 「밖으로 나가긴 하는가」를 가르는 대조군
-TILE_PX = 256
-# 🔴 브이월드가 **배포 서버의 요청만** 거른다(2026-09-07 점검 확정: DNS·TCP·대조군 ✅ · 실호출 🔴).
-#    그래서 배경 위성의 정본을 Esri 로 옮겼다(대표 판단 #59). 키가 없고 국경도 없다.
-#    잃는 것 = 지적 경계선·지번 라벨·화질(계절이 다르고 이음매가 보인다).
-#    잃어도 되는 이유 = **지적은 대상지가 아니다**(대표 확답 2026-09-05 · #43).
-ESRI_TILES = ("https://server.arcgisonline.com/ArcGIS/rest/services/"
-              "World_Imagery/MapServer/tile/{z}/{y}/{x}")
-ESRI_ATTR = "Esri World Imagery"
-OSM_GEOCODE = "https://nominatim.openstreetmap.org/search"
 
 # 🔴 브라우저처럼 말한다. 2026-09-07 배포 실사고에서 같은 요청이 **로컬은 성공 · 클라우드는
 #    RemoteDisconnected/502** 였다 — 서버가 요청을 받고 **끊는다**. 국외 IP + 스크립트형
@@ -118,31 +109,6 @@ def frame(center: Sequence[float], zoom: int = 18,
         "origin": [lon, lat],          # 로컬 미터 좌표계의 원점
         "_mxy": [mx, my],
     }
-
-
-def tile_xy(lon: float, lat: float, zoom: int) -> Tuple[float, float]:
-    """위경도 → **타일 좌표**(실수). 표준 XYZ(웹 메르카토르) 규약. 순수 함수."""
-    n = 2.0 ** zoom
-    x = (lon + 180.0) / 360.0 * n
-    y = (1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0 * n
-    return x, y
-
-
-def tile_grid(fr: Dict) -> Dict:
-    """프레임을 덮는 **타일 격자**(순수). 어느 타일을 어디에 붙일지까지 답한다.
-
-    반환 = {zoom, x0, x1, y0, y1, ox, oy, n} — `ox·oy` 는 격자 좌상단이 프레임에서 밀린 화소.
-    """
-    z = fr["zoom"]
-    w, h = fr["size"]
-    tx, ty = tile_xy(fr["center"][0], fr["center"][1], z)
-    px0, py0 = tx * TILE_PX - w / 2.0, ty * TILE_PX - h / 2.0
-    x0, y0 = int(math.floor(px0 / TILE_PX)), int(math.floor(py0 / TILE_PX))
-    x1 = int(math.floor((px0 + w - 1) / TILE_PX))
-    y1 = int(math.floor((py0 + h - 1) / TILE_PX))
-    return {"zoom": z, "x0": x0, "x1": x1, "y0": y0, "y1": y1,
-            "ox": x0 * TILE_PX - px0, "oy": y0 * TILE_PX - py0,
-            "n": (x1 - x0 + 1) * (y1 - y0 + 1)}
 
 
 def to_px(fr: Dict, lon: float, lat: float) -> Tuple[float, float]:
@@ -451,23 +417,6 @@ def net_check(timeout: float = 8.0) -> List[Dict]:
 
     t = time.time()
     try:
-        # 🔴 배경 위성의 정본이 여기로 옮겨졌다(#59) — 이게 되면 작도판은 나온다.
-        _g = tile_grid(frame((127.0, 36.5), zoom=13, size=(256, 256)))
-        _u = (ESRI_TILES.replace("{z}", str(_g["zoom"]))
-              .replace("{x}", str(_g["x0"])).replace("{y}", str(_g["y0"])))
-        _r = urllib.request.urlopen(urllib.request.Request(_u, headers=dict(HTTP_HEADERS)),
-                                    timeout=timeout, context=ssl.create_default_context())
-        _b = _r.read()
-        out.append({"step": "ⓔ Esri 위성 타일", "ok": len(_b) > 500,
-                    "ms": int((time.time() - t) * 1000),
-                    "detail": "%s bytes — 작도판 배경은 여기서 온다" % format(len(_b), ",")})
-    except Exception as e:
-        out.append({"step": "ⓔ Esri 위성 타일", "ok": False,
-                    "ms": int((time.time() - t) * 1000),
-                    "detail": f"{type(e).__name__}: {e} — 배경도 막혔다"})
-
-    t = time.time()
-    try:
         socket.create_connection(CONTROL_HOST, timeout=timeout).close()
         out.append({"step": "ⓓ 대조군 %s:%d" % CONTROL_HOST, "ok": True,
                     "ms": int((time.time() - t) * 1000), "detail": "바깥으로 나간다"})
@@ -529,74 +478,6 @@ def probe(query: str = "논산시 상월면 상도리 482-42", key_kind: str = "
     run("⑤ 위성 영상 (image · PNG · 무거움)",
         lambda: f"{len(print_tile(fr, basemap='PHOTO_HYBRID', fmt='png')):,} bytes")
     return out
-
-
-def tile_mosaic(fr: Dict, url_tmpl: str = ESRI_TILES, timeout: int = 20,
-                quality: int = 88) -> bytes:
-    """XYZ 타일을 **프레임 그대로** 이어 붙인 배경(JPEG bytes).
-
-    브이월드 정지영상(`print_tile`)이 막혔을 때의 길이다 — 타일 서버는 국경이 없다.
-    2026-09-07 실측(상도리 482-42 · zoom 18 · 1024²) = **25장 · 0.39 MB · 7.7 초**,
-    브이월드와 **정렬 일치**(같은 웹 메르카토르 규약).
-    """
-    from PIL import Image
-    import io as _io
-    g = tile_grid(fr)
-    w, h = fr["size"]
-    im = Image.new("RGB", (w, h), (24, 24, 24))
-    got = 0
-    ctx = ssl.create_default_context()
-    for X in range(g["x0"], g["x1"] + 1):
-        for Y in range(g["y0"], g["y1"] + 1):
-            url = url_tmpl.replace("{z}", str(g["zoom"])).replace("{x}", str(X)).replace("{y}", str(Y))
-            req = urllib.request.Request(url, headers=dict(HTTP_HEADERS))
-            try:
-                with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
-                    body = r.read()
-                im.paste(Image.open(_io.BytesIO(body)).convert("RGB"),
-                         (int(round((X - g["x0"]) * TILE_PX + g["ox"])),
-                          int(round((Y - g["y0"]) * TILE_PX + g["oy"]))))
-                got += 1
-            except Exception:
-                continue                     # 한 장이 비어도 판은 나온다
-    if got == 0:
-        raise RuntimeError("타일 배경 실패 — %d장 중 한 장도 못 받았다" % g["n"])
-    buf = _io.BytesIO()
-    im.save(buf, "JPEG", quality=quality)
-    return buf.getvalue()
-
-
-def basemap_image(fr: Dict, prefer: str = "auto", basemap: str = "PHOTO_HYBRID") -> Tuple[bytes, str]:
-    """작도판 배경 1장 + **무엇으로 받았는지**. prefer = auto · vworld · esri.
-
-    `auto` = 브이월드를 먼저 부르고, 막히면 **말없이 포기하지 않고** Esri 로 간다.
-    어느 쪽을 썼는지 반환값에 실어 판·기록에 그대로 적는다(무엇을 보고 확인받았는지가 남아야 한다).
-    """
-    if prefer != "esri":
-        try:
-            return print_tile(fr, basemap=basemap, fmt="jpeg"), "vworld"
-        except Exception:
-            if prefer == "vworld":
-                raise
-    return tile_mosaic(fr), "esri"
-
-
-def geocode_osm(query: str, limit: int = 3, timeout: int = 20) -> List[Dict]:
-    """**보조** 지오코더(OSM Nominatim). 브이월드가 막힌 자리를 메운다.
-
-    🔴 지번을 못 찾는다 — 2026-09-07 실측: 「상도리 482-42」·「상월면 상도리」 **결과 없음**,
-      「논산시 상월면」만 나온다(36.2926, 127.1628 · 실제 밭에서 **약 3 km**).
-      그래서 이것은 **출발점**일 뿐이고, 대상지는 지도에서 눈으로 찾아 그린다(#59).
-    """
-    q = urllib.parse.urlencode({"q": query, "format": "json",
-                                "limit": str(limit), "countrycodes": "kr"})
-    req = urllib.request.Request(OSM_GEOCODE + "?" + q,
-                                 headers=dict(HTTP_HEADERS, **{"Accept-Language": "ko"}))
-    with urllib.request.urlopen(req, timeout=timeout, context=ssl.create_default_context()) as r:
-        j = json.loads(r.read().decode("utf-8", "replace"))
-    return [{"address": x.get("display_name", ""),
-             "center": [float(x["lon"]), float(x["lat"])],
-             "kind": x.get("type", "")} for x in (j or [])]
 
 
 def elevation(points=None):
@@ -664,21 +545,8 @@ def _font(size):
     return _FONT_CACHE[size]
 
 
-# 🔴 NanumGothic 에 **㎡(U+33A1)·㎥ 글리프가 없다** — 그리면 **빈칸으로 찍힌다**(2026-09-07 실측:
-#    getmask("㎡").getbbox() is None). 작도판이 처음부터 면적 단위 없이 나가고 있었다.
-#    화면(브라우저 글꼴)에서는 멀쩡해서 눈에 안 띄었다. **그리는 자리에서만** 바꿔 끼운다.
-_GLYPH_FIX = {"㎡": "m²", "㎥": "m³", "㎝": "cm²"}
-
-
-def _safe(text):
-    for k, v in _GLYPH_FIX.items():
-        text = text.replace(k, v)
-    return text
-
-
 def _label(d, xy, text, size, fill, bg, center=False):
     f = _font(size)
-    text = _safe(text)
     x, y = xy
     box = d.multiline_textbbox((0, 0), text, font=f)
     w, h = box[2] - box[0], box[3] - box[1]
@@ -713,22 +581,17 @@ def _north(d, W):
 
 
 def draft_sheet(fr, parcels=None, blocks_px=None, basemap="PHOTO_HYBRID", title="",
-                fmt="jpeg", basemap_bytes=None, blocks_m=None, sources_m=None,
-                routes_m=None, note=""):
-    """농민 확인용 작도판 PNG — 위성 + (지적 참고선) + 우리가 그린 대상지·급수원·주배관 + 축척 + 방위.
+                fmt="jpeg"):
+    """농민 확인용 작도판 PNG — 위성 + 지적 참고선 + 지번 + 우리가 그린 대상지 + 축척 + 방위.
 
-    `blocks_px` = {이름: [[x_px, y_px], ...]} · `blocks_m` = [{name, polygon(미터), crop?}]
-    `sources_m` = [{name, pt}] · `routes_m` = [{name, pts, zone?}] — **④ 지도에서 그린 그대로**.
-    `basemap_bytes` 를 주면 그 배경을 쓴다(브이월드가 막히면 Esri 모자이크 · `basemap_image`).
-    지번을 크게 적는 이유 = 농민이 「우리 밭 211-1」이라고 짚을 수 있어야 하기 때문이다.
+    `blocks_px` = {이름: [[x_px, y_px], ...]} — 같은 화소를 `blocks_from_pixels` 가 그대로 받는다.
+    지번을 크게 적는 이유 = 농민이 「우리 밭 211-1」이라고 말할 수 있어야 하기 때문이다.
     """
     import io as _io
     from PIL import Image, ImageDraw
     # 바탕은 **JPEG 로 받는다** — 같은 장면이 PNG 2.27 MB vs JPEG 0.18 MB(2026-09-07 실측 · 12.8배).
     # 판은 어차피 PNG 로 다시 내므로 최종 산출물은 그대로이고, **해외 서버에서 끊길 확률만 줄어든다**(#56).
-    if basemap_bytes is None:
-        basemap_bytes = print_tile(fr, basemap=basemap, fmt=fmt)
-    im = Image.open(_io.BytesIO(basemap_bytes)).convert("RGB")
+    im = Image.open(_io.BytesIO(print_tile(fr, basemap=basemap, fmt=fmt))).convert("RGB")
     d = ImageDraw.Draw(im, "RGBA")
     W, H = im.size
 
@@ -745,16 +608,6 @@ def draft_sheet(fr, parcels=None, blocks_px=None, basemap="PHOTO_HYBRID", title=
                    (235, 245, 255), (0, 0, 0, 130), center=True)
 
     # 우리가 그린 대상지 — 굵고 선명하게, 면적을 함께 적는다.
-    # 미터로 그린 것(④ 지도에서 그리기)도 여기서 화소로 합류한다 — 그리는 코드는 하나다.
-    _px = dict(blocks_px or {})
-    for _b in (blocks_m or []):
-        _ll = from_local_m(_b.get("polygon") or [], fr["origin"])
-        if len(_ll) >= 3:
-            _nm = str(_b.get("name") or "대상지")
-            if _b.get("crop"):
-                _nm += " · " + str(_b["crop"])
-            _px[_nm] = [list(to_px(fr, q[0], q[1])) for q in _ll]
-    blocks_px = _px
     palette = [(255, 214, 0), (196, 110, 255), (255, 122, 90), (90, 230, 160)]
     for k, (name, pts) in enumerate((blocks_px or {}).items()):
         col = palette[k % len(palette)]
@@ -768,33 +621,10 @@ def draft_sheet(fr, parcels=None, blocks_px=None, basemap="PHOTO_HYBRID", title=
                                                    format(round(area / 3.3058), ",")),
                20, col, (0, 0, 0, 175), center=True)
 
-    # 주배관 — 굵은 붉은 선. 그린 순서를 알 수 있게 이름을 얹는다.
-    for _rt in (routes_m or []):
-        _ll = from_local_m(_rt.get("pts") or [], fr["origin"])
-        if len(_ll) < 2:
-            continue
-        _pp = [to_px(fr, q[0], q[1]) for q in _ll]
-        d.line(_pp, fill=(255, 75, 75, 255), width=6, joint="curve")
-        _mid = _pp[len(_pp) // 2]
-        _label(d, _mid, str(_rt.get("name") or "주배관"), 17,
-               (255, 220, 220), (0, 0, 0, 165), center=True)
-
-    # 급수원·급수 지점 — 농민이 「저기 물탱크」라고 짚는 자리다. 가장 눈에 띄어야 한다.
-    for _sc in (sources_m or []):
-        _lo, _la = from_local_m([_sc["pt"]], fr["origin"])[0]
-        _x, _y = to_px(fr, _lo, _la)
-        d.ellipse([_x - 13, _y - 13, _x + 13, _y + 13], fill=(0, 0, 0, 150),
-                  outline=(120, 220, 255, 255), width=4)
-        d.ellipse([_x - 4, _y - 4, _x + 4, _y + 4], fill=(120, 220, 255, 255))
-        _label(d, (_x, _y - 30), str(_sc.get("name") or "급수점"), 19,
-               (170, 235, 255), (0, 0, 0, 180), center=True)
-
     _scale_bar(d, fr, W, H)
     _north(d, W)
     if title:
         _label(d, (16, 14), title, 21, (255, 255, 255), (0, 0, 0, 175))
-    if note:
-        _label(d, (16, H - 34), note, 15, (215, 215, 215), (0, 0, 0, 150))
 
     buf = _io.BytesIO()
     im.save(buf, "PNG")
@@ -814,30 +644,9 @@ def draft_from_address(query, zoom=18, size=1024, radius_m=150.0, blocks_px=None
         near = parcels_in_box(fr["center"], radius_m=radius_m)
     except Exception:
         near = []                      # 참고선 없이 위성만으로도 판은 쓸 수 있다(#56)
-    bg, src = basemap_image(fr)        # 브이월드가 막히면 Esri 로 간다(#59)
-    png = draft_sheet(fr, parcels=near, blocks_px=blocks_px, basemap_bytes=bg,
-                      title="%s  ·  확인 부탁드립니다" % main["address"],
-                      note="배경 = %s" % ("브이월드 위성" if src == "vworld" else ESRI_ATTR))
-    return {"frame": fr, "parcel": main, "parcels": near, "png": png, "seed": seed,
-            "basemap": src}
-
-
-def draft_from_center(center, zoom=18, size=1024, blocks_m=None, sources_m=None,
-                      routes_m=None, title="", prefer="auto", parcels=None):
-    """**좌표 한 쌍 → 작도판.** 지번이 없어도, 브이월드가 막혀도 판이 나온다(#59).
-
-    대표 확답 2026-09-07 — 「농민들은 **대표지번이나 일부지번**을 알려주고 통화·미팅으로 대상지를
-    알려주는 경우가 대부분이다. **지번으로 특정하기 애매한 경우가 많다.**」
-    그래서 입구가 지번이 아니라 **지도**다. 여기 오는 것은 이미 지도에서 그린 결과다.
-    """
-    fr = frame(center, zoom=zoom, size=(size, size))
-    png_bg, src = basemap_image(fr, prefer=prefer)
-    note = ("배경 = %s · 축척 %.2f m/화소"
-            % ("브이월드 위성" if src == "vworld" else ESRI_ATTR, fr["m_per_px"]))
-    png = draft_sheet(fr, parcels=parcels, basemap_bytes=png_bg, blocks_m=blocks_m,
-                      sources_m=sources_m, routes_m=routes_m,
-                      title=title or "확인 부탁드립니다", note=note)
-    return {"frame": fr, "png": png, "basemap": src, "note": note}
+    png = draft_sheet(fr, parcels=near, blocks_px=blocks_px,
+                      title="%s  ·  확인 부탁드립니다" % main["address"])
+    return {"frame": fr, "parcel": main, "parcels": near, "png": png, "seed": seed}
 
 
 # ────────────────────────────── CLI ──────────────────────────────

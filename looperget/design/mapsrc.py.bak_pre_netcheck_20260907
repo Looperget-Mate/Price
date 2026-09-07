@@ -48,18 +48,6 @@ SIZE_MAX = 1024
 RETRIES = 2                         # 502 는 게이트웨이 답 — 되쏜다
 RETRY_WAIT_S = 0.8
 RETRY_CODES = (429, 500, 502, 503, 504)
-CONTROL_HOST = ("pypi.org", 443)    # 「밖으로 나가긴 하는가」를 가르는 대조군
-
-# 🔴 브라우저처럼 말한다. 2026-09-07 배포 실사고에서 같은 요청이 **로컬은 성공 · 클라우드는
-#    RemoteDisconnected/502** 였다 — 서버가 요청을 받고 **끊는다**. 국외 IP + 스크립트형
-#    User-Agent 를 WAF 가 거르는 경우가 흔해서, 값이 없는 쪽부터 지운다(추정이므로 주석에 남긴다).
-HTTP_HEADERS = {
-    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                   "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"),
-    "Accept": "application/json,text/javascript,image/png,image/jpeg,*/*;q=0.8",
-    "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
-    "Connection": "close",
-}
 
 _KEYS: Optional[Dict] = None
 
@@ -210,7 +198,7 @@ def _call(path: str, params: Dict, raw: bool = False, timeout: int = 30,
     ⚠ 키는 params 안에 있다 — **예외 문구에 url 을 싣지 않는다**(불변 원칙 4).
     """
     url = f"{VWORLD_BASE}/{path}?" + urllib.parse.urlencode(params, encoding="utf-8")
-    req = urllib.request.Request(url, headers=dict(HTTP_HEADERS))
+    req = urllib.request.Request(url, headers={"User-Agent": f"looperget-mapsrc/{VERSION}"})
     label = what or path
     last = ""
     for attempt in range(retries + 1):
@@ -366,67 +354,6 @@ def wmts_url(layer: str = "Satellite", key_kind: str = "vworld") -> str:
     return f"{VWORLD_BASE}/wmts/1.0.0/{key}/{layer}/{{z}}/{{y}}/{{x}}.{ext}"
 
 
-def net_check(timeout: float = 8.0) -> List[Dict]:
-    """**전송 계층 점검** — 「키·파라미터 문제」와 「아예 못 닿는다」를 가른다.
-
-    ⓐ DNS ⓑ TCP 443 연결 ⓒ **가짜 키로 실호출**(닿기만 하면 `INVALID_KEY` 가 온다)
-    ⓓ 대조군(다른 호스트)으로 **바깥이 되긴 하는가**.
-    🔴 ⓒ 는 일부러 **가짜 키**를 쓴다 — 진짜 키는 이 점검에 넣지 않는다(불변 원칙 4).
-    """
-    import socket
-    out: List[Dict] = []
-    host = urllib.parse.urlparse(VWORLD_BASE).hostname or "api.vworld.kr"
-
-    t = time.time()
-    try:
-        infos = socket.getaddrinfo(host, 443, 0, socket.SOCK_STREAM)
-        ips = sorted({i[4][0] for i in infos})
-        out.append({"step": "ⓐ DNS " + host, "ok": True,
-                    "ms": int((time.time() - t) * 1000), "detail": ", ".join(ips)})
-    except Exception as e:
-        out.append({"step": "ⓐ DNS " + host, "ok": False,
-                    "ms": int((time.time() - t) * 1000), "detail": f"{type(e).__name__}: {e}"})
-        return out
-
-    t = time.time()
-    try:
-        socket.create_connection((host, 443), timeout=timeout).close()
-        out.append({"step": "ⓑ TCP 443 연결", "ok": True,
-                    "ms": int((time.time() - t) * 1000), "detail": "열린다"})
-    except Exception as e:
-        out.append({"step": "ⓑ TCP 443 연결", "ok": False,
-                    "ms": int((time.time() - t) * 1000), "detail": f"{type(e).__name__}: {e}"})
-
-    t = time.time()
-    try:
-        # 가짜 키 — 닿기만 하면 브이월드가 INVALID_KEY 를 준다. 그러면 망은 문제가 아니다.
-        _call("search", {"service": "search", "request": "search", "version": "2.0",
-                         "crs": "EPSG:4326", "size": "1", "page": "1", "query": "서울",
-                         "type": "address", "format": "json", "errorformat": "json",
-                         "key": "NOTAREALKEY000000000"}, what="가짜 키 도달 시험", retries=0)
-        out.append({"step": "ⓒ 가짜 키 실호출", "ok": True,
-                    "ms": int((time.time() - t) * 1000),
-                    "detail": "응답이 왔다(예상 밖 — 가짜 키가 통과했다)"})
-    except Exception as e:
-        msg = str(e)
-        reached = "INVALID_KEY" in msg or "인증키" in msg or "브이월드 오류" in msg
-        out.append({"step": "ⓒ 가짜 키 실호출", "ok": reached,
-                    "ms": int((time.time() - t) * 1000),
-                    "detail": ("✅ 서버까지 닿는다(INVALID_KEY) — 망은 문제가 아니다"
-                               if reached else msg)})
-
-    t = time.time()
-    try:
-        socket.create_connection(CONTROL_HOST, timeout=timeout).close()
-        out.append({"step": "ⓓ 대조군 %s:%d" % CONTROL_HOST, "ok": True,
-                    "ms": int((time.time() - t) * 1000), "detail": "바깥으로 나간다"})
-    except Exception as e:
-        out.append({"step": "ⓓ 대조군 %s:%d" % CONTROL_HOST, "ok": False,
-                    "ms": int((time.time() - t) * 1000),
-                    "detail": f"{type(e).__name__}: {e} — 바깥 자체가 막혔다"})
-    return out
-
-
 def probe(query: str = "논산시 상월면 상도리 482-42", key_kind: str = "vworld") -> List[Dict]:
     """**지도 연결 점검** — 네 호출을 따로따로 찔러 어디가 죽는지 말한다.
 
@@ -434,7 +361,7 @@ def probe(query: str = "논산시 상월면 상도리 482-42", key_kind: str = "
     한 줄짜리 「HTTP Error 502」로는 어느 자리인지 알 수 없어서 만든 진단이다(2026-09-07 배포 사고).
     반환 = [{step, ok, ms, detail}] — **키는 절대 싣지 않는다**(불변 원칙 4).
     """
-    out: List[Dict] = list(net_check())
+    out: List[Dict] = []
 
     def run(step, fn):
         t = time.time()
@@ -457,7 +384,7 @@ def probe(query: str = "논산시 상월면 상도리 482-42", key_kind: str = "
         return f"{hits[0]['pnu']} · {hits[0]['address']}"
 
     if not run("① 지번 검색 (search)", _geo):
-        return out          # 첫 호출이 죽으면 뒤는 볼 것도 없다 — ⓐ~ⓓ 가 자리를 짚어 준다
+        return out
     par: List[Dict] = []
 
     def _par():

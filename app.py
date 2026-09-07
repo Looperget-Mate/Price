@@ -1053,7 +1053,7 @@ from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 �
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
 if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V92)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V93)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1066,8 +1066,8 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 85:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V92)와 짝이 맞지 않습니다.\n\n"
+if _LG_VER < 86:
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V93)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -6146,6 +6146,7 @@ elif mode == "🏪 아쿠나리스":
 #   [V90] **점 편집이 폴리곤에 안 되던 것 수정**(#69) — edit_options 가 잘못이었다
 #   [V91] 둥글게 **기본 0**(#70) · 운전 구역·밸브를 지도 화면에서(#71)
 #   [V92] 밭만 그려도 **열·헤드·유량·권고 구역**이 나온다(#72)
+#   [V93] 간격을 고른다 · **예상 살수를 지도에** · 구역 자동 매김(#73)
 #   흐름 정본 = `_설계/_문진표/문진표_v1_농지.md` · 대표 확답 #43·#44
 #   🔴 캔버스를 새로 만들지 않는다(파일 기반 1안 · 대표 선택 2026-09-06).
 #      작도판 PNG를 내려받아 농민 확인 → 확인된 blocks/routes JSON을 올린다.
@@ -6379,6 +6380,26 @@ elif mode == "🗺️ 설계(P3)":
                     "끝나면 **저장**을 누릅니다. 밭 표의 **「둥글게 0~3」** 으로도 모서리를 깎을 수 있습니다.\n\n"
                     "🔴 다 그린 뒤 **아래 「반영」 단추**를 눌러야 목록으로 들어갑니다.")
 
+            # 🔴 [V93] 미리보기를 **지도보다 먼저** 계산한다 — 예상 살수(헤드·반경)를 지도에 얹으려면
+            #    값이 있어야 한다. 밭·간격·고랑 방향이 바뀔 때만 다시 돈다(4~5초 · 캐시).
+            if _pins["blocks"]:
+                _flow = _p3v.parse_flow_lpm((st.session_state.get("p3_answers") or {})
+                                            .get("flow_lpm"))
+                _sig = json.dumps([[_b.get("polygon"), _b.get("u"), _b.get("policy")]
+                                   for _b in _pins["blocks"]], sort_keys=True) + "|%s" % _flow
+                if st.session_state.get("p3_prev_sig") != _sig:
+                    with st.spinner("열·헤드·유량 계산 중… (몇 초 걸립니다)"):
+                        try:
+                            st.session_state.p3_preview = _p3v.block_preview(
+                                _pins["blocks"], flow_lpm=_flow)
+                        except Exception as _e:
+                            st.session_state.p3_preview = {"error": str(_e)}
+                    st.session_state.p3_prev_sig = _sig
+            else:
+                st.session_state.p3_preview = None
+
+            _shw = st.checkbox("💦 예상 살수 보기 (헤드 자리와 반경)", value=True, key="p3_show_heads",
+                               help="계산된 스프링클러 자리와 살수 반경을 지도에 겹쳐 봅니다.")
             try:
                 _sat, _hyb = _p3m.wmts_url("Satellite"), _p3m.wmts_url("Hybrid")
             except Exception:
@@ -6418,6 +6439,25 @@ elif mode == "🗺️ 설계(P3)":
                 if len(_ll) >= 2:
                     _fo.PolyLine([[_q[1], _q[0]] for _q in _ll], color="#ff4b4b", weight=5,
                                  tooltip=str(_rt.get("name") or "")).add_to(_M)
+
+            # 💦 예상 살수 — 헤드 자리와 반경. 그린 것과 겹쳐 보아야 「이렇게 젖는다」가 보인다.
+            _pvm = st.session_state.get("p3_preview") or {}
+            if _shw and _pvm.get("n_heads"):
+                _rad = float((_pvm.get("spacing") or {}).get("radius_m") or 10.0)
+                _fgh = _fo.FeatureGroup(name="💦 예상 살수 (%d두)" % _pvm["n_heads"], show=True)
+                for _bp in (_pvm.get("blocks") or []):
+                    for _hp in (_bp.get("head_pts") or []):
+                        _lo, _la = _p3m.from_local_m([_hp], _org)[0]
+                        _fo.Circle([_la, _lo], radius=_rad, color="#78dcff", weight=1,
+                                   opacity=0.55, fill=True, fill_color="#78dcff",
+                                   fill_opacity=0.10).add_to(_fgh)
+                        _fo.CircleMarker([_la, _lo], radius=2, color="#00e5ff", weight=2,
+                                         fill=True, fill_opacity=1).add_to(_fgh)
+                    for _rl in (_bp.get("row_lines") or []):
+                        _ll = _p3m.from_local_m(_rl, _org)
+                        _fo.PolyLine([[_q[1], _q[0]] for _q in _ll], color="#9fe8ff",
+                                     weight=2, opacity=0.5, dash_array="4,6").add_to(_fgh)
+                _fgh.add_to(_M)
 
             # 🔴 한국어 이름표는 **Draw 보다 먼저** 붙는다(상수 주석 참조).
             _lc = _fo.MacroElement()
@@ -6492,8 +6532,11 @@ elif mode == "🗺️ 설계(P3)":
                              "area_m2": round(_p3m.polygon_area_m2(_pg), 1),
                              "u": [1.0, 0.0], "crop": ""})
                 if _lines:
+                    # 🔵 [V93] 구역을 **그린 순서대로 1·2…** 로 매겨 둔다 — 표에서 고칠 수 있다.
+                    #    비워 두면 「공통 구간(펌프→매니폴드)」이라 구역이 하나도 안 생기고,
+                    #    그 상태를 대표가 알아채기 어려웠다(2026-09-07 실사용).
                     _pins["routes"] = [
-                        {"id": "R%d" % (_i + 1), "name": "R%d" % (_i + 1), "zone": None,
+                        {"id": "R%d" % (_i + 1), "name": "R%d" % (_i + 1), "zone": _i + 1,
                          "pts": _p3m.to_local_m(_f["geometry"]["coordinates"], _org), "by_ceo": True}
                         for _i, _f in enumerate(_lines)]
                 if _points:
@@ -6551,6 +6594,9 @@ elif mode == "🗺️ 설계(P3)":
 
             if _pins["blocks"]:
                 st.markdown("##### 🟨 밭 구역")
+                st.caption("**간격** — 기본은 **헤드 10 · 열 10 · 첫 여백 5 m**(승인 시공 배추밭). "
+                           "427B 권장은 **14 · 14 · 7** 입니다 — 넓히면 두수가 줄고, 좁히면 늘어납니다. "
+                           "바꾸면 위 지도의 **💦 예상 살수**와 아래 숫자가 다시 계산됩니다.")
                 st.caption("**둥글게 0~3** — 기본은 **0(그린 그대로)** 입니다. 올리면 모서리가 깎여 "
                            "부드러워지지만 **점이 적으면 계란처럼 됩니다** — 면적을 보고 정하세요. "
                            "🔴 **고랑(열) 방향은 대표 입력입니다** — 0°=동 · 90°=북. "
@@ -6559,17 +6605,29 @@ elif mode == "🗺️ 설계(P3)":
                                       "둥글게": int(_b.get("smooth", 0)),
                                       "면적(m²)": _b["area_m2"],
                                       "평": round(_b["area_m2"] / 3.3058),
-                                      "점": len(_b.get("polygon") or []),
                                       "작물": _b.get("crop", ""),
                                       "고랑 방향(도)": round(math.degrees(
-                                          math.atan2(_b["u"][1], _b["u"][0])))}
+                                          math.atan2(_b["u"][1], _b["u"][0]))),
+                                      "헤드 간격(m)": float((_b.get("policy") or {}).get("S", 10.0)),
+                                      "열 간격(m)": float((_b.get("policy") or {}).get("lat_gap", 10.0)),
+                                      "첫 여백(m)": float((_b.get("policy") or {}).get("std", 5.0))}
                                      for _i, _b in enumerate(_pins["blocks"])])
                 _bed = st.data_editor(
                     _bdf, width="stretch", hide_index=True, num_rows="dynamic",
-                    disabled=["id", "면적(m²)", "평", "점"], key="p3_bl_ed",
-                    column_config={"둥글게": st.column_config.NumberColumn(
-                        min_value=0, max_value=_p3m.SMOOTH_MAX, step=1,
-                        help="0 = 그린 그대로 · 1~3 = 모서리를 점점 더 둥글게")})
+                    disabled=["id", "면적(m²)", "평"], key="p3_bl_ed",
+                    column_config={
+                        "둥글게": st.column_config.NumberColumn(
+                            min_value=0, max_value=_p3m.SMOOTH_MAX, step=1,
+                            help="0 = 그린 그대로 · 1~3 = 모서리를 점점 더 둥글게"),
+                        "헤드 간격(m)": st.column_config.NumberColumn(
+                            min_value=4.0, max_value=20.0, step=0.5,
+                            help="한 줄 안에서 헤드 사이 거리. 427B 권장 14 · 승인 배추밭 10."),
+                        "열 간격(m)": st.column_config.NumberColumn(
+                            min_value=4.0, max_value=20.0, step=0.5,
+                            help="줄과 줄 사이 거리. 427B 권장 14 · 승인 배추밭 10."),
+                        "첫 여백(m)": st.column_config.NumberColumn(
+                            min_value=2.0, max_value=12.0, step=0.5,
+                            help="주배관에서 첫 헤드까지. 427B 권장 7 · 승인 배추밭 5.")})
                 _byid = {_b.get("id"): _b for _b in _pins["blocks"]}
                 _new, _chg = [], False
                 for _, _r in _bed.iterrows():
@@ -6582,6 +6640,17 @@ elif mode == "🗺️ 설계(P3)":
                     _th = math.radians(0.0 if pd.isna(_dg) else float(_dg))
                     _b["u"] = [round(math.cos(_th), 6), round(math.sin(_th), 6)]
                     # 둥글게는 **매번 그린 그대로에서 다시 만든다** — 깎은 것을 또 깎지 않는다.
+                    # 간격 — 바뀌면 미리보기가 다시 돈다(캐시 서명에 policy 가 들어 있다).
+                    _pol = dict(_b.get("policy") or {})
+                    for _key, _col, _dflt in (("S", "헤드 간격(m)", 10.0),
+                                              ("lat_gap", "열 간격(m)", 10.0),
+                                              ("std", "첫 여백(m)", 5.0)):
+                        _val = _dflt if pd.isna(_r[_col]) else float(_r[_col])
+                        _pol[_key] = _val
+                    _pol.setdefault("maxm", max(6.0, float(_pol["std"]) + 1.0))
+                    if _pol != (_b.get("policy") or {}):
+                        _b["policy"] = _pol
+                        _chg = True
                     _sm = 0 if pd.isna(_r["둥글게"]) else int(_r["둥글게"])
                     if _sm != int(_b.get("smooth", -1)) or not _b.get("polygon"):
                         _b["smooth"] = _sm
@@ -6602,7 +6671,8 @@ elif mode == "🗺️ 설계(P3)":
 
             if _pins["routes"]:
                 st.markdown("##### 📐 주배관")
-                st.caption("**구역(zone)** 은 대표 입력입니다 — 비우면 공통 구간(펌프→매니폴드)입니다.")
+                st.caption("**구역(zone)** 은 대표 입력입니다 — **그린 순서대로 1·2… 로 매겨 두었습니다.** "
+                           "펌프에서 밭 진입점까지의 **공통 구간**이 있으면 그 줄의 구역을 **비우세요**.")
                 _rdf = pd.DataFrame([{"id": _r.get("id") or "R%d" % (_i + 1), "이름": _r["name"],
                                       "점": len(_r["pts"]),
                                       "길이(m)": round(sum(
@@ -6633,18 +6703,6 @@ elif mode == "🗺️ 설계(P3)":
             #    ⚠ 열 배치 계산이 몇 초 걸린다 — **밭이 바뀔 때만** 다시 계산한다(그대로면 캐시).
             if _pins["blocks"]:
                 st.markdown("##### 📊 이 밭에 무엇이 들어가는가")
-                _flow = _p3v.parse_flow_lpm((st.session_state.get("p3_answers") or {})
-                                            .get("flow_lpm"))
-                _sig = json.dumps([[_b.get("polygon"), _b.get("u")] for _b in _pins["blocks"]],
-                                  sort_keys=True) + "|%s" % _flow
-                if st.session_state.get("p3_prev_sig") != _sig:
-                    with st.spinner("열·헤드·유량 계산 중… (몇 초 걸립니다)"):
-                        try:
-                            st.session_state.p3_preview = _p3v.block_preview(
-                                _pins["blocks"], flow_lpm=_flow)
-                        except Exception as _e:
-                            st.session_state.p3_preview = {"error": str(_e)}
-                    st.session_state.p3_prev_sig = _sig
                 _pv = st.session_state.get("p3_preview") or {}
                 if _pv.get("error"):
                     st.error("미리보기 실패: " + _pv["error"])
@@ -6659,10 +6717,14 @@ elif mode == "🗺️ 설계(P3)":
                     _m4.metric("권고 구역", ("%d 구역" % _zb) if _zb else "—",
                                help="유량을 알면 유량 기준, 모르면 **관이 감당하는 한계**로 냅니다. "
                                     "확정은 ④의 구역별 말단압입니다.")
-                    st.caption("헤드 간격 %.0f m · 열 간격 %.0f m · 살수 반경 %.0f m "
-                               "(427B · 보증 1.5 bar) · 가지관 합계 %s m"
-                               % (_pv["spacing"]["head_m"], _pv["spacing"]["row_m"],
-                                  _pv["spacing"]["radius_m"], format(round(_pv["lat_total_m"]), ",")))
+                    _sp = _pv["spacing"]
+                    st.caption("지금 간격 — 헤드 **%s m** · 열 **%s m** · 첫 여백 **%s m** "
+                               "(427B 권장 %.0f / %.0f / %.0f) · 살수 반경 %.0f m(보증 1.5 bar) · "
+                               "가지관 합계 %s m"
+                               % (_sp.get("head_m") or "?", _sp.get("row_m") or "?",
+                                  _sp.get("first_m") or "?", _sp["profile_head_m"],
+                                  _sp["profile_row_m"], _sp["profile_first_m"],
+                                  _sp["radius_m"], format(round(_pv["lat_total_m"]), ",")))
                     if len(_pv.get("blocks") or []) > 1:
                         st.dataframe(pd.DataFrame(
                             [{"밭": _x.get("name"), "작물": _x.get("crop", ""),
@@ -6673,6 +6735,23 @@ elif mode == "🗺️ 설계(P3)":
                     for _n in _pv.get("notes", []):
                         (st.error if _n.startswith("🔴") else
                          st.info if _n.startswith("🔵") else st.caption)(_n)
+                    _zdrawn = sorted({_r.get("zone") for _r in _pins["routes"]
+                                      if _r.get("zone") is not None})
+                    if _zdrawn:
+                        _per = math.ceil(_pv["n_heads"] / len(_zdrawn))
+                        _cap = _pv.get("heads_cap_pressure") or 0
+                        _msg = ("지금 **%d구역**으로 그리셨습니다 — 구역당 평균 **%d두**."
+                                % (len(_zdrawn), _per))
+                        if _cap and _per <= _cap:
+                            st.success("✅ " + _msg + " 한 구역 상한 %d두 안에 듭니다. "
+                                       "확정은 ④의 구역별 말단압입니다." % _cap)
+                        elif _cap:
+                            st.warning("🟠 " + _msg + " 한 구역 상한이 **%d두**라 "
+                                       "**%d구역**이 필요해 보입니다 — 주배관을 더 나누거나 "
+                                       "간격을 넓혀 두수를 줄이는 방법이 있습니다."
+                                       % (_cap, _pv.get("zones_by_pressure") or 0))
+                        else:
+                            st.info(_msg)
                     st.caption("🔴 **구역을 어디서 어떻게 나눌지는 대표 판단입니다**(설계 규칙 6) — "
                                "위 숫자는 그 판단의 근거이고, 되는지는 ④가 판정합니다.")
 

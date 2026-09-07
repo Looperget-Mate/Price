@@ -1053,7 +1053,7 @@ from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 �
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
 if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V85)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V86)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1067,7 +1067,7 @@ try:
 except Exception:
     _LG_VER = 0
 if _LG_VER < 83:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V85)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V86)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -3321,6 +3321,40 @@ with st.sidebar:
     st.divider()
 
 # [V79] 「설계(P3)」 ③ 작도 결과 JSON 견본 — 화면에 그대로 보여 준다
+# [V86] 지도 왼쪽 그리기 단추를 **한국어로** 바꾼다(#65).
+#   🔴 Leaflet.Draw 는 컨트롤을 만들 때 `L.drawLocal` 을 읽는다 — 그래서 이 조각은
+#      **Draw 보다 먼저** 지도에 붙여야 한다. 순서가 바뀌면 영어 그대로 나온다.
+P3_DRAW_LOCALE_JS = """
+{% macro script(this, kwargs) %}
+try {
+  L.drawLocal.draw.toolbar.buttons.polyline = '\uc8fc\ubc30\uad00 \uadf8\ub9ac\uae30 (\uc120)';
+  L.drawLocal.draw.toolbar.buttons.polygon  = '\ubc2d \uadf8\ub9ac\uae30 (\uba74)';
+  L.drawLocal.draw.toolbar.actions.title = '\uadf8\ub9ac\uae30 \ucde8\uc18c';
+  L.drawLocal.draw.toolbar.actions.text  = '\ucde8\uc18c';
+  L.drawLocal.draw.toolbar.finish.title = '\uadf8\ub9ac\uae30 \ub05d\ub0b4\uae30';
+  L.drawLocal.draw.toolbar.finish.text  = '\ub05d';
+  L.drawLocal.draw.toolbar.undo.title = '\ub9c8\uc9c0\ub9c9 \uc810 \uc9c0\uc6b0\uae30';
+  L.drawLocal.draw.toolbar.undo.text  = '\ud55c \uc810 \uc9c0\uc6b0\uae30';
+  L.drawLocal.draw.handlers.polyline.tooltip.start = '\ub20c\ub7ec\uc11c \uad00 \uacbd\ub85c\ub97c \uc2dc\uc791\ud569\ub2c8\ub2e4';
+  L.drawLocal.draw.handlers.polyline.tooltip.cont  = '\uacc4\uc18d \ub20c\ub7ec \uc774\uc5b4 \uadf8\ub9bd\ub2c8\ub2e4';
+  L.drawLocal.draw.handlers.polyline.tooltip.end   = '\ub9c8\uc9c0\ub9c9 \uc810\uc744 \ub450 \ubc88 \ub20c\ub7ec \ub05d\ub0c5\ub2c8\ub2e4';
+  L.drawLocal.draw.handlers.polygon.tooltip.start = '\ub20c\ub7ec\uc11c \ubc2d \ubaa8\uc11c\ub9ac\ub97c \ucc0d\uae30 \uc2dc\uc791\ud569\ub2c8\ub2e4';
+  L.drawLocal.draw.handlers.polygon.tooltip.cont  = '\ubaa8\uc11c\ub9ac\ub97c \uacc4\uc18d \ucc0d\uc2b5\ub2c8\ub2e4';
+  L.drawLocal.draw.handlers.polygon.tooltip.end   = '\uccab \uc810\uc744 \ub2e4\uc2dc \ub20c\ub7ec \ub2eb\uc2b5\ub2c8\ub2e4';
+  L.drawLocal.edit.toolbar.buttons.edit = '\uadf8\ub9b0 \uac83 \uace0\uce58\uae30';
+  L.drawLocal.edit.toolbar.buttons.editDisabled = '\uace0\uce60 \uac83\uc774 \uc5c6\uc2b5\ub2c8\ub2e4';
+  L.drawLocal.edit.toolbar.buttons.remove = '\uadf8\ub9b0 \uac83 \uc9c0\uc6b0\uae30';
+  L.drawLocal.edit.toolbar.buttons.removeDisabled = '\uc9c0\uc6b8 \uac83\uc774 \uc5c6\uc2b5\ub2c8\ub2e4';
+  L.drawLocal.edit.toolbar.actions.save.title = '\uace0\uce5c \uac83 \uc800\uc7a5';
+  L.drawLocal.edit.toolbar.actions.save.text  = '\uc800\uc7a5';
+  L.drawLocal.edit.toolbar.actions.cancel.title = '\ub418\ub3cc\ub9ac\uae30';
+  L.drawLocal.edit.toolbar.actions.cancel.text  = '\ucde8\uc18c';
+  L.drawLocal.edit.toolbar.actions.clearAll.title = '\uc804\ubd80 \uc9c0\uc6b0\uae30';
+  L.drawLocal.edit.toolbar.actions.clearAll.text  = '\uc804\ubd80 \uc9c0\uc6c0';
+} catch (e) {}
+{% endmacro %}
+"""
+
 # [V85] 지도 첫 화면 기준점. **어디여도 된다** — 좌표계의 원점일 뿐이고 대상지는 지도에서 찾는다.
 #   작도판은 `fit_frame()` 이 **그린 것**에 맞춰 다시 잡으므로 이 값이 결과를 바꾸지 않는다(#62).
 P3_MAP_HOME = (127.17736, 36.32167)      # 논산시 상월면 상도리 482-42 일대
@@ -6043,6 +6077,7 @@ elif mode == "🏪 아쿠나리스":
 #   [V83] 문진표 안내 · **지도가 입구가 된다**(#59 · 대표 지시 2026-09-07) · 배경 정본 Esri
 #   [V84] 문진표 보기 버튼(#61) · 지도가 본 자리를 지킨다 · 작도판이 그린 것에 맞춰 잡힌다
 #   [V85] **지도는 늘 열린다**(#64) — 주소 이동이 막혀도 작업이 멈추지 않는다
+#   [V86] **그리는 법을 화면이 말한다**(#65) · 그리기 단추 한국어화 · 다음 한 걸음 안내
 #   흐름 정본 = `_설계/_문진표/문진표_v1_농지.md` · 대표 확답 #43·#44
 #   🔴 캔버스를 새로 만들지 않는다(파일 기반 1안 · 대표 선택 2026-09-06).
 #      작도판 PNG를 내려받아 농민 확인 → 확인된 blocks/routes JSON을 올린다.
@@ -6251,9 +6286,22 @@ elif mode == "🗺️ 설계(P3)":
                                                 {"sources": [], "routes": [], "blocks": []})
             _pins.setdefault("blocks", [])
 
+            # 🔴 [V86] 대표 「어떻게 그리라는거지? 뭘 체크하면 되는지를 몰라.」 —
+            #    도구가 있는데 쓰는 법을 화면이 말하지 않으면 없는 것과 같다. **접지 않는다.**
+            st.markdown(
+                "##### 그리는 법 — 세 가지뿐입니다\n"
+                "1. **💧 물탱크·펌프·급수 지점** — 바로 아래에서 종류를 고르고 "
+                "**지도를 한 번 누르면** 그 자리에 찍힙니다. *(왼쪽 단추 안 씁니다)*\n"
+                "2. **🟨 밭** — 지도 **왼쪽 세로 단추 중 ⬟(면)** 을 누르고 밭 모서리를 차례로 찍은 뒤, "
+                "**첫 점을 다시 눌러 닫습니다.**\n"
+                "3. **📐 주배관** — 지도 **왼쪽 ╱(선)** 을 누르고 물길을 따라 찍은 뒤, "
+                "**마지막 점을 두 번 눌러** 끝냅니다.")
+            st.info("🔴 그린 뒤에는 **지도 아래 「반영」 단추**를 눌러야 설계로 넘어갑니다. "
+                    "누르기 전에는 그림일 뿐입니다.")
             _k1, _k2, _k3 = st.columns([2, 1, 1])
-            _kind = _k1.selectbox("눌러서 찍을 것", ["💧 물탱크", "💧 관정", "⚙ 펌프", "🚰 상수도 인입",
-                                                    "🎯 급수 지점(밭 진입)", "✍ 직접 입력"],
+            _kind = _k1.selectbox("눌러서 찍을 것 (지도를 누르면 이것이 찍힙니다)",
+                                  ["💧 물탱크", "💧 관정", "⚙ 펌프", "🚰 상수도 인입",
+                                   "🎯 급수 지점(밭 진입)", "✍ 직접 입력"],
                                   key="p3_pin_kind")
             _bands = _k2.number_input("시작 밴드", 0, 12, 4, key="p3_pin_bands",
                                       help="급수점에서 나가는 밴드 수 — 자재(BOM)에 그대로 들어갑니다.")
@@ -6311,6 +6359,10 @@ elif mode == "🗺️ 설계(P3)":
                     _fo.PolyLine([[_q[1], _q[0]] for _q in _ll], color="#ff4b4b", weight=5,
                                  tooltip=str(_rt.get("name") or "")).add_to(_M)
 
+            # 🔴 한국어 이름표는 **Draw 보다 먼저** 붙는다(위 상수 주석 참조).
+            _lc = _fo.MacroElement()
+            _lc._template = _BrancaTemplate(P3_DRAW_LOCALE_JS)
+            _M.add_child(_lc)
             _FoDraw(export=False, position="topleft",
                     draw_options={"polyline": {"shapeOptions": {"color": "#ff4b4b", "weight": 5}},
                                   "polygon": {"shapeOptions": {"color": "#ffd600", "weight": 4}},
@@ -6355,9 +6407,12 @@ elif mode == "🗺️ 설계(P3)":
             _dws = (_out or {}).get("all_drawings") or []
             _polys = [_f for _f in _dws if ((_f or {}).get("geometry") or {}).get("type") == "Polygon"]
             _lines = [_f for _f in _dws if ((_f or {}).get("geometry") or {}).get("type") == "LineString"]
+            st.caption("지금 지도에 **그려 놓은 것** — 면 %d개 · 선 %d개. "
+                       "아래 단추를 눌러야 목록으로 들어갑니다." % (len(_polys), len(_lines)))
             _c1, _c2, _c3 = st.columns(3)
-            if _c1.button("🟨 그린 밭 %d개 반영" % len(_polys), key="p3_take_blocks",
-                          disabled=not _polys):
+            if _c1.button(("🟨 그린 면 %d개를 밭으로 넣기" % len(_polys)) if _polys
+                          else "🟨 밭으로 넣기 (먼저 ⬟ 로 면을 그리세요)",
+                          key="p3_take_blocks", disabled=not _polys):
                 _bl = []
                 for _i, _f in enumerate(_polys):
                     _ring = _f["geometry"]["coordinates"][0]
@@ -6368,15 +6423,17 @@ elif mode == "🗺️ 설계(P3)":
                 _pins["blocks"] = _bl
                 st.session_state.p3_pins = _pins
                 st.rerun()
-            if _c2.button("📐 그린 선 %d개를 주배관으로" % len(_lines), key="p3_take_routes",
-                          disabled=not _lines):
+            if _c2.button(("📐 그린 선 %d개를 주배관으로 넣기" % len(_lines)) if _lines
+                          else "📐 주배관으로 넣기 (먼저 ╱ 로 선을 그리세요)",
+                          key="p3_take_routes", disabled=not _lines):
                 _pins["routes"] = [
                     {"name": "R%d" % (_i + 1), "zone": None,
                      "pts": _p3m.to_local_m(_f["geometry"]["coordinates"], _org), "by_ceo": True}
                     for _i, _f in enumerate(_lines)]
                 st.session_state.p3_pins = _pins
                 st.rerun()
-            if _c3.button("↩ 마지막 급수점 지우기", key="p3_pin_undo") and _pins["sources"]:
+            if _c3.button("↩ 마지막 급수점 지우기", key="p3_pin_undo",
+                          disabled=not _pins["sources"]) and _pins["sources"]:
                 _pins["sources"].pop()
                 st.session_state.p3_pins = _pins
                 st.rerun()
@@ -6438,6 +6495,17 @@ elif mode == "🗺️ 설계(P3)":
                         _pins["routes"][_i]["zone"] = None if pd.isna(_z) else int(_z)
 
             st.divider()
+            # 다음 한 걸음만 말한다 — 목록을 늘어놓지 않는다.
+            _nb, _ns, _nr = len(_pins["blocks"]), len(_pins["sources"]), len(_pins["routes"])
+            st.markdown("**지금까지 — 밭 %d · 급수점 %d · 주배관 %d**" % (_nb, _ns, _nr))
+            if not _nb:
+                st.warning("다음 → 지도 왼쪽 **⬟(면)** 으로 밭을 그리고 「밭으로 넣기」를 누르세요.")
+            elif not _ns:
+                st.warning("다음 → 위에서 **💧 물탱크**를 고르고 **지도를 한 번 누르세요.**")
+            elif not _nr:
+                st.warning("다음 → 지도 왼쪽 **╱(선)** 으로 급수점에서 밭까지 주배관을 그리세요.")
+            else:
+                st.success("다 모였습니다 → 아래 단추를 누르고 **③ 작도판**으로 가세요.")
             if st.button("✅ 이 좌표를 설계에 씁니다", type="primary", key="p3_pin_apply"):
                 _dw = dict(st.session_state.get("p3_drawn") or {})
                 if _pins["blocks"]:

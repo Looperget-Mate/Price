@@ -1,3 +1,4 @@
+# Streamlit pinned 2026-07-11 (verified locally: boot + login + main render OK)
 streamlit==1.59.1
 pandas
 gspread
@@ -9,3 +10,6 @@ XlsxWriter
 python-pptx
 streamlit-js-eval==1.0.0
 segno
+# [V81 2026-09-07] ④ 지도에서 찍기 — 타일은 브라우저가 직접 받는다(서버 502와 무관).
+folium
+streamlit-folium

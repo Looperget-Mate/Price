@@ -1053,7 +1053,7 @@ from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 �
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
 if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V88)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V89)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1067,7 +1067,7 @@ try:
 except Exception:
     _LG_VER = 0
 if _LG_VER < 84:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V88)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V89)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -3380,12 +3380,32 @@ try {
   L.drawLocal.edit.toolbar.actions.clearAll.text  = '\uc804\ubd80 \uc9c0\uc6c0';
 } catch (e) {}
 try {
+  // 🔴 아이콘만 있으면 못 찾는다(대표 2026-09-07 「연필 모양을 찾을 수 없어」).
+  //    마우스를 올려야 보이는 툴팁으로는 부족하다 — **늘 보이는 이름표**를 옆에 붙인다.
+  //    ⚠ `background-size` 는 건드리지 않는다: leaflet.draw 의 스프라이트를 깨뜨릴 수 있다.
+  var L1 = '\uc8fc\ubc30\uad00 (\uc120)';        // 주배관 (선)
+  var L2 = '\ubc2d (\uba74)';                      // 밭 (면)
+  var L3 = '\uae09\uc218\uc6d0 (\ud540)';        // 급수원 (핀)
+  var L4 = '\uc810 \ud3b8\uc9d1';                 // 점 편집
+  var L5 = '\uc9c0\uc6b0\uae30';                  // 지우기
+  var chip =
+    'position:absolute;left:36px;top:5px;white-space:nowrap;' +
+    'background:rgba(17,17,17,.86);color:#fff;font:600 12px/20px sans-serif;' +
+    'padding:0 8px;border-radius:4px;pointer-events:none;box-shadow:0 1px 4px rgba(0,0,0,.4);';
   var st = document.createElement('style');
   st.textContent =
     '.leaflet-draw-tooltip{font-size:13px;padding:6px 9px;background:rgba(0,0,0,.82);' +
     'border-left-color:#78dcff;color:#fff}' +
     '.leaflet-container.leaflet-crosshair,.leaflet-container.leaflet-crosshair *{cursor:crosshair!important}' +
-    '.leaflet-draw-toolbar a{background-size:300px 30px}';
+    '.leaflet-draw-section,.leaflet-draw-toolbar,.leaflet-draw-toolbar a{overflow:visible}' +
+    '.leaflet-draw-toolbar a{position:relative}' +
+    '.leaflet-draw-draw-polyline::after{content:"' + L1 + '";' + chip + '}' +
+    '.leaflet-draw-draw-polygon::after{content:"'  + L2 + '";' + chip + '}' +
+    '.leaflet-draw-draw-marker::after{content:"'   + L3 + '";' + chip + '}' +
+    '.leaflet-draw-edit-edit::after{content:"'     + L4 + '";' + chip + '}' +
+    '.leaflet-draw-edit-remove::after{content:"'   + L5 + '";' + chip + '}' +
+    // 못 쓰는 상태(그린 것이 없을 때)는 흐리게 — 왜 안 눌리는지 보이게.
+    '.leaflet-disabled::after{opacity:.45}';
   document.head.appendChild(st);
 } catch (e) {}
 {% endmacro %}
@@ -6116,6 +6136,7 @@ elif mode == "🏪 아쿠나리스":
 #   [V86] **그리는 법을 화면이 말한다**(#65) · 그리기 단추 한국어화 · 다음 한 걸음 안내
 #   [V87] **급수원도 왼쪽 도구로**(#66) — 지도 클릭 처리 제거 · 깜빡임 제거 · 줄 지우기
 #   [V88] **밭 모서리 둥글게**(#67) — 그린 그대로를 남기고 표에서 0~3 · 점 편집 안내
+#   [V89] 왼쪽 도구에 **한국어 이름표**(#68) — 아이콘만으로는 못 찾는다
 #   흐름 정본 = `_설계/_문진표/문진표_v1_농지.md` · 대표 확답 #43·#44
 #   🔴 캔버스를 새로 만들지 않는다(파일 기반 1안 · 대표 선택 2026-09-06).
 #      작도판 PNG를 내려받아 농민 확인 → 확인된 blocks/routes JSON을 올린다.
@@ -6333,16 +6354,19 @@ elif mode == "🗺️ 설계(P3)":
             #    → 급수원도 **왼쪽 도구**로 찍는다. 도구를 켜야만 찍히고, 켜면 커서가 십자로 바뀌며
             #      「지도를 눌러 급수원을 찍습니다」가 따라다닌다. 지도 클릭 처리는 **없앴다.**
             st.markdown(
-                "##### 그리는 법 — 지도 **왼쪽 세로 단추**로 셋 다 그립니다\n"
-                "1. **💧 급수원(물탱크·펌프·관정·급수 지점)** — 왼쪽 **📍(핀)** 을 누르면 커서가 십자로 바뀌고 "
+                "##### 그리는 법 — 지도 **왼쪽 세로 단추**를 씁니다\n"
+                "단추마다 **이름표가 붙어 있습니다.** 확대(＋/－) 아래로 **위에서부터** 이 순서입니다 — "
+                "**주배관(선) · 밭(면) · 급수원(핀)**, 한 칸 띄고 **점 편집 · 지우기**.\n\n"
+                "1. **💧 급수원(물탱크·펌프·관정·급수 지점)** — **「급수원 (핀)」** 을 누르면 커서가 십자로 바뀌고 "
                 "안내말이 따라다닙니다. 그때 **자리를 한 번 누르면** 찍힙니다.\n"
-                "2. **🟨 밭** — 왼쪽 **⬟(면)** → 모서리를 차례로 찍고 **첫 점을 다시 눌러 닫습니다.**\n"
-                "3. **📐 주배관** — 왼쪽 **╱(선)** → 물길을 따라 찍고 **마지막 점을 두 번 눌러** 끝냅니다.")
+                "2. **🟨 밭** — **「밭 (면)」** → 모서리를 차례로 찍고 **첫 점을 다시 눌러 닫습니다.**\n"
+                "3. **📐 주배관** — **「주배관 (선)」** → 물길을 따라 찍고 **마지막 점을 두 번 눌러** 끝냅니다.")
             st.info("🔵 **도구를 켜지 않으면 지도를 눌러도 아무 일도 일어나지 않습니다.** "
                     "확대·이동은 마음껏 하셔도 됩니다. 잘못 그린 것은 왼쪽 **🗑(지우기)** 로 지웁니다.\n\n"
-                    "✏ **점 편집** — 왼쪽 **연필**을 누르면 꼭짓점을 **끌어 옮길 수 있고**, "
-                    "변 가운데의 **흐린 점을 끌면 점이 새로 생깁니다**(파워포인트 점편집과 같습니다). "
-                    "끝나면 **저장**을 누릅니다.\n\n"
+                    "✏ **점 편집** — 왼쪽 아래 **「점 편집」**(지우기 바로 위)을 누르면 꼭짓점을 "
+                    "**끌어 옮길 수 있고**, 변 가운데의 **흐린 점을 끌면 점이 새로 생깁니다**"
+                    "(파워포인트 점편집과 같습니다). 끝나면 **저장**을 누릅니다. "
+                    "밭 표의 **「둥글게 0~3」** 으로도 모서리를 깎을 수 있습니다.\n\n"
                     "🔴 다 그린 뒤 **아래 「반영」 단추**를 눌러야 목록으로 들어갑니다.")
 
             try:

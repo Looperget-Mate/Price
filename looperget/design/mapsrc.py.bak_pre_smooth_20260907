@@ -217,51 +217,6 @@ def from_local_m(pts: Sequence[Sequence[float]], origin: Sequence[float]) -> Lis
     return [[lon0 + float(q[0]) / kx, lat0 + float(q[1]) / ky] for q in pts]
 
 
-def polygon_area_m2(pts_m: Sequence[Sequence[float]]) -> float:
-    """로컬 미터 폴리곤의 면적(㎡). 순수 — 위경도로 되돌리지 않는다(`ring_area_m2` 의 미터판)."""
-    p = [q for q in (pts_m or []) if q is not None and len(q) >= 2]
-    if len(p) < 3:
-        return 0.0
-    return abs(sum(p[i][0] * p[i - 1][1] - p[i - 1][0] * p[i][1]
-                   for i in range(len(p)))) / 2.0
-
-
-SMOOTH_MAX = 3                      # 그 이상은 점만 늘고 모양은 안 바뀐다
-SMOOTH_PTS_MAX = 400                # 점이 너무 많으면 엔진·판이 느려진다
-
-
-def smooth_ring(ring: Sequence[Sequence[float]], level: int = 1,
-                closed: bool = True) -> List[List[float]]:
-    """**모서리를 둥글게**(Chaikin 모서리 깎기). 순수 함수 — 좌표계 무관(미터·위경도 둘 다).
-
-    대표 요청 2026-09-07 「밭 모서리를 둥글게 할 수 없나? 파워포인트에서 점편집처럼.」
-    한 번 돌 때마다 각 변을 1/4·3/4 지점에서 잘라 **꼭짓점을 없앤다** — 점은 2배가 되고
-    모양은 원래 다각형 **안쪽**으로 조금 들어온다(그래서 면적이 조금 준다 · 표에 그대로 낸다).
-
-    🔴 `level=0` 이면 **손대지 않는다** — 각진 밭은 각진 채로 두는 것이 맞다.
-    """
-    pts = [[float(q[0]), float(q[1])] for q in (ring or [])]
-    if len(pts) > 2 and abs(pts[0][0] - pts[-1][0]) < 1e-9 and abs(pts[0][1] - pts[-1][1]) < 1e-9:
-        pts.pop()
-    n = max(0, min(int(level or 0), SMOOTH_MAX))
-    if n == 0 or len(pts) < 3:
-        return pts
-    for _ in range(n):
-        if len(pts) * 2 > SMOOTH_PTS_MAX:
-            break
-        out: List[List[float]] = []
-        m = len(pts)
-        rng = range(m) if closed else range(m - 1)
-        for i in rng:
-            a, b = pts[i], pts[(i + 1) % m]
-            out.append([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25])
-            out.append([a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75])
-        if not closed:
-            out = [pts[0]] + out + [pts[-1]]
-        pts = out
-    return [[round(q[0], 3), round(q[1], 3)] for q in pts]
-
-
 def ring_area_m2(ring: Sequence[Sequence[float]],
                  origin: Optional[Sequence[float]] = None) -> float:
     """고리의 면적(㎡). 위경도면 origin(없으면 첫 점) 기준 로컬 미터로 바꿔 잰다."""

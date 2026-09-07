@@ -1053,7 +1053,7 @@ from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 �
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
 if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V84)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V85)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1067,7 +1067,7 @@ try:
 except Exception:
     _LG_VER = 0
 if _LG_VER < 83:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V84)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V85)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -3321,6 +3321,10 @@ with st.sidebar:
     st.divider()
 
 # [V79] 「설계(P3)」 ③ 작도 결과 JSON 견본 — 화면에 그대로 보여 준다
+# [V85] 지도 첫 화면 기준점. **어디여도 된다** — 좌표계의 원점일 뿐이고 대상지는 지도에서 찾는다.
+#   작도판은 `fit_frame()` 이 **그린 것**에 맞춰 다시 잡으므로 이 값이 결과를 바꾸지 않는다(#62).
+P3_MAP_HOME = (127.17736, 36.32167)      # 논산시 상월면 상도리 482-42 일대
+
 # [V84] 지도 안 「지번 검색」 — **브라우저가 직접 브이월드에 묻는다**(JSONP · #62).
 #   🔴 배포 서버는 브이월드에 못 닿지만(#58) 대표님 브라우저는 한국에서 나가므로 통한다.
 #      브이월드가 `callback=` 을 지원해서(2026-09-07 실측) CORS 없이 <script> 로 부를 수 있다.
@@ -6038,6 +6042,7 @@ elif mode == "🏪 아쿠나리스":
 #   [V82] 점검이 접혀서 안 보이던 것 수정 · 망 도달 점검(#58) · ④를 작도판 없이도 연다
 #   [V83] 문진표 안내 · **지도가 입구가 된다**(#59 · 대표 지시 2026-09-07) · 배경 정본 Esri
 #   [V84] 문진표 보기 버튼(#61) · 지도가 본 자리를 지킨다 · 작도판이 그린 것에 맞춰 잡힌다
+#   [V85] **지도는 늘 열린다**(#64) — 주소 이동이 막혀도 작업이 멈추지 않는다
 #   흐름 정본 = `_설계/_문진표/문진표_v1_농지.md` · 대표 확답 #43·#44
 #   🔴 캔버스를 새로 만들지 않는다(파일 기반 1안 · 대표 선택 2026-09-06).
 #      작도판 PNG를 내려받아 농민 확인 → 확인된 blocks/routes JSON을 올린다.
@@ -6161,10 +6166,19 @@ elif mode == "🗺️ 설계(P3)":
             st.error("🚨 지도 부품이 없습니다 — `folium` · `streamlit-folium` 이 필요합니다 (" + _map_err + ").")
             st.caption("`requirements.txt` 에 들어 있습니다. 배포 후에도 이 문구가 보이면 재배포가 필요합니다.")
         else:
+            # 🔴 [V85] 지도를 열기 전에 관문을 세웠던 것이 잘못이었다 — 주소 이동이 막히면
+            #    (브이월드 차단 #58 · Nominatim 이 클라우드 공용 IP 에 429) **아무것도 못 했다.**
+            #    기준점은 어디여도 된다: 좌표계의 원점일 뿐이고 대상지는 **지도에서 눈으로 찾는다.**
+            # 🔴 [V85] 지도 안 「지번 검색」은 키가 있어야 뜬다 — 배포 환경엔 `.secrets/` 가 없으므로
+            #    **지도를 그리기 전에** 주입해야 한다(안 하면 검색창이 조용히 사라진다).
+            _p3_keys()
             _fr = st.session_state.get("p3_map_frame")
+            if not _fr:
+                _fr = _p3m.frame(P3_MAP_HOME, zoom=18, size=(1024, 1024))
+                st.session_state.p3_map_frame = _fr
             _addr = (st.session_state.get("p3_answers", {}) or {}).get("address", "").strip()
 
-            with st.expander("📍 지도 위치 잡기", expanded=not _fr):
+            with st.expander("📍 다른 곳으로 옮기기 (지도 안 「지번 검색」이 더 빠릅니다)"):
                 st.caption("① 주소로 대략 이동 → ② 지도 안 검색창·손으로 밭까지 이동 → ③ 그리기. "
                            "지번이 애매해도 **눈으로 찾으면 됩니다**.")
                 _l1, _l2 = st.columns([3, 2])
@@ -6185,262 +6199,281 @@ elif mode == "🗺️ 설계(P3)":
                             if _g:
                                 _hit, _how = _g[0]["center"], "OSM(면 단위 — 밭까지는 손으로)"
                         except Exception as _e:
-                            st.error("주소 이동 실패: " + str(_e))
+                            # 🔵 이 경로는 **원래 잘 안 된다** — 브이월드는 서버를 거르고(#58),
+                            #    OSM 은 클라우드 공용 IP 라 429 를 준다. 겁주지 않고 갈 길을 말한다.
+                            st.caption("서버 쪽 주소 검색은 막혀 있습니다 (%s)." % str(_e)[:60])
                     if _hit:
                         st.session_state.p3_map_frame = _p3m.frame(_hit, zoom=18, size=(1024, 1024))
+                        st.session_state.p3_view = {"center": [_hit[1], _hit[0]], "zoom": 18}
                         st.session_state.p3_map_how = _how
                         st.rerun()
                     else:
-                        st.warning("주소로는 못 찾았습니다 — 아래 좌표를 넣거나 지도 안 검색창을 쓰세요.")
+                        st.info("🔵 **지도 안 오른쪽 위 「지번 검색」을 쓰세요** — 그건 대표님 브라우저가 "
+                                "직접 브이월드에 묻기 때문에 **서버가 막혀 있어도 됩니다.** "
+                                "지도는 이미 아래에 열려 있습니다.")
                 _q1, _q2 = st.columns([3, 1])
                 _pst = _q1.text_input("좌표 붙여넣기 (위도, 경도)", value="",
                                       placeholder="36.32167, 127.17736", key="p3_mc_paste",
                                       help="다른 지도에서 찍은 좌표를 그대로 붙이면 됩니다.")
                 if _q2.button("이 좌표로", key="p3_map_open"):
-                    try:
-                        _a, _b = [float(_v) for _v in _pst.replace(" ", "").split(",")[:2]]
-                        # 위도·경도를 바꿔 넣어도 바로잡는다(한국은 위도 33~39 · 경도 124~132).
-                        _lat, _lon = (_a, _b) if _a < _b else (_b, _a)
-                        st.session_state.p3_map_frame = _p3m.frame((_lon, _lat), zoom=18,
-                                                                   size=(1024, 1024))
-                        st.session_state.p3_view = {"center": [_lat, _lon], "zoom": 18}
-                        st.session_state.p3_map_how = "좌표 직접 입력"
-                        st.rerun()
-                    except Exception:
-                        st.error("좌표를 못 읽었습니다 — 「36.32167, 127.17736」 처럼 넣어 주세요.")
+                    # 🔴 [V85] 회색 글씨는 **예시**다 — 비운 채 누르면 「못 읽었습니다」가 떴다.
+                    #    빈칸과 형식 오류를 갈라서 말하고, 쉼표·공백·괄호를 모두 받는다.
+                    _raw = "".join(_c if (_c.isdigit() or _c in ".-") else " " for _c in _pst)
+                    _nums = [_v for _v in _raw.split() if _v not in (".", "-", "-.")]
+                    if not _pst.strip():
+                        st.warning("좌표 칸이 비어 있습니다 — 회색 글씨는 **예시**입니다. "
+                                   "값을 직접 넣으시거나 지도 안 「지번 검색」을 쓰세요.")
+                    elif len(_nums) < 2:
+                        st.error("좌표를 못 읽었습니다 — 「36.32167, 127.17736」 처럼 **숫자 두 개**를 넣어 주세요.")
+                    else:
+                        try:
+                            _a, _b = float(_nums[0]), float(_nums[1])
+                            # 위도·경도를 바꿔 넣어도 바로잡는다(한국은 위도 33~39 · 경도 124~132).
+                            _lat, _lon = (_a, _b) if _a < _b else (_b, _a)
+                            if not (32.0 <= _lat <= 40.0 and 123.0 <= _lon <= 133.0):
+                                st.error("한국 밖의 좌표입니다 (위도 %.4f · 경도 %.4f) — 다시 확인해 주세요."
+                                         % (_lat, _lon))
+                            else:
+                                st.session_state.p3_map_frame = _p3m.frame((_lon, _lat), zoom=18,
+                                                                           size=(1024, 1024))
+                                st.session_state.p3_view = {"center": [_lat, _lon], "zoom": 18}
+                                st.session_state.p3_map_how = "좌표 직접 입력"
+                                st.rerun()
+                        except ValueError:
+                            st.error("좌표를 못 읽었습니다 — 「36.32167, 127.17736」 처럼 넣어 주세요.")
                 st.caption("🔵 **지도 안 오른쪽 위 「지번 검색」이 가장 빠릅니다** — 그 검색은 "
                            "대표님 **브라우저가 직접** 브이월드에 묻기 때문에 서버가 막혀 있어도 됩니다.")
                 if st.session_state.get("p3_map_how"):
                     st.caption("현재 중심 출처 — " + st.session_state.p3_map_how)
 
-            if not _fr:
-                st.info("위에서 **지도 위치**를 먼저 잡아 주세요.")
-            else:
-                _org = _fr["origin"]
-                _pins = st.session_state.setdefault("p3_pins",
-                                                    {"sources": [], "routes": [], "blocks": []})
-                _pins.setdefault("blocks", [])
+            _org = _fr["origin"]
+            _pins = st.session_state.setdefault("p3_pins",
+                                                {"sources": [], "routes": [], "blocks": []})
+            _pins.setdefault("blocks", [])
 
-                _k1, _k2, _k3 = st.columns([2, 1, 1])
-                _kind = _k1.selectbox("눌러서 찍을 것", ["💧 물탱크", "💧 관정", "⚙ 펌프", "🚰 상수도 인입",
-                                                        "🎯 급수 지점(밭 진입)", "✍ 직접 입력"],
-                                      key="p3_pin_kind")
-                _bands = _k2.number_input("시작 밴드", 0, 12, 4, key="p3_pin_bands",
-                                          help="급수점에서 나가는 밴드 수 — 자재(BOM)에 그대로 들어갑니다.")
-                _tees = _k3.number_input("이 자리 T", 0, 12, 0, key="p3_pin_tees",
-                                         help="급수점에 T 분기가 있으면 개수. 없으면 0.")
-                # 🔴 위젯에 key 를 주면 value 는 첫 렌더에만 먹는다 — 종류를 바꿔도 이름이 안 따라온다.
-                if st.session_state.get("p3_pin_kind_prev") != _kind:
-                    st.session_state.p3_pin_kind_prev = _kind
-                    st.session_state.p3_pin_name = ("" if _kind == "✍ 직접 입력"
-                                                    else _kind.split(" ", 1)[-1])
-                _nm = st.text_input("이름", key="p3_pin_name")
+            _k1, _k2, _k3 = st.columns([2, 1, 1])
+            _kind = _k1.selectbox("눌러서 찍을 것", ["💧 물탱크", "💧 관정", "⚙ 펌프", "🚰 상수도 인입",
+                                                    "🎯 급수 지점(밭 진입)", "✍ 직접 입력"],
+                                  key="p3_pin_kind")
+            _bands = _k2.number_input("시작 밴드", 0, 12, 4, key="p3_pin_bands",
+                                      help="급수점에서 나가는 밴드 수 — 자재(BOM)에 그대로 들어갑니다.")
+            _tees = _k3.number_input("이 자리 T", 0, 12, 0, key="p3_pin_tees",
+                                     help="급수점에 T 분기가 있으면 개수. 없으면 0.")
+            # 🔴 위젯에 key 를 주면 value 는 첫 렌더에만 먹는다 — 종류를 바꿔도 이름이 안 따라온다.
+            if st.session_state.get("p3_pin_kind_prev") != _kind:
+                st.session_state.p3_pin_kind_prev = _kind
+                st.session_state.p3_pin_name = ("" if _kind == "✍ 직접 입력"
+                                                else _kind.split(" ", 1)[-1])
+            _nm = st.text_input("이름", key="p3_pin_name")
 
-                try:
-                    _sat, _hyb = _p3m.wmts_url("Satellite"), _p3m.wmts_url("Hybrid")
-                except Exception:
-                    _sat = _hyb = ""
-                # 🔴 st_folium 은 다시 그릴 때마다 `location` 으로 돌아간다 — 급수점 하나 찍을 때마다
-                #    지도가 처음 자리로 튀었다. 마지막으로 **본 자리**를 기억해 거기서 다시 연다.
-                _vw = st.session_state.get("p3_view") or {}
-                _loc = _vw.get("center") or [_org[1], _org[0]]
-                _zm = int(_vw.get("zoom") or 18)
-                _M = _fo.Map(location=_loc, zoom_start=_zm, max_zoom=21,
-                             tiles=None, control_scale=True)
-                if _sat:
-                    _fo.TileLayer(tiles=_sat, attr="VWorld", name="위성 (브이월드)",
-                                  max_native_zoom=19, max_zoom=21).add_to(_M)
-                _fo.TileLayer(tiles=_p3m.ESRI_TILES, attr=_p3m.ESRI_ATTR,
-                              name="위성 (Esri)", max_native_zoom=19, max_zoom=21,
-                              show=(not _sat)).add_to(_M)
-                if _hyb:
-                    _fo.TileLayer(tiles=_hyb, attr="VWorld", name="주기 (지번·도로)",
-                                  overlay=True, show=True, max_native_zoom=19, max_zoom=21).add_to(_M)
+            try:
+                _sat, _hyb = _p3m.wmts_url("Satellite"), _p3m.wmts_url("Hybrid")
+            except Exception:
+                _sat = _hyb = ""
+            # 🔴 st_folium 은 다시 그릴 때마다 `location` 으로 돌아간다 — 급수점 하나 찍을 때마다
+            #    지도가 처음 자리로 튀었다. 마지막으로 **본 자리**를 기억해 거기서 다시 연다.
+            _vw = st.session_state.get("p3_view") or {}
+            _loc = _vw.get("center") or [_org[1], _org[0]]
+            _zm = int(_vw.get("zoom") or 18)
+            _M = _fo.Map(location=_loc, zoom_start=_zm, max_zoom=21,
+                         tiles=None, control_scale=True)
+            if _sat:
+                _fo.TileLayer(tiles=_sat, attr="VWorld", name="위성 (브이월드)",
+                              max_native_zoom=19, max_zoom=21).add_to(_M)
+            _fo.TileLayer(tiles=_p3m.ESRI_TILES, attr=_p3m.ESRI_ATTR,
+                          name="위성 (Esri)", max_native_zoom=19, max_zoom=21,
+                          show=(not _sat)).add_to(_M)
+            if _hyb:
+                _fo.TileLayer(tiles=_hyb, attr="VWorld", name="주기 (지번·도로)",
+                              overlay=True, show=True, max_native_zoom=19, max_zoom=21).add_to(_M)
 
-                # 이미 그린 것 — 지도에 그대로 얹는다.
-                for _i, _bk in enumerate(_pins["blocks"]):
-                    _ll = _p3m.from_local_m(_bk.get("polygon") or [], _org)
-                    if len(_ll) >= 3:
-                        _fo.Polygon([[_q[1], _q[0]] for _q in _ll], color="#ffd600", weight=4,
-                                    fill=True, fill_opacity=0.18,
-                                    tooltip="밭 %s · %s m²" % (_bk.get("name") or _i + 1,
-                                                               format(round(_bk.get("area_m2", 0)), ","))
-                                    ).add_to(_M)
-                for _bk in ((st.session_state.get("p3_drawn") or {}).get("blocks") or []):
-                    _ll = _p3m.from_local_m(_bk.get("polygon") or [], _org)
-                    if len(_ll) >= 3:
-                        _fo.Polygon([[_q[1], _q[0]] for _q in _ll], color="#c46eff", weight=3,
-                                    fill=False, tooltip="올린 밭 " + str(_bk.get("name") or "")).add_to(_M)
+            # 이미 그린 것 — 지도에 그대로 얹는다.
+            for _i, _bk in enumerate(_pins["blocks"]):
+                _ll = _p3m.from_local_m(_bk.get("polygon") or [], _org)
+                if len(_ll) >= 3:
+                    _fo.Polygon([[_q[1], _q[0]] for _q in _ll], color="#ffd600", weight=4,
+                                fill=True, fill_opacity=0.18,
+                                tooltip="밭 %s · %s m²" % (_bk.get("name") or _i + 1,
+                                                           format(round(_bk.get("area_m2", 0)), ","))
+                                ).add_to(_M)
+            for _bk in ((st.session_state.get("p3_drawn") or {}).get("blocks") or []):
+                _ll = _p3m.from_local_m(_bk.get("polygon") or [], _org)
+                if len(_ll) >= 3:
+                    _fo.Polygon([[_q[1], _q[0]] for _q in _ll], color="#c46eff", weight=3,
+                                fill=False, tooltip="올린 밭 " + str(_bk.get("name") or "")).add_to(_M)
+            for _i, _sc in enumerate(_pins["sources"]):
+                _lo, _la = _p3m.from_local_m([_sc["pt"]], _org)[0]
+                _fo.Marker([_la, _lo], tooltip="%d. %s" % (_i + 1, _sc["name"]),
+                           icon=_fo.Icon(color="red", icon="tint", prefix="fa")).add_to(_M)
+            for _rt in _pins["routes"]:
+                _ll = _p3m.from_local_m(_rt.get("pts") or [], _org)
+                if len(_ll) >= 2:
+                    _fo.PolyLine([[_q[1], _q[0]] for _q in _ll], color="#ff4b4b", weight=5,
+                                 tooltip=str(_rt.get("name") or "")).add_to(_M)
+
+            _FoDraw(export=False, position="topleft",
+                    draw_options={"polyline": {"shapeOptions": {"color": "#ff4b4b", "weight": 5}},
+                                  "polygon": {"shapeOptions": {"color": "#ffd600", "weight": 4}},
+                                  "rectangle": False, "circle": False,
+                                  "marker": False, "circlemarker": False},
+                    edit_options={"edit": True, "remove": True}).add_to(_M)
+            _FoGeo(collapsed=True, position="topright", add_marker=False, zoom=18).add_to(_M)
+            try:
+                _vkey = (_p3m._keys().get("vworld") or {}).get("key", "")
+            except Exception:
+                _vkey = ""
+            if not _vkey:
+                st.caption("🔵 지도 안 「지번 검색」이 없습니다 — Streamlit `secrets` 에 "
+                           "`[map_keys.vworld]` 가 있어야 뜹니다. 검색 없이도 지도는 씁니다.")
+            if _vkey:
+                _sr = _fo.MacroElement()
+                _sr._template = _BrancaTemplate(P3_SEARCH_JS.replace("__KEY__", _vkey))
+                _M.add_child(_sr)
+            _fo.LayerControl(collapsed=True).add_to(_M)
+
+            _out = _st_folium(_M, height=600, width=None, key="p3_map",
+                              returned_objects=["last_clicked", "all_drawings",
+                                                "center", "zoom"])
+            # 본 자리를 기억한다 — rerun 은 부르지 않는다(다음에 그릴 때 여기서 연다).
+            if _out and _out.get("center"):
+                _c = _out["center"]
+                st.session_state.p3_view = {"center": [_c["lat"], _c["lng"]],
+                                            "zoom": _out.get("zoom") or _zm}
+
+            _clk = (_out or {}).get("last_clicked")
+            if _clk:
+                _sig = [round(float(_clk["lat"]), 8), round(float(_clk["lng"]), 8)]
+                if st.session_state.get("p3_map_click") != _sig:
+                    st.session_state.p3_map_click = _sig
+                    _x, _y = _p3m.to_local_m([[_sig[1], _sig[0]]], _org)[0]
+                    _pins["sources"].append({"name": (_nm or "급수점").strip(),
+                                             "pt": [_x, _y], "start_bands": int(_bands),
+                                             "tees_here": int(_tees)})
+                    st.session_state.p3_pins = _pins
+                    st.rerun()
+
+            _dws = (_out or {}).get("all_drawings") or []
+            _polys = [_f for _f in _dws if ((_f or {}).get("geometry") or {}).get("type") == "Polygon"]
+            _lines = [_f for _f in _dws if ((_f or {}).get("geometry") or {}).get("type") == "LineString"]
+            _c1, _c2, _c3 = st.columns(3)
+            if _c1.button("🟨 그린 밭 %d개 반영" % len(_polys), key="p3_take_blocks",
+                          disabled=not _polys):
+                _bl = []
+                for _i, _f in enumerate(_polys):
+                    _ring = _f["geometry"]["coordinates"][0]
+                    _bl.append({"name": chr(65 + _i),
+                                "polygon": _p3m.to_local_m(_ring, _org),
+                                "area_m2": round(_p3m.ring_area_m2(_ring, _org), 1),
+                                "u": [1.0, 0.0], "crop": ""})
+                _pins["blocks"] = _bl
+                st.session_state.p3_pins = _pins
+                st.rerun()
+            if _c2.button("📐 그린 선 %d개를 주배관으로" % len(_lines), key="p3_take_routes",
+                          disabled=not _lines):
+                _pins["routes"] = [
+                    {"name": "R%d" % (_i + 1), "zone": None,
+                     "pts": _p3m.to_local_m(_f["geometry"]["coordinates"], _org), "by_ceo": True}
+                    for _i, _f in enumerate(_lines)]
+                st.session_state.p3_pins = _pins
+                st.rerun()
+            if _c3.button("↩ 마지막 급수점 지우기", key="p3_pin_undo") and _pins["sources"]:
+                _pins["sources"].pop()
+                st.session_state.p3_pins = _pins
+                st.rerun()
+
+            # ── 그린 것 정리 ──
+            if _pins["blocks"]:
+                st.markdown("##### 밭 구역")
+                st.caption("🔴 **고랑(열) 방향은 대표 입력입니다** — 0°=동 · 90°=북. "
+                           "작물은 알면 넣습니다(지역·작물별 축적용).")
+                _bdf = pd.DataFrame([{"이름": _b["name"], "면적(m²)": _b["area_m2"],
+                                      "평": round(_b["area_m2"] / 3.3058),
+                                      "작물": _b.get("crop", ""),
+                                      "고랑 방향(도)": round(math.degrees(
+                                          math.atan2(_b["u"][1], _b["u"][0])))}
+                                     for _b in _pins["blocks"]])
+                _bed = st.data_editor(_bdf, width="stretch", hide_index=True,
+                                      disabled=["면적(m²)", "평"], key="p3_bl_ed")
+                for _i in range(len(_pins["blocks"])):
+                    _r = _bed.iloc[_i]
+                    _pins["blocks"][_i]["name"] = ("" if pd.isna(_r["이름"])
+                                                   else str(_r["이름"])) or chr(65 + _i)
+                    _pins["blocks"][_i]["crop"] = ("" if pd.isna(_r["작물"])
+                                                   else str(_r["작물"]).strip())
+                    # 빈칸·NaN 을 각도로 쓰면 폴리곤이 통째로 NaN 이 된다 — 0도(동)로 되돌린다.
+                    _dg = _r["고랑 방향(도)"]
+                    _th = math.radians(0.0 if pd.isna(_dg) else float(_dg))
+                    _pins["blocks"][_i]["u"] = [round(math.cos(_th), 6), round(math.sin(_th), 6)]
+                st.caption("합계 **%s m² (%s 평)** · %d구역"
+                           % (format(round(sum(_b["area_m2"] for _b in _pins["blocks"])), ","),
+                              format(round(sum(_b["area_m2"] for _b in _pins["blocks"]) / 3.3058), ","),
+                              len(_pins["blocks"])))
+            if _pins["sources"]:
+                st.markdown("##### 급수점")
+                _srows = []
                 for _i, _sc in enumerate(_pins["sources"]):
-                    _lo, _la = _p3m.from_local_m([_sc["pt"]], _org)[0]
-                    _fo.Marker([_la, _lo], tooltip="%d. %s" % (_i + 1, _sc["name"]),
-                               icon=_fo.Icon(color="red", icon="tint", prefix="fa")).add_to(_M)
-                for _rt in _pins["routes"]:
-                    _ll = _p3m.from_local_m(_rt.get("pts") or [], _org)
-                    if len(_ll) >= 2:
-                        _fo.PolyLine([[_q[1], _q[0]] for _q in _ll], color="#ff4b4b", weight=5,
-                                     tooltip=str(_rt.get("name") or "")).add_to(_M)
+                    _r = {"#": _i + 1, "이름": _sc["name"],
+                          "x(동,m)": round(_sc["pt"][0], 1), "y(북,m)": round(_sc["pt"][1], 1),
+                          "시작 밴드": _sc["start_bands"], "T": _sc.get("tees_here", 0)}
+                    _qs = [_q for _b in _pins["blocks"] for _q in (_b.get("polygon") or [])]
+                    if _qs:
+                        _r["가장 가까운 밭까지(m)"] = round(min(
+                            ((_sc["pt"][0] - _q[0]) ** 2 + (_sc["pt"][1] - _q[1]) ** 2) ** 0.5
+                            for _q in _qs), 1)
+                    _srows.append(_r)
+                st.dataframe(pd.DataFrame(_srows), width="stretch", hide_index=True)
+            if _pins["routes"]:
+                st.markdown("##### 주배관")
+                st.caption("**구역(zone)** 은 대표 입력입니다 — 비우면 공통 구간(펌프→매니폴드)입니다.")
+                _rdf = pd.DataFrame([{"이름": _r["name"], "점": len(_r["pts"]),
+                                      "길이(m)": round(sum(
+                                          ((_r["pts"][_i][0] - _r["pts"][_i - 1][0]) ** 2 +
+                                           (_r["pts"][_i][1] - _r["pts"][_i - 1][1]) ** 2) ** 0.5
+                                          for _i in range(1, len(_r["pts"]))), 1),
+                                      "구역": _r.get("zone")} for _r in _pins["routes"]])
+                _red = st.data_editor(_rdf, width="stretch", hide_index=True,
+                                      disabled=["이름", "점", "길이(m)"], key="p3_rt_ed")
+                for _i, _z in enumerate(list(_red["구역"])):
+                    if _i < len(_pins["routes"]):
+                        _pins["routes"][_i]["zone"] = None if pd.isna(_z) else int(_z)
 
-                _FoDraw(export=False, position="topleft",
-                        draw_options={"polyline": {"shapeOptions": {"color": "#ff4b4b", "weight": 5}},
-                                      "polygon": {"shapeOptions": {"color": "#ffd600", "weight": 4}},
-                                      "rectangle": False, "circle": False,
-                                      "marker": False, "circlemarker": False},
-                        edit_options={"edit": True, "remove": True}).add_to(_M)
-                _FoGeo(collapsed=True, position="topright", add_marker=False, zoom=18).add_to(_M)
-                try:
-                    _vkey = (_p3m._keys().get("vworld") or {}).get("key", "")
-                except Exception:
-                    _vkey = ""
-                if _vkey:
-                    _sr = _fo.MacroElement()
-                    _sr._template = _BrancaTemplate(P3_SEARCH_JS.replace("__KEY__", _vkey))
-                    _M.add_child(_sr)
-                _fo.LayerControl(collapsed=True).add_to(_M)
-
-                _out = _st_folium(_M, height=600, width=None, key="p3_map",
-                                  returned_objects=["last_clicked", "all_drawings",
-                                                    "center", "zoom"])
-                # 본 자리를 기억한다 — rerun 은 부르지 않는다(다음에 그릴 때 여기서 연다).
-                if _out and _out.get("center"):
-                    _c = _out["center"]
-                    st.session_state.p3_view = {"center": [_c["lat"], _c["lng"]],
-                                                "zoom": _out.get("zoom") or _zm}
-
-                _clk = (_out or {}).get("last_clicked")
-                if _clk:
-                    _sig = [round(float(_clk["lat"]), 8), round(float(_clk["lng"]), 8)]
-                    if st.session_state.get("p3_map_click") != _sig:
-                        st.session_state.p3_map_click = _sig
-                        _x, _y = _p3m.to_local_m([[_sig[1], _sig[0]]], _org)[0]
-                        _pins["sources"].append({"name": (_nm or "급수점").strip(),
-                                                 "pt": [_x, _y], "start_bands": int(_bands),
-                                                 "tees_here": int(_tees)})
-                        st.session_state.p3_pins = _pins
-                        st.rerun()
-
-                _dws = (_out or {}).get("all_drawings") or []
-                _polys = [_f for _f in _dws if ((_f or {}).get("geometry") or {}).get("type") == "Polygon"]
-                _lines = [_f for _f in _dws if ((_f or {}).get("geometry") or {}).get("type") == "LineString"]
-                _c1, _c2, _c3 = st.columns(3)
-                if _c1.button("🟨 그린 밭 %d개 반영" % len(_polys), key="p3_take_blocks",
-                              disabled=not _polys):
-                    _bl = []
-                    for _i, _f in enumerate(_polys):
-                        _ring = _f["geometry"]["coordinates"][0]
-                        _bl.append({"name": chr(65 + _i),
-                                    "polygon": _p3m.to_local_m(_ring, _org),
-                                    "area_m2": round(_p3m.ring_area_m2(_ring, _org), 1),
-                                    "u": [1.0, 0.0], "crop": ""})
-                    _pins["blocks"] = _bl
-                    st.session_state.p3_pins = _pins
-                    st.rerun()
-                if _c2.button("📐 그린 선 %d개를 주배관으로" % len(_lines), key="p3_take_routes",
-                              disabled=not _lines):
-                    _pins["routes"] = [
-                        {"name": "R%d" % (_i + 1), "zone": None,
-                         "pts": _p3m.to_local_m(_f["geometry"]["coordinates"], _org), "by_ceo": True}
-                        for _i, _f in enumerate(_lines)]
-                    st.session_state.p3_pins = _pins
-                    st.rerun()
-                if _c3.button("↩ 마지막 급수점 지우기", key="p3_pin_undo") and _pins["sources"]:
-                    _pins["sources"].pop()
-                    st.session_state.p3_pins = _pins
-                    st.rerun()
-
-                # ── 그린 것 정리 ──
+            st.divider()
+            if st.button("✅ 이 좌표를 설계에 씁니다", type="primary", key="p3_pin_apply"):
+                _dw = dict(st.session_state.get("p3_drawn") or {})
                 if _pins["blocks"]:
-                    st.markdown("##### 밭 구역")
-                    st.caption("🔴 **고랑(열) 방향은 대표 입력입니다** — 0°=동 · 90°=북. "
-                               "작물은 알면 넣습니다(지역·작물별 축적용).")
-                    _bdf = pd.DataFrame([{"이름": _b["name"], "면적(m²)": _b["area_m2"],
-                                          "평": round(_b["area_m2"] / 3.3058),
-                                          "작물": _b.get("crop", ""),
-                                          "고랑 방향(도)": round(math.degrees(
-                                              math.atan2(_b["u"][1], _b["u"][0])))}
-                                         for _b in _pins["blocks"]])
-                    _bed = st.data_editor(_bdf, width="stretch", hide_index=True,
-                                          disabled=["면적(m²)", "평"], key="p3_bl_ed")
-                    for _i in range(len(_pins["blocks"])):
-                        _r = _bed.iloc[_i]
-                        _pins["blocks"][_i]["name"] = ("" if pd.isna(_r["이름"])
-                                                       else str(_r["이름"])) or chr(65 + _i)
-                        _pins["blocks"][_i]["crop"] = ("" if pd.isna(_r["작물"])
-                                                       else str(_r["작물"]).strip())
-                        # 빈칸·NaN 을 각도로 쓰면 폴리곤이 통째로 NaN 이 된다 — 0도(동)로 되돌린다.
-                        _dg = _r["고랑 방향(도)"]
-                        _th = math.radians(0.0 if pd.isna(_dg) else float(_dg))
-                        _pins["blocks"][_i]["u"] = [round(math.cos(_th), 6), round(math.sin(_th), 6)]
-                    st.caption("합계 **%s m² (%s 평)** · %d구역"
-                               % (format(round(sum(_b["area_m2"] for _b in _pins["blocks"])), ","),
-                                  format(round(sum(_b["area_m2"] for _b in _pins["blocks"]) / 3.3058), ","),
-                                  len(_pins["blocks"])))
+                    _dw["blocks"] = [{"name": _b["name"], "polygon": _b["polygon"],
+                                      "u": _b["u"],
+                                      **({"crop": _b["crop"]} if _b.get("crop") else {})}
+                                     for _b in _pins["blocks"]]
                 if _pins["sources"]:
-                    st.markdown("##### 급수점")
-                    _srows = []
-                    for _i, _sc in enumerate(_pins["sources"]):
-                        _r = {"#": _i + 1, "이름": _sc["name"],
-                              "x(동,m)": round(_sc["pt"][0], 1), "y(북,m)": round(_sc["pt"][1], 1),
-                              "시작 밴드": _sc["start_bands"], "T": _sc.get("tees_here", 0)}
-                        _qs = [_q for _b in _pins["blocks"] for _q in (_b.get("polygon") or [])]
-                        if _qs:
-                            _r["가장 가까운 밭까지(m)"] = round(min(
-                                ((_sc["pt"][0] - _q[0]) ** 2 + (_sc["pt"][1] - _q[1]) ** 2) ** 0.5
-                                for _q in _qs), 1)
-                        _srows.append(_r)
-                    st.dataframe(pd.DataFrame(_srows), width="stretch", hide_index=True)
+                    _dw["sources"] = [dict(_x) for _x in _pins["sources"]]
                 if _pins["routes"]:
-                    st.markdown("##### 주배관")
-                    st.caption("**구역(zone)** 은 대표 입력입니다 — 비우면 공통 구간(펌프→매니폴드)입니다.")
-                    _rdf = pd.DataFrame([{"이름": _r["name"], "점": len(_r["pts"]),
-                                          "길이(m)": round(sum(
-                                              ((_r["pts"][_i][0] - _r["pts"][_i - 1][0]) ** 2 +
-                                               (_r["pts"][_i][1] - _r["pts"][_i - 1][1]) ** 2) ** 0.5
-                                              for _i in range(1, len(_r["pts"]))), 1),
-                                          "구역": _r.get("zone")} for _r in _pins["routes"]])
-                    _red = st.data_editor(_rdf, width="stretch", hide_index=True,
-                                          disabled=["이름", "점", "길이(m)"], key="p3_rt_ed")
-                    for _i, _z in enumerate(list(_red["구역"])):
-                        if _i < len(_pins["routes"]):
-                            _pins["routes"][_i]["zone"] = None if pd.isna(_z) else int(_z)
+                    _dw["routes"] = [dict(_x) for _x in _pins["routes"]]
+                st.session_state.p3_drawn = _dw
+                st.success("넣었습니다 — 밭 %d · 급수점 %d · 주배관 %d."
+                           % (len(_dw.get("blocks") or []), len(_dw.get("sources") or []),
+                              len(_dw.get("routes") or [])))
+            st.caption("🔴 좌표만 만듭니다 — 관경·유량·수량은 **엔진이 정합니다**(불변 원칙 1).")
 
-                st.divider()
-                if st.button("✅ 이 좌표를 설계에 씁니다", type="primary", key="p3_pin_apply"):
-                    _dw = dict(st.session_state.get("p3_drawn") or {})
-                    if _pins["blocks"]:
-                        _dw["blocks"] = [{"name": _b["name"], "polygon": _b["polygon"],
-                                          "u": _b["u"],
-                                          **({"crop": _b["crop"]} if _b.get("crop") else {})}
-                                         for _b in _pins["blocks"]]
-                    if _pins["sources"]:
-                        _dw["sources"] = [dict(_x) for _x in _pins["sources"]]
-                    if _pins["routes"]:
-                        _dw["routes"] = [dict(_x) for _x in _pins["routes"]]
-                    st.session_state.p3_drawn = _dw
-                    st.success("넣었습니다 — 밭 %d · 급수점 %d · 주배관 %d."
-                               % (len(_dw.get("blocks") or []), len(_dw.get("sources") or []),
-                                  len(_dw.get("routes") or [])))
-                st.caption("🔴 좌표만 만듭니다 — 관경·유량·수량은 **엔진이 정합니다**(불변 원칙 1).")
-
-                with st.expander("보조 — 작도 결과 JSON 올리기 (예전 방식)"):
-                    st.caption("밸브·물탱크 자재(`valves_01403`·`water_items`)처럼 지도로 못 그리는 값은 "
-                               "여기로 올립니다. 같은 키는 지도에서 그린 것이 덮어씁니다.")
-                    st.code(P3_DRAWN_SAMPLE, language="json")
-                    _up = st.file_uploader("작도 결과 JSON", type=["json"], key="p3_drawn_up")
-                    if _up is not None:
-                        try:
-                            _j = json.loads(_up.getvalue().decode("utf-8"))
-                            _dw = dict(st.session_state.get("p3_drawn") or {})
-                            _dw.update(_j)
-                            st.session_state.p3_drawn = _dw
-                            st.success("올렸습니다.")
-                        except Exception as _e:
-                            st.error("JSON 읽기 실패: " + str(_e))
-                _dw = st.session_state.get("p3_drawn")
-                if _dw:
-                    st.info("설계에 들어갈 것 — 밭 %d · 급수점 %d · 주배관 %d · 주배관 호칭 %s"
-                            % (len(_dw.get("blocks") or []), len(_dw.get("sources") or []),
-                               len(_dw.get("routes") or []), _dw.get("main_mm") or "엔진 선정"))
+            with st.expander("보조 — 작도 결과 JSON 올리기 (예전 방식)"):
+                st.caption("밸브·물탱크 자재(`valves_01403`·`water_items`)처럼 지도로 못 그리는 값은 "
+                           "여기로 올립니다. 같은 키는 지도에서 그린 것이 덮어씁니다.")
+                st.code(P3_DRAWN_SAMPLE, language="json")
+                _up = st.file_uploader("작도 결과 JSON", type=["json"], key="p3_drawn_up")
+                if _up is not None:
+                    try:
+                        _j = json.loads(_up.getvalue().decode("utf-8"))
+                        _dw = dict(st.session_state.get("p3_drawn") or {})
+                        _dw.update(_j)
+                        st.session_state.p3_drawn = _dw
+                        st.success("올렸습니다.")
+                    except Exception as _e:
+                        st.error("JSON 읽기 실패: " + str(_e))
+            _dw = st.session_state.get("p3_drawn")
+            if _dw:
+                st.info("설계에 들어갈 것 — 밭 %d · 급수점 %d · 주배관 %d · 주배관 호칭 %s"
+                        % (len(_dw.get("blocks") or []), len(_dw.get("sources") or []),
+                           len(_dw.get("routes") or []), _dw.get("main_mm") or "엔진 선정"))
 
     # ── ③ 작도판 (농민 확인용) ─────────────────────────────────────────
     #   [V83] 배경 정본이 **Esri** 로 옮겨졌다(#59) — 브이월드가 배포 서버를 거르기 때문이다.
@@ -6453,7 +6486,10 @@ elif mode == "🗺️ 설계(P3)":
         _sc = _pins.get("sources") or _dw.get("sources") or []
         _rt = _pins.get("routes") or _dw.get("routes") or []
         if not _fr:
-            st.warning("②에서 **지도 위치**를 먼저 잡아 주세요.")
+            # 지도가 아직 안 열렸으면(folium 부재 등) 기준점만 세워 둔다 — 판은 그린 것에 맞춰 잡힌다.
+            _fr = _p3m.frame(P3_MAP_HOME, zoom=18, size=(1024, 1024))
+        if not (_bl or _sc or _rt):
+            st.warning("②에서 **먼저 그려 주세요** — 밭·급수원·주배관 중 하나는 있어야 판이 나옵니다.")
         else:
             _t1, _t2 = st.columns([2, 3])
             _bg = _t1.selectbox("배경", ["자동 (브이월드 → 막히면 Esri)", "Esri 고정", "브이월드 고정"],

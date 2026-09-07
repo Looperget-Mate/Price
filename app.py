@@ -1053,7 +1053,7 @@ from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 �
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
 if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V81)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V82)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1066,8 +1066,8 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 80:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V81)와 짝이 맞지 않습니다.\n\n"
+if _LG_VER < 81:
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V82)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -5969,6 +5969,7 @@ elif mode == "🏪 아쿠나리스":
 # [V79] 🗺️ 설계(P3) — 접수 → 작도판 → 지도에서 찍기 → 설계·견적
 #   [V80] 관경 자동 선정(#52) · 유량·수압 필수화 + 넘기기(#53)
 #   [V81] 작도판 502 방어(#56) · ④ 지도에서 찍기(#57 · 대표 지시 2026-09-07)
+#   [V82] 점검이 접혀서 안 보이던 것 수정 · 망 도달 점검(#58) · ④를 작도판 없이도 연다
 #   흐름 정본 = `_설계/_문진표/문진표_v1_농지.md` · 대표 확답 #43·#44
 #   🔴 캔버스를 새로 만들지 않는다(파일 기반 1안 · 대표 선택 2026-09-06).
 #      작도판 PNG를 내려받아 농민 확인 → 확인된 blocks/routes JSON을 올린다.
@@ -6049,22 +6050,43 @@ elif mode == "🗺️ 설계(P3)":
                         st.info("공급자(브이월드) 게이트웨이 쪽 응답이면 **잠시 뒤 다시 누르면 대개 통합니다** "
                                 "— 이미 2회 되쏘고 나온 결과입니다. 계속 막히면 아래 "
                                 "**지도 연결 점검**을 눌러 어느 호출이 죽는지 알려 주세요.")
-            with st.expander("🩺 지도 연결 점검 — 어느 호출이 죽는지 봅니다"):
-                st.caption("지번 검색 → 필지 → 주변 필지 → 위성(JPEG) → 위성(PNG) 을 **따로따로** 찔러 봅니다. "
-                           "작도판은 이 순서로 돕니다.")
-                if st.button("점검 실행", key="p3_probe_btn"):
+            # 🩺 지도 연결 점검
+            # 🔴 [V82] 처음엔 expander 안에 넣었더니 **버튼을 누르면 다시 그려지면서 접혀**
+            #    결과가 그 안에 들어가 「아무 일도 안 일어난 것」처럼 보였다(대표 실사용 2026-09-07).
+            #    결과는 session_state 에 남기고 **접히지 않는 자리**에 편다.
+            st.markdown("---")
+            st.markdown("##### 🩺 지도 연결 점검")
+            st.caption("망 도달(DNS·TCP·가짜 키·대조군) → 지번 검색 → 필지 → 주변 필지 → 위성 을 "
+                       "**따로따로** 찔러 봅니다. 작도판은 이 순서로 돕니다.")
+            if st.button("점검 실행", key="p3_probe_btn"):
+                try:
+                    _p3m.set_keys(dict(st.secrets["map_keys"]) if "map_keys" in st.secrets else None)
+                except Exception:
+                    _p3m.set_keys(None)
+                with st.spinner("찔러 보는 중… (최대 1분)"):
                     try:
-                        _p3m.set_keys(dict(st.secrets["map_keys"]) if "map_keys" in st.secrets else None)
-                    except Exception:
-                        _p3m.set_keys(None)
-                    with st.spinner("찔러 보는 중…"):
-                        try:
-                            _pb = _p3m.probe(_addr or "논산시 상월면 상도리 482-42")
-                        except Exception as _e:
-                            _pb = [{"step": "키 적재", "ok": False, "ms": 0, "detail": str(_e)}]
-                    st.dataframe(pd.DataFrame([{"단계": r["step"], "결과": "✅" if r["ok"] else "🔴",
-                                                "ms": r["ms"], "내용": str(r["detail"])} for r in _pb]),
-                                 width="stretch", hide_index=True)
+                        _pb = _p3m.probe(_addr or "논산시 상월면 상도리 482-42")
+                    except Exception as _e:
+                        _pb = [{"step": "점검 자체가 실패", "ok": False, "ms": 0,
+                                "detail": "%s: %s" % (type(_e).__name__, _e)}]
+                st.session_state.p3_probe = _pb
+            _pb = st.session_state.get("p3_probe")
+            if _pb:
+                st.dataframe(pd.DataFrame([{"단계": r["step"], "결과": "✅" if r["ok"] else "🔴",
+                                            "ms": r["ms"], "내용": str(r["detail"])} for r in _pb]),
+                             width="stretch", hide_index=True)
+                _bad = [r for r in _pb if not r["ok"]]
+                if not _bad:
+                    st.success("✅ 전부 통과 — 지금은 다 통합니다. 작도판을 다시 눌러 보세요.")
+                elif _bad[0]["step"].startswith("ⓒ"):
+                    st.error("🔴 **서버까지 못 닿습니다.** DNS·TCP 는 되는데 실호출이 끊깁니다 — "
+                             "공급자(브이월드) 쪽에서 이 서버의 요청을 거르고 있다는 뜻입니다. "
+                             "이 표를 그대로 알려 주시면 우회 경로를 정하겠습니다.")
+                elif _bad[0]["step"].startswith(("ⓐ", "ⓑ", "ⓓ")):
+                    st.error("🔴 **망 자체가 막혔습니다**(DNS·TCP·대조군). 배포 환경의 바깥 연결 문제입니다.")
+                else:
+                    st.warning("🔴 망은 되는데 **" + _bad[0]["step"] + "** 에서 죽습니다. "
+                               "④ 「지도에서 찍기」는 브라우저가 타일을 받으므로 **그대로 씁니다**.")
             _dr = st.session_state.get("p3_draft")
             if _dr:
                 st.success("%s · PNU %s · 지적 %s ㎡ (%s 평)"
@@ -6116,13 +6138,30 @@ elif mode == "🗺️ 설계(P3)":
         _mapmod = None
         try:
             import folium as _fo
-            from folium.plugins import Draw as _FoDraw
+            from folium.plugins import Draw as _FoDraw, Geocoder as _FoGeo
             from streamlit_folium import st_folium as _st_folium
             _mapmod = True
         except Exception as _e:
             _map_err = str(_e)
         if not _fr:
+            _fr = st.session_state.get("p3_map_frame")     # [V82] 작도판 없이 연 지도
+        if not _fr:
+            # 🔴 [V82] ②가 공급자 문제로 막혀도 ④는 돌아야 한다 — `frame()` 은 **순수 함수**라
+            #    망을 타지 않고, 타일은 브라우저가 받는다. 원점만 있으면 좌표는 만들어진다.
             st.warning("②에서 **작도판**을 먼저 만들어 주세요 — 좌표의 원점이 거기서 나옵니다.")
+            st.markdown("##### 작도판 없이 지도만 열기")
+            st.caption("②가 막혔을 때 씁니다. 지도 중심 좌표만 있으면 찍을 수 있습니다 — "
+                       "**지적 참고선은 없고**, 위성 타일과 좌표는 그대로입니다.")
+            _q1, _q2 = st.columns(2)
+            _clat = _q1.number_input("중심 위도", value=36.32167, format="%.5f", key="p3_mc_lat")
+            _clon = _q2.number_input("중심 경도", value=127.17736, format="%.5f", key="p3_mc_lon")
+            if st.button("이 좌표로 지도 열기", key="p3_map_open"):
+                try:
+                    st.session_state.p3_map_frame = _p3m.frame((float(_clon), float(_clat)),
+                                                               zoom=18, size=(1024, 1024))
+                    st.rerun()
+                except Exception as _e:
+                    st.error("프레임 실패: " + str(_e))
         elif not _mapmod:
             st.error("🚨 지도 부품이 없습니다 — `folium` · `streamlit-folium` 이 필요합니다 (" + _map_err + ").")
             st.caption("requirements.txt 에 들어 있습니다. 배포 후에도 이 문구가 보이면 재배포가 필요합니다.")
@@ -6166,7 +6205,8 @@ elif mode == "🗺️ 설계(P3)":
                               overlay=True, show=True, max_native_zoom=19, max_zoom=20).add_to(_M)
 
             # 지적 참고선 — 경계일 뿐 대상지가 아니다(mapsrc 정본과 같은 말).
-            for _rp in ((_dr.get("seed") or {}).get("reference_parcels") or [])[:60]:
+            # 🔴 [V82] 작도판 없이 연 지도에는 _dr 이 없다 — 지적 참고선만 빠지고 나머지는 그대로다.
+            for _rp in (((_dr or {}).get("seed") or {}).get("reference_parcels") or [])[:60]:
                 _ll = _p3m.from_local_m(_rp.get("outline_m") or [], _org)
                 if len(_ll) >= 3:
                     _fo.Polygon([[_q[1], _q[0]] for _q in _ll], color="#7cc4ff", weight=2,
@@ -6197,6 +6237,9 @@ elif mode == "🗺️ 설계(P3)":
                                   "polygon": False, "rectangle": False, "circle": False,
                                   "marker": False, "circlemarker": False},
                     edit_options={"edit": True, "remove": True}).add_to(_M)
+            # 🔵 [V82] 지도 안에서 주소를 찾는다 — **브라우저가 직접** 검색한다(서버를 안 탄다).
+            #    ②가 막혀 좌표를 모를 때 이것으로 밭 근처까지 간 다음 찍으면 된다.
+            _FoGeo(collapsed=False, position="topright", add_marker=False, zoom=18).add_to(_M)
             _fo.LayerControl(collapsed=True).add_to(_M)
 
             _out = _st_folium(_M, height=560, width=None, key="p3_map",

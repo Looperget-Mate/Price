@@ -163,7 +163,8 @@ def _lat_path(row, route_pts) -> List[List[float]]:
 
 def block_preview(blocks: Sequence[Dict], flow_lpm: Optional[float] = None,
                   model: Optional[str] = None,
-                  routes: Optional[Sequence[Dict]] = None) -> Dict:
+                  routes: Optional[Sequence[Dict]] = None,
+                  flow_text: Optional[str] = None) -> Dict:
     """밭 목록 → **열·헤드·요구 유량·권고 구역 수**. 주배관이 없어도 나온다.
 
     `blocks` = [{"name", "polygon"(로컬 m), "u"[, "policy"]}] · `flow_lpm` = 쓸 수 있는 분당 L.
@@ -344,7 +345,17 @@ def block_preview(blocks: Sequence[Dict], flow_lpm: Optional[float] = None,
                                 % (format(round(flow_lpm), ","), format(out["q_all_ref"], ",")))
     else:
         out["zones_min"] = None
-        out["notes"].append("🔴 **쓸 수 있는 물을 분당 L 로 알려 주시면 구역 수를 계산합니다.** "
-                            "「10톤 물탱크」는 부피라 유량이 아닙니다 — 관정 양수량·수도 계량기·"
-                            "펌프 명판의 분당 L 을 문진표에 넣어 주세요.")
+        # 🔴 [V104] **적으신 말을 되짚어** 말한다. 예전에는 무엇을 적었든 「10톤 물탱크」 예시가 떠서
+        #    「340리터라고 적었는데 왜 10톤 물탱크가 나오냐」가 됐다(대표 2026-09-08).
+        _raw = str(flow_text or "").strip()
+        if _raw and _raw != "[미확정]":
+            out["flow_unreadable"] = _raw
+            out["notes"].append("🔴 적으신 **「%s」** 에서는 **분당 몇 L 인지**를 읽지 못했습니다. "
+                                "리터·톤·㎥ 는 **부피**라 **시간**이 없으면 유량이 아닙니다 — "
+                                "①에서 **숫자와 단위**(분당 L · 시간당 ㎥ · 시간당 톤)를 골라 넣어 주세요."
+                                % _raw[:40])
+        else:
+            out["notes"].append("🔴 **쓸 수 있는 물을 분당 L 로 알려 주시면 구역 수를 계산합니다.** "
+                                "관정 양수량·수도 계량기·펌프 명판의 분당 L 을 문진표에 넣어 주세요. "
+                                "(「10톤 물탱크」처럼 부피만 있는 값은 유량이 아닙니다.)")
     return out

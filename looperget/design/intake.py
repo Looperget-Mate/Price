@@ -100,6 +100,17 @@ QUESTIONS: List[Dict] = [
 #    `choices` = 보기(고른 문자열이 그대로 답) · `other` = 직접 입력을 여는 보기 이름
 #    `quick`   = 자유 입력 위의 한 번에 채우기 단추 · `warn_if` = 그 답을 고르면 그 자리에서 알릴 사실
 #    🔴 **버튼은 문항을 바꾸지 않는다** — 답의 형식은 여전히 문자열이고 `to_site` 는 그대로 읽는다.
+# 🔵 [V104] **유량은 숫자만으로는 유량이 아니다** — 시간 단위가 있어야 한다.
+#    자유 입력에서 못 읽는 일이 잦다(대표 실사용 2026-09-08 — 「최대 양수량 340리터」를 적었는데
+#    엔진이 못 읽고 「10톤 물탱크는 부피다」라는 **예시 문구**만 떠서 오해가 났다).
+#    그래서 화면이 **숫자 + 단위**로도 받게 하고, 그 조합을 여기 적힌 틀로 문자열에 넣는다.
+#    🔴 문항의 형식은 그대로 문자열이다 — `to_site` 도 `parse_flow_lpm` 도 손대지 않는다.
+UNITS = {
+    "flow_lpm": [("분당 L (L/min)", "%s L/분"),
+                 ("시간당 m3 (루베)", "%s m3/h"),
+                 ("시간당 톤", "%s t/h")],
+}
+
 CHOICES = {q["key"]: q["choices"] for q in QUESTIONS if q.get("choices")}
 QUICK = {q["key"]: q["quick"] for q in QUESTIONS if q.get("quick")}
 WARN_IF = {q["key"]: q["warn_if"] for q in QUESTIONS if q.get("warn_if")}
@@ -218,5 +229,5 @@ def script() -> str:
     return "\n".join(out).strip()
 
 
-__all__ = ["SCHEMA", "QUESTIONS", "REQUIRED", "WAIVABLE",
+__all__ = ["SCHEMA", "QUESTIONS", "REQUIRED", "WAIVABLE", "UNITS",
            "check", "to_site", "validate", "script"]

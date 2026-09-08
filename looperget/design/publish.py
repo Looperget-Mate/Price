@@ -31,7 +31,12 @@ from typing import Dict, Optional
 
 from . import design as _design
 from . import summary as _summary
-from . import render_pptx, render_xlsx
+from . import render_xlsx
+# 🔴 [V104] `render_pptx` 는 **여기서 import 하지 않는다.** 그 모듈은 작도 도구(`tools/agri_overlay`)·
+#    디자인 정본(`_디자인정본/표준_pptx`)·**61 MB 마스터 지면**에 기댄다 — 셋 다 배포 묶음에 없다
+#    (배포 단위 = app.py + aquanaris_layout.py + looperget/ · 마스터는 GitHub 브라우저 한도 25 MB 초과).
+#    맨 위에서 부르면 **배포 서버에서 publish 를 여는 순간** ModuleNotFoundError 로 죽는다
+#    (대표 실사용 2026-09-08 「No module named 'agri_overlay'」). 그래서 **쓸 때 부른다.**
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCHEMA_JOB = "looperget.design.job/1"
@@ -159,8 +164,24 @@ def job_from_p3(site: Dict, design: Dict, *, frame: Dict, origin, png_path: str,
     return {"schema": SCHEMA_JOB, "site": fsite, "design": fdesign, "meta": m}
 
 
+def pptx_ready() -> tuple:
+    """이 환경에서 **제안서 지면을 그릴 수 있는가** — (가능?, 못 그리는 이유).
+
+    견적서(XLSX)는 패키지 안에서 끝나지만, 제안서(PPTX)는 마스터 지면과 작도 도구가 있어야 한다.
+    """
+    try:
+        from . import render_pptx as _rp
+    except Exception as e:
+        return False, ("제안서 지면 도구가 이 환경에 없습니다(%s). 작도 도구·디자인 정본이 있는 "
+                       "**작업 PC**에서만 지면을 그립니다." % e)
+    if not os.path.exists(_rp.MASTER):
+        return False, ("마스터 지면 파일이 없습니다 — %s. 61 MB 라 배포 묶음에 넣지 않았습니다."
+                       % os.path.basename(_rp.MASTER))
+    return True, ""
+
+
 def run(job: Dict, out_dir: Optional[str] = None, *, pdf: bool = False, png: bool = False,
-        xlsx: bool = True, verbose: bool = True) -> Dict:
+        xlsx: bool = True, pptx: bool = True, verbose: bool = True) -> Dict:
     assert job.get("schema") == SCHEMA_JOB, "job schema != %s" % SCHEMA_JOB
     meta = job.setdefault("meta", {})
     if "design" not in job or not job["design"]:
@@ -177,16 +198,20 @@ def run(job: Dict, out_dir: Optional[str] = None, *, pdf: bool = False, png: boo
     with open(os.path.join(out_dir, "_summary.json"), "w", encoding="utf-8") as f:
         json.dump(S, f, ensure_ascii=False, indent=1)
 
-    pptx_path = os.path.join(out_dir, "30_제안서_%s.pptx" % tag)
-    r = render_pptx.Renderer(job, S, pptx_path, work_dir=os.path.join(out_dir, "_작업"))
-    r.build()
-    res["pptx"] = pptx_path
-    res["render_log"] = r.log
-    res["page_check"] = render_pptx.check_pages(pptx_path)
-    if pdf:
-        res["pdf"] = render_pptx.export_pdf(pptx_path)
-    if png:
-        res["png"] = render_pptx.export_png(pptx_path, os.path.join(out_dir, "_png"))
+    ok_pptx, why = pptx_ready() if pptx else (False, "제안서 생성을 끄고 실행했습니다")
+    res["pptx"], res["pptx_skip"], res["render_log"], res["page_check"] = None, why, [], {}
+    if ok_pptx:
+        from . import render_pptx
+        pptx_path = os.path.join(out_dir, "30_제안서_%s.pptx" % tag)
+        r = render_pptx.Renderer(job, S, pptx_path, work_dir=os.path.join(out_dir, "_작업"))
+        r.build()
+        res["pptx"], res["pptx_skip"] = pptx_path, ""
+        res["render_log"] = r.log
+        res["page_check"] = render_pptx.check_pages(pptx_path)
+        if pdf:
+            res["pdf"] = render_pptx.export_pdf(pptx_path)
+        if png:
+            res["png"] = render_pptx.export_png(pptx_path, os.path.join(out_dir, "_png"))
 
     if xlsx:
         q = meta.get("quote", {})
@@ -206,9 +231,12 @@ def run(job: Dict, out_dir: Optional[str] = None, *, pdf: bool = False, png: boo
         res["xlsx"] = xr
 
     if verbose:
-        from pptx import Presentation
-        n = len(Presentation(pptx_path).slides)
-        print("제안서 %s · %d면" % (os.path.basename(pptx_path), n))
+        if res["pptx"]:
+            from pptx import Presentation
+            n = len(Presentation(res["pptx"]).slides)
+            print("제안서 %s · %d면" % (os.path.basename(res["pptx"]), n))
+        else:
+            print("제안서 지면 건너뜀 — " + res["pptx_skip"])
         print("  %s · %s ㎡(%s평) · 헤드 %d · 가지관 %d열 %d m · 주배관 %d m · 커버 %.0f %% · 합계 %s원"
               % (S["name"], format(S["area_m2"], ","), format(S["area_py"], ","), S["n_heads"], S["n_lats"],
                  S["lat_total_m"], S["main_total_m"], S["cover"] * 100, format(S["total"], ",")))
@@ -221,8 +249,8 @@ def run(job: Dict, out_dir: Optional[str] = None, *, pdf: bool = False, png: boo
         if res["page_check"]:
             for i, bad in res["page_check"].items():
                 print("  §9 점검 면%d: %s" % (i, " / ".join(bad)))
-        if r.log:
-            print("  렌더 메모: " + " · ".join(sorted(set(r.log))))
+        if res["render_log"]:
+            print("  렌더 메모: " + " · ".join(sorted(set(res["render_log"]))))
         if xlsx:
             print("견적서 %s · %d품목 · 이미지 %d(로컬 %d·드라이브 %d) · 합계 %s원 (F%d)"
                   % (os.path.basename(xr["path"]), xr["n_items"], xr["n_img"], xr["img_local"], xr["img_drive"],

@@ -1053,7 +1053,7 @@ from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 �
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
 if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V103)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V104)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1066,8 +1066,8 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 95:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V103)와 짝이 맞지 않습니다.\n\n"
+if _LG_VER < 96:
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V104)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -6163,6 +6163,8 @@ elif mode == "🏪 아쿠나리스":
 #          ④에서 **제안서 PPTX · 견적서 XLSX 초안** 생성(대표 2026-09-08)
 #   [V103] 🔀 **인입관↔주배관 연결은 여러 가지다** — 시작점만 보던 판정을 **양쪽 끝**으로 넓혔다.
 #          주배관 중간에 T(tap) · 끝점끼리(tail) · 분배점 = **물을 받는 자리** · 말단 = **열린 끝**(대표 2026-09-08)
+#   [V104] 배포 서버에서 **견적서는 나오게** — 제안서 지면(59 MB 마스터·작도 도구)은 지연 임포트로 분리하고
+#          없으면 이유·job JSON·한 줄 명령을 준다 · 유량을 **숫자+단위**로도 받고 못 읽으면 **적으신 말**을 되짚는다
 #   흐름 정본 = `_설계/_문진표/문진표_v1_농지.md` · 대표 확답 #43·#44
 #   🔴 캔버스를 새로 만들지 않는다(파일 기반 1안 · 대표 선택 2026-09-06).
 #      작도판 PNG를 내려받아 농민 확인 → 확인된 blocks/routes JSON을 올린다.
@@ -6247,6 +6249,19 @@ elif mode == "🗺️ 설계(P3)":
                 else:
                     _ans[_qk] = _sel or ""
             else:
+                if _p3i.UNITS.get(_qk):
+                    # 🔵 [V104] **숫자 + 단위**로도 받는다 — 「340리터」처럼 시간이 빠지면 유량이 아니다
+                    #    (대표 2026-09-08). 단추는 **입력칸보다 먼저** 그린다(위젯 상태는 나중에 못 바꾼다).
+                    _uu1, _uu2, _uu3 = st.columns([2, 2, 1])
+                    _uv = _uu1.number_input("숫자", min_value=0.0, step=10.0, value=0.0,
+                                            key="p3_uv_" + _qk, label_visibility="collapsed")
+                    _ul = [_x[0] for _x in _p3i.UNITS[_qk]]
+                    _us = _uu2.selectbox("단위", _ul, key="p3_us_" + _qk, label_visibility="collapsed")
+                    if _uu3.button("넣기", key="p3_ub_" + _qk, disabled=not _uv):
+                        _fmt = dict(_p3i.UNITS[_qk])[_us]
+                        _num = ("%d" % _uv) if float(_uv).is_integer() else ("%g" % _uv)
+                        st.session_state["p3_q_" + _qk] = _fmt % _num
+                        st.rerun()
                 if _q.get("quick"):
                     # 🔴 단추는 **입력칸보다 먼저** 그린다 — 이미 만들어진 위젯의 상태는 못 바꾼다.
                     _qc = st.columns(len(_q["quick"]) + 2)
@@ -6439,14 +6454,14 @@ elif mode == "🗺️ 설계(P3)":
                 if _fix != _pol:
                     _b["policy"] = _fix
             if _pins["blocks"]:
-                _flow = _p3v.parse_flow_lpm((st.session_state.get("p3_answers") or {})
-                                            .get("flow_lpm"))
+                _flow_raw = (st.session_state.get("p3_answers") or {}).get("flow_lpm")
+                _flow = _p3v.parse_flow_lpm(_flow_raw)
                 _sig = json.dumps([[_b.get("polygon"), _b.get("u"), _b.get("policy"),
                                     _b.get("bars"), _b.get("name"), _b.get("crop")]
                                    for _b in _pins["blocks"]]
                                   + [[_r.get("pts"), _r.get("role"), _r.get("zone")]
                                      for _r in _pins["routes"]],
-                                  sort_keys=True) + "|V98|%s" % _flow
+                                  sort_keys=True) + "|V104|%s|%s" % (_flow, _flow_raw)
                 if st.session_state.get("p3_prev_sig") != _sig:
                     with st.spinner("열·헤드·유량 계산 중… (몇 초 걸립니다)"):
                         try:
@@ -6454,7 +6469,7 @@ elif mode == "🗺️ 설계(P3)":
                             #    열이 주배관에서 시작하고, 직각에서 20° 이상 벗어나면
                             #    분기부가 **곡선으로 꺾인다**(규칙 14 · `branch_path`).
                             st.session_state.p3_preview = _p3v.block_preview(
-                                _pins["blocks"], flow_lpm=_flow,
+                                _pins["blocks"], flow_lpm=_flow, flow_text=_flow_raw,
                                 routes=_pins["routes"] or None)
                         except Exception as _e:
                             st.session_state.p3_preview = {"error": str(_e)}
@@ -7501,9 +7516,12 @@ elif mode == "🗺️ 설계(P3)":
                 _q_mgr = _q2.text_input("담당자", value="박형석", key="p3_q_mgr")
                 _q_vat = _q3.checkbox("영세율", value=False, key="p3_q_vat",
                                       help="농업경영체 등록확인서 제출 건에만 켭니다(건별 판단).")
+                _pptx_ok, _pptx_why = _p3pub.pptx_ready()
                 st.caption("표지·수량·금액은 **위 설계 그대로** 들어갑니다. 대표 작도가 필요한 지면"
                            "(물 공급 계통·매니폴드)은 **비어 있는 채로** 나옵니다 — 그 자리를 채우고 문안을 "
-                           "다듬는 것이 사람의 몫입니다.")
+                           "다듬는 것이 사람의 몫입니다."
+                           + ("" if _pptx_ok else
+                              "  " + NL + "🔴 **이 서버에서는 견적서(XLSX)만** 나옵니다 — " + _pptx_why))
                 if st.button("📑 제안서·견적서 만들기", type="primary", key="p3_pub_btn"):
                     st.session_state.pop("p3_pub", None)
                     with st.spinner("위성 받고 지면 그리는 중… (20~40초)"):
@@ -7516,9 +7534,17 @@ elif mode == "🗺️ 설계(P3)":
                             _ff4 = _p3m.fit_frame(_all4, _o4, size=1024)
                             _p3_keys()
                             _bg4, _src4 = _p3m.basemap_image(_ff4, prefer="auto")
-                            _dir4 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                                 "_제안", "P3_" + _p3pub._slug(str(_site.get("name") or "대상지")))
-                            os.makedirs(_dir4, exist_ok=True)
+                            _nm4 = "P3_" + _p3pub._slug(str(_site.get("name") or "대상지"))
+                            _dir4 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_제안", _nm4)
+                            try:                       # 배포 서버는 저장소 폴더가 막혀 있을 수 있다
+                                os.makedirs(_dir4, exist_ok=True)
+                                _tf4 = os.path.join(_dir4, "_쓰기시험")
+                                with open(_tf4, "w") as _t4:
+                                    _t4.write("ok")
+                                os.remove(_tf4)
+                            except Exception:
+                                _dir4 = os.path.join(tempfile.gettempdir(), _nm4)
+                                os.makedirs(_dir4, exist_ok=True)
                             _png4 = os.path.join(_dir4, "_위성.png")
                             with open(_png4, "wb") as _f4:
                                 _f4.write(_bg4)
@@ -7542,7 +7568,9 @@ elif mode == "🗺️ 설계(P3)":
                                                 "vat_zero": bool(_q_vat)}})
                             _out4 = _p3pub.run(_job4, verbose=False)
                             st.session_state.p3_pub = {
-                                "pptx": _out4["pptx"], "xlsx": _out4["xlsx"]["path"],
+                                "pptx": _out4.get("pptx"), "xlsx": _out4["xlsx"]["path"],
+                                "skip": _out4.get("pptx_skip") or "",
+                                "job": os.path.join(_dir4, "_job.json"),
                                 "dir": _dir4, "basemap": _src4,
                                 "n_items": _out4["xlsx"]["n_items"], "total": _out4["xlsx"]["total"],
                                 "pages": sorted((_out4.get("page_check") or {}).keys())}
@@ -7550,23 +7578,38 @@ elif mode == "🗺️ 설계(P3)":
                             st.error("제안서·견적서 생성 실패 — " + str(_e))
                 _pub = st.session_state.get("p3_pub")
                 if _pub:
-                    st.success("만들었습니다 — 배경 %s · 견적 %d품목 · 합계 %s원. 폴더 `%s`"
-                               % ("브이월드 위성" if _pub["basemap"] == "vworld" else "Esri 위성",
+                    st.success("만들었습니다 — %s · 배경 %s · 견적 **%d품목 · %s원**. 폴더 `%s`"
+                               % ("제안서 + 견적서" if _pub.get("pptx") else "**견적서**",
+                                  "브이월드 위성" if _pub["basemap"] == "vworld" else "Esri 위성",
                                   _pub["n_items"], format(_pub["total"], ","), _pub["dir"]))
                     _d1, _d2 = st.columns(2)
                     try:
-                        with open(_pub["pptx"], "rb") as _f:
-                            _d1.download_button("📊 제안서 PPTX 내려받기", _f.read(),
-                                                file_name=os.path.basename(_pub["pptx"]),
-                                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                                                key="p3_dl_pptx")
                         with open(_pub["xlsx"], "rb") as _f:
-                            _d2.download_button("📗 견적서 XLSX 내려받기", _f.read(),
+                            _d1.download_button("📗 견적서 XLSX 내려받기", _f.read(),
                                                 file_name=os.path.basename(_pub["xlsx"]),
                                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                                 key="p3_dl_xlsx")
+                        if _pub.get("pptx"):
+                            with open(_pub["pptx"], "rb") as _f:
+                                _d2.download_button("📊 제안서 PPTX 내려받기", _f.read(),
+                                                    file_name=os.path.basename(_pub["pptx"]),
+                                                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                                    key="p3_dl_pptx")
+                        elif os.path.exists(_pub.get("job") or ""):
+                            with open(_pub["job"], "rb") as _f:
+                                _d2.download_button("🧾 설계 job JSON 내려받기", _f.read(),
+                                                    file_name="job_" + _p3pub._slug(str(_site.get("name") or "대상지")) + ".json",
+                                                    mime="application/json", key="p3_dl_job")
                     except Exception as _e:
                         st.error("파일을 여는 중 오류 — " + str(_e))
+                    if not _pub.get("pptx"):
+                        # 🔴 [V104] 제안서 지면은 **마스터 지면(59 MB)** 과 작도 도구가 있어야 그린다.
+                        #    배포 묶음(app.py + aquanaris_layout.py + looperget/)에는 넣을 수 없다 —
+                        #    GitHub 브라우저 업로드 한도가 25 MB 다. 그러니 여기서는 **견적서까지**가 정직하다.
+                        st.warning("📊 **제안서 PPTX 는 이 서버에서 만들 수 없습니다** — " + _pub["skip"]
+                                   + "  " + NL + "견적서는 위에서 받으시고, 제안서는 **작업 PC**에서 아래 한 줄로 "
+                                     "만드십시오. 위 「🧾 설계 job JSON」을 내려받아 프로젝트 폴더에 두고 —")
+                        st.code("python -m looperget.design.publish job_대상지.json", language="bash")
                     if _pub["pages"]:
                         st.caption("§9 기계 점검이 지적한 지면 — %s 면. 대개 **대표 작도가 없어 비어 있는 지면**입니다."
                                    % ", ".join(str(_x) for _x in _pub["pages"]))

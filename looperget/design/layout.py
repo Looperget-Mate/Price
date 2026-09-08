@@ -76,6 +76,8 @@ class RowPolicy:
     scan_m: Optional[float] = 1.0   # 진입·이탈을 이 격자로 스캔(원본 range 스캔). None = 정확값
     scan_origin: Pt = (0.0, 0.0)    # 격자 원점(01 = O · 02 = (0,0))
 
+    manual_rows: Optional[List[Dict]] = None     # 지도에서 확정한 열별 {a, deg}; 자동 재정렬하지 않음
+
     def to_dict(self) -> Dict:
         return asdict(self)
 
@@ -169,7 +171,8 @@ class Block:
         return min(G.seg_dist(p, a, b) for a, b in self.bars) <= self.P.tail_near
 
     # ── 열 하나 ──
-    def row(self, a: float, swing: float = None, placed: Optional[List[Row]] = None) -> Optional[Row]:
+    def row(self, a: float, swing: float = None, placed: Optional[List[Row]] = None,
+            angle_fixed: Optional[float] = None) -> Optional[Row]:
         P = self.P
         if P.mode == "along_row":
             return self._row_along(a)
@@ -185,8 +188,9 @@ class Block:
             s0 = s_lo
         p0 = self.to_xy(a, s0)
         best = None
-        deg = -swing
-        while deg <= swing + 1e-9:
+        deg = -swing if angle_fixed is None else angle_fixed
+        deg_end = swing if angle_fixed is None else angle_fixed
+        while deg <= deg_end + 1e-9:
             t = math.radians(deg)
             ux = self.u[0] * math.cos(t) - self.u[1] * math.sin(t)
             uy = self.u[0] * math.sin(t) + self.u[1] * math.cos(t)
@@ -313,6 +317,17 @@ class Block:
 
     def solve(self) -> "Block":
         P = self.P
+        if P.manual_rows is not None:
+            self.rows = []
+            for spec in P.manual_rows:
+                a, deg = float(spec["a"]), float(spec.get("deg", 0))
+                if not math.isfinite(a) or not math.isfinite(deg):
+                    raise ValueError("가지관 위치·각도는 유한한 숫자여야 합니다")
+                row = self.row(a, angle_fixed=deg)
+                if row is None:
+                    raise ValueError("옮긴 가지관에 헤드를 놓을 수 없습니다. 밭 안쪽으로 옮겨 주세요.")
+                self.rows.append(row)
+            return self
         cs = [P.anchor_fixed] if P.anchor_fixed is not None else _frange(*P.anchor_sweep)
         best = None
         for c in cs:

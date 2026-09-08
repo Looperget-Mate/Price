@@ -1053,7 +1053,7 @@ from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 �
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
 if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V97)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V98)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1066,8 +1066,8 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 89:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V97)와 짝이 맞지 않습니다.\n\n"
+if _LG_VER < 90:
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V98)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -6152,6 +6152,7 @@ elif mode == "🏪 아쿠나리스":
 #   [V96] 규칙 21(#79) — **인입관 · 분배점**: 선마다 역할(인입관/주배관) · 인입관 재질·관경 ·
 #         구역 밸브는 분배점에서 엔진이 센다(대표 입력 우선) · 지도에 인입관 점선 · 분배점 표시
 #   [V97] 검토 패치 — 역할·이름 변경 즉시 반영 · 빈 밭 합계 · 계산 관경/자재 일치 · 입력 검증
+#   [V98] 가지관 지도 손잡이 · 주배관 기준 첫 여백 · 그리기 전 인입관/주배관 선택
 #   흐름 정본 = `_설계/_문진표/문진표_v1_농지.md` · 대표 확답 #43·#44
 #   🔴 캔버스를 새로 만들지 않는다(파일 기반 1안 · 대표 선택 2026-09-06).
 #      작도판 PNG를 내려받아 농민 확인 → 확인된 blocks/routes JSON을 올린다.
@@ -6161,7 +6162,7 @@ elif mode == "🗺️ 설계(P3)":
     from looperget.design import intake as _p3i, mapsrc as _p3m
     from looperget.design import design as _p3_design, hydro_zone as _p3hz, pipes as _p3p
     from looperget.design import mainline as _p3ml, site as _p3s      # [V96] 규칙 21 인입관·분배점
-    from looperget.design import preview as _p3v
+    from looperget.design import preview as _p3v, mapedit as _p3edit
 
     def _p3_keys():
         """지도 키 주입 — 배포 환경엔 `.secrets/` 가 없다(불변 원칙 4)."""
@@ -6373,11 +6374,12 @@ elif mode == "🗺️ 설계(P3)":
             st.markdown(
                 "##### 그리는 법 — 지도 **왼쪽 세로 단추**를 씁니다\n"
                 "단추마다 **이름표가 붙어 있습니다.** 확대(＋/－) 아래로 **위에서부터** 이 순서입니다 — "
-                "**주배관(선) · 밭(면) · 급수원(핀)**, 한 칸 띄고 **점 편집 · 지우기**.\n\n"
+                "**관(선) · 밭(면) · 급수원(핀)**, 한 칸 띄고 **점 편집 · 지우기**.\n\n"
                 "1. **💧 급수원(물탱크·펌프·관정·급수 지점)** — **「급수원 (핀)」** 을 누르면 커서가 십자로 바뀌고 "
                 "안내말이 따라다닙니다. 그때 **자리를 한 번 누르면** 찍힙니다.\n"
                 "2. **🟨 밭** — **「밭 (면)」** → 모서리를 차례로 찍고 **첫 점을 다시 눌러 닫습니다.**\n"
-                "3. **📐 주배관** — **「주배관 (선)」** → 물길을 따라 찍고 **마지막 점을 두 번 눌러** 끝냅니다.")
+                "3. **📐 관** — 아래에서 **인입관 / 주배관**을 먼저 고른 뒤 **「관 (선)」** → 물길을 따라 찍고 "
+                "**마지막 점을 두 번 눌러** 끝냅니다. 인입관은 **급수원→분배점**, 주배관은 **가지관이 붙는 관**입니다.")
             st.info("🔵 **도구를 켜지 않으면 지도를 눌러도 아무 일도 일어나지 않습니다.** "
                     "확대·이동은 마음껏 하셔도 됩니다. 잘못 그린 것은 왼쪽 **🗑(지우기)** 로 지웁니다.\n\n"
                     "✏ **점 편집** — 왼쪽 아래 **「점 편집」**(지우기 바로 위)을 누르면 밭 테두리가 "
@@ -6396,10 +6398,7 @@ elif mode == "🗺️ 설계(P3)":
             _POL_DEF = {"S": 14.0, "lat_gap": 14.0, "std": 7.0, "maxm": 8.0}
             for _b in _pins["blocks"]:
                 _pol = dict(_b.get("policy") or {})
-                _fix = dict(_POL_DEF)
-                _fix.update(_pol)
-                _fix["off_fixed"] = float(_fix["std"])
-                _fix["maxm"] = max(float(_fix["maxm"]), float(_fix["std"]) + 1.0)
+                _fix = _p3edit.map_policy(_pol)
                 if _fix != _pol:
                     _b["policy"] = _fix
             if _pins["blocks"]:
@@ -6410,7 +6409,7 @@ elif mode == "🗺️ 설계(P3)":
                                    for _b in _pins["blocks"]]
                                   + [[_r.get("pts"), _r.get("role"), _r.get("zone")]
                                      for _r in _pins["routes"]],
-                                  sort_keys=True) + "|%s" % _flow
+                                  sort_keys=True) + "|V98|%s" % _flow
                 if st.session_state.get("p3_prev_sig") != _sig:
                     with st.spinner("열·헤드·유량 계산 중… (몇 초 걸립니다)"):
                         try:
@@ -6428,6 +6427,22 @@ elif mode == "🗺️ 설계(P3)":
 
             _shw = st.checkbox("💦 예상 살수 보기 (헤드 자리와 반경)", value=True, key="p3_show_heads",
                                help="계산된 스프링클러 자리와 살수 반경을 지도에 겹쳐 봅니다.")
+            _draw_role_label = st.radio("새로 그릴 관", ["주배관 (가지관이 붙는 관)", "인입관 (급수원→분배점)"],
+                                       horizontal=True, key="p3_draw_role")
+            _draw_role = "feeder" if _draw_role_label.startswith("인입관") else "main"
+            _edit_rows = st.checkbox("↔ 가지관 위치 조정", value=True, key="p3_edit_rows")
+            st.caption("가지관 가운데 **초록 ↔ 손잡이**를 잡고 옆으로 옮기세요. 놓으면 바로 반영됩니다. "
+                       "**노란 점선**은 가지관 시작→첫 헤드 거리입니다. 주배관과 교차하지 않는 열은 밭 경계 기준입니다.")
+            if any((_b.get("policy") or {}).get("manual_rows") is not None for _b in _pins["blocks"]):
+                st.caption("수동으로 옮긴 열 위치를 유지 중입니다. 열 간격·고랑 방향·밭 모양을 바꾸면 자동배치로 돌아갑니다.")
+                if st.button("가지관 자동배치로 되돌리기", key="p3_reset_rows"):
+                    for _b in _pins["blocks"]:
+                        (_b.get("policy") or {}).pop("manual_rows", None)
+                    st.rerun()
+            if st.session_state.get("p3_row_message"):
+                st.warning(st.session_state.pop("p3_row_message"))
+            _rev = _p3edit.revision(_pins["blocks"], _pins["routes"]) + "|%s|%s" % (
+                _org, st.session_state.get("p3_map_epoch", 0))
             try:
                 _sat, _hyb = _p3m.wmts_url("Satellite"), _p3m.wmts_url("Hybrid")
             except Exception:
@@ -6502,6 +6517,13 @@ elif mode == "🗺️ 설계(P3)":
                                      weight=3 if _bent else 2, opacity=0.75 if _bent else 0.5,
                                      dash_array=None if _bent else "4,6",
                                      tooltip="가지관 — 분기부 곡선" if _bent else "가지관").add_to(_fgh)
+                    for _rd in _bp.get("row_details", []):
+                        _ll = _p3m.from_local_m([_rd["p0"], _rd["first"]], _org)
+                        _gap_text = "첫 헤드까지 %.1f m (직선 거리)" % _rd["first_m"]
+                        _fo.PolyLine([[_q[1], _q[0]] for _q in _ll], color="#ffe36e", weight=3,
+                                     dash_array="3,5", tooltip=_gap_text).add_to(_fgh)
+                        _fo.CircleMarker([_ll[1][1], _ll[1][0]], radius=4, color="#ffe36e", fill=True,
+                                         tooltip=_gap_text).add_to(_fgh)
                 _fgh.add_to(_M)
 
             # 🧭 고랑 방향 — 밭마다 가운데를 지나는 선으로 그려 **눈으로 확인**하게 한다(#74).
@@ -6525,10 +6547,10 @@ elif mode == "🗺️ 설계(P3)":
 
             # 🔴 한국어 이름표는 **Draw 보다 먼저** 붙는다(상수 주석 참조).
             _lc = _fo.MacroElement()
-            _lc._template = _BrancaTemplate(P3_DRAW_LOCALE_JS)
+            _lc._template = _BrancaTemplate(P3_DRAW_LOCALE_JS.replace("주배관", "관"))
             _M.add_child(_lc)
-            _FoDraw(export=False, position="topleft",
-                    draw_options={"polyline": {"shapeOptions": {"color": "#ff4b4b", "weight": 5}},
+            _draw = _FoDraw(export=False, position="topleft",
+                    draw_options={"polyline": {"shapeOptions": {"color": "#ffa040" if _draw_role == "feeder" else "#ff4b4b", "weight": 5}},
                                   "polygon": {"shapeOptions": {"color": "#ffd600", "weight": 4}},
                                   "marker": True,          # 급수원 — 도구를 켜야만 찍힌다(#66)
                                   "rectangle": False, "circle": False, "circlemarker": False},
@@ -6543,6 +6565,8 @@ elif mode == "🗺️ 설계(P3)":
                         "selectedPathOptions": {"dashArray": "10, 10", "fill": True,
                                                 "fillColor": "#78dcff", "fillOpacity": 0.12,
                                                 "maintainColor": False}}).add_to(_M)
+            _p3edit.draw_bridge(_draw, _p3edit.handles(_pvm, _org, _rev) if _edit_rows else [],
+                                role=_draw_role, drafts=st.session_state.get("p3_map_drafts") or []).add_to(_M)
             _FoGeo(collapsed=True, position="topright", add_marker=False, zoom=18).add_to(_M)
             try:
                 _vkey = (_p3m._keys().get("vworld") or {}).get("key", "")
@@ -6565,27 +6589,46 @@ elif mode == "🗺️ 설계(P3)":
             # 🔴 `center`·`zoom` 을 되받지 않는다 — 되받으면 **확대·이동할 때마다 다시 그려져**
             #    화면이 깜빡이고 그리던 것이 끊긴다(대표 실사용 2026-09-07). 자리는 위 JS 가 지킨다.
             _out = _st_folium(_M, height=600, width=None, key="p3_map",
-                              returned_objects=["all_drawings"])
+                              returned_objects=["all_drawings", "last_active_drawing"])
 
             _dws = (_out or {}).get("all_drawings") or []
+            _moved, _move_error = _p3edit.move_rows(_pins["blocks"], _pins["routes"], _pvm,
+                                                  [(_out or {}).get("last_active_drawing") or {}], _org, _rev)
+            _dws = [_f for _f in _dws if (_f.get("properties") or {}).get("kind") != _p3edit.HANDLE]
+            if (_out or {}).get("all_drawings") is not None:
+                st.session_state.p3_map_drafts = _dws
+            if _move_error:
+                st.session_state.p3_row_message = "가지관 이동을 적용하지 못했습니다: " + _move_error
+                st.session_state.p3_map_epoch = st.session_state.get("p3_map_epoch", 0) + 1
+                st.rerun()
+            if _moved is not None:
+                _pins["blocks"] = _moved
+                st.session_state.pop("p3_result", None)
+                st.session_state.pop("p3_site", None)
+                st.rerun()
             _gt = lambda f: ((f or {}).get("geometry") or {}).get("type")
             _polys = [_f for _f in _dws if _gt(_f) == "Polygon"]
             _lines = [_f for _f in _dws if _gt(_f) == "LineString"]
             _points = [_f for _f in _dws if _gt(_f) == "Point"]
 
-            st.caption("지금 지도에 **그려 놓은 것** — 💧급수원 %d · 🟨밭 %d · 📐주배관 %d. "
+            st.caption("지금 지도에 **그려 놓은 것** — 💧급수원 %d · 🟨밭 %d · 📐관 %d. "
                        "아래 단추를 눌러야 목록으로 들어갑니다."
                        % (len(_points), len(_polys), len(_lines)))
             _ca, _cb = st.columns([2, 1])
-            if _ca.button("✅ 그린 것을 목록에 넣기 (급수원 %d · 밭 %d · 주배관 %d)"
+            if _ca.button("✅ 그린 것을 목록에 넣기 (급수원 %d · 밭 %d · 관 %d)"
                           % (len(_points), len(_polys), len(_lines)),
                           type="primary", key="p3_take_all",
                           disabled=not (_points or _polys or _lines)):
                 if _polys:
                     # 🔴 **그린 그대로**(`polygon_raw`)를 남긴다 — 둥글게는 언제든 되돌릴 수 있어야 한다.
+                    _old_blocks = _pins["blocks"]
                     _pins["blocks"] = []
                     for _i, _f in enumerate(_polys):
                         _raw = _p3m.to_local_m(_f["geometry"]["coordinates"][0], _org)
+                        _same = next((_b for _b in _old_blocks if (_b.get("polygon_raw") or _b.get("polygon")) == _raw), None)
+                        if _same is not None:
+                            _pins["blocks"].append(_same)
+                            continue
                         # 🔴 [V91] 기본은 **0 = 그린 그대로**다. 1 로 두었더니 점이 적은 밭이
                         #    「계란 모양」이 됐다(대표 2026-09-07). 둥글게는 **골라서 쓰는 것**이다.
                         _sm = 0
@@ -6605,11 +6648,7 @@ elif mode == "🗺️ 설계(P3)":
                     #    그 상태를 대표가 알아채기 어려웠다(2026-09-07 실사용).
                     #    [V96] 규칙 21 — 선마다 **역할**이 있다: 주배관(main) 기본. 급수원에서 분배점까지의
                     #    선은 표에서 「인입관」으로 바꾼다(구역 없음 · 재질 있음).
-                    _pins["routes"] = [
-                        {"id": "R%d" % (_i + 1), "name": "R%d" % (_i + 1), "role": "main",
-                         "zone": _i + 1, "material": None, "d_mm": None,
-                         "pts": _p3m.to_local_m(_f["geometry"]["coordinates"], _org), "by_ceo": True}
-                        for _i, _f in enumerate(_lines)]
+                    _pins["routes"] = _p3edit.merge_routes(_pins["routes"], _lines, _org, _draw_role)
                 if _points:
                     _pins["sources"] = [
                         {"id": "S%d" % (_i + 1),
@@ -6622,6 +6661,7 @@ elif mode == "🗺️ 설계(P3)":
             if _cb.button("🗑 목록 전부 비우기", key="p3_clear_all",
                           disabled=not (_pins["blocks"] or _pins["sources"] or _pins["routes"])):
                 st.session_state.p3_pins = {"sources": [], "routes": [], "blocks": []}
+                st.session_state.p3_map_drafts = []
                 st.rerun()
 
             # ── 목록 — 여기서 이름·종류를 정하고, 줄을 지워 없앤다 ──
@@ -6717,6 +6757,7 @@ elif mode == "🗺️ 설계(P3)":
                     _u_new = [round(math.cos(_th), 6), round(math.sin(_th), 6)]
                     if _u_new != list(_b.get("u") or []):
                         _b["u"] = _u_new
+                        (_b.get("policy") or {}).pop("manual_rows", None)
                         _chg = True
                     # 둥글게는 **매번 그린 그대로에서 다시 만든다** — 깎은 것을 또 깎지 않는다.
                     # 간격 — 바뀌면 미리보기가 다시 돈다(캐시 서명에 policy 가 들어 있다).
@@ -6725,6 +6766,8 @@ elif mode == "🗺️ 설계(P3)":
                                               ("lat_gap", "열 간격(m)", 14.0),
                                               ("std", "첫 여백(m)", 7.0)):
                         _val = _dflt if pd.isna(_r[_col]) else float(_r[_col])
+                        if _key == "lat_gap" and _val != _pol.get(_key):
+                            _pol.pop("manual_rows", None)
                         _pol[_key] = _val
                     _pol["maxm"] = max(float(_pol.get("maxm") or 0), float(_pol["std"]) + 1.0)
                     # 🔴 첫 여백은 **규칙으로 고정**한다(대표 확답 「7 m 를 띄어야 한다」).
@@ -6735,6 +6778,7 @@ elif mode == "🗺️ 설계(P3)":
                         _chg = True
                     _sm = 0 if pd.isna(_r["둥글게"]) else int(_r["둥글게"])
                     if _sm != int(_b.get("smooth", -1)) or not _b.get("polygon"):
+                        (_b.get("policy") or {}).pop("manual_rows", None)
                         _b["smooth"] = _sm
                         _b["polygon"] = _p3m.smooth_ring(_b.get("polygon_raw") or _b["polygon"], _sm)
                         _b["area_m2"] = round(_p3m.polygon_area_m2(_b["polygon"]), 1)
@@ -6789,6 +6833,7 @@ elif mode == "🗺️ 설계(P3)":
                                 if (_c[0] - _ref[0]) * _uu[0] + (_c[1] - _ref[1]) * _uu[1] < 0:
                                     _uu = [-_uu[0], -_uu[1]]
                             _b["u"] = [round(_uu[0], 6), round(_uu[1], 6)]
+                            (_b.get("policy") or {}).pop("manual_rows", None)
                         st.session_state.p3_pins = _pins
                         st.rerun()
                 st.caption("합계 **%s m² (%s 평)** · %d구역"
@@ -6979,10 +7024,7 @@ elif mode == "🗺️ 설계(P3)":
             if st.button("✅ 이 좌표를 설계에 씁니다", type="primary", key="p3_pin_apply"):
                 _dw = dict(st.session_state.get("p3_drawn") or {})
                 if _pins["blocks"]:
-                    _dw["blocks"] = [{"name": _b["name"], "polygon": _b["polygon"],
-                                      "u": _b["u"],
-                                      **({"crop": _b["crop"]} if _b.get("crop") else {})}
-                                     for _b in _pins["blocks"]]
+                    _dw["blocks"] = _p3edit.design_blocks(_pins["blocks"])
                 if _pins["sources"]:
                     # `id` 는 화면 안에서만 쓰는 손잡이다 — 엔진에는 넘기지 않는다.
                     _dw["sources"] = [{_k: _v for _k, _v in _x.items() if _k != "id"}

@@ -140,7 +140,7 @@ def block_preview(blocks: Sequence[Dict], flow_lpm: Optional[float] = None,
     main_est = 0.0
     area_all = 0.0
 
-    for blk in blocks or []:
+    for block_index, blk in enumerate(blocks or []):
         poly = [tuple(p) for p in (blk.get("polygon") or [])]
         if len(poly) < 3:
             continue
@@ -148,7 +148,7 @@ def block_preview(blocks: Sequence[Dict], flow_lpm: Optional[float] = None,
         pol = RowPolicy(**(blk.get("policy") or {}))
         try:
             # 주배관을 알면 그 기준으로(=④와 같게), 모르면 밭 경계 기준으로 — 둘 다 정직하다.
-            rows = rows_from_polygon(poly, u, pol, mains=route_pts)
+            rows = rows_from_polygon(poly, u, pol, bars=blk.get("bars"), mains=route_pts)
         except Exception as e:                              # 기하가 이상하면 그 밭만 건너뛴다
             rows_out.append({"name": blk.get("name") or "?", "error": str(e)})
             continue
@@ -156,6 +156,11 @@ def block_preview(blocks: Sequence[Dict], flow_lpm: Optional[float] = None,
         lat_m = sum(r.len for r in rows)
         area = _area_m2(poly)
         rows_out.append({"name": blk.get("name") or "?", "crop": blk.get("crop") or "",
+                         "block_index": block_index,
+                         "row_details": [{"a": r.a, "deg": r.deg, "p0": list(r.p0),
+                                          "p1": list(r.p1), "first": list(r.heads[0]),
+                                          "first_m": round(math.dist(r.p0, r.heads[0]), 1)}
+                                         for r in rows],
                          "area_m2": round(area, 1), "rows": len(rows), "heads": heads,
                          "lat_m": round(lat_m, 1),
                          "u_deg": round(math.degrees(math.atan2(u[1], u[0]))),

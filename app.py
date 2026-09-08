@@ -1053,7 +1053,7 @@ from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 �
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
 if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V98)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V99)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1066,8 +1066,8 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 90:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V98)와 짝이 맞지 않습니다.\n\n"
+if _LG_VER < 91:
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V99)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -6153,6 +6153,7 @@ elif mode == "🏪 아쿠나리스":
 #         구역 밸브는 분배점에서 엔진이 센다(대표 입력 우선) · 지도에 인입관 점선 · 분배점 표시
 #   [V97] 검토 패치 — 역할·이름 변경 즉시 반영 · 빈 밭 합계 · 계산 관경/자재 일치 · 입력 검증
 #   [V98] 가지관 지도 손잡이 · 주배관 기준 첫 여백 · 그리기 전 인입관/주배관 선택
+#   [V99] 지도 재생성 때 복원 도형의 집계·목록 반영 유지(None과 명시적 삭제 [] 구별)
 #   흐름 정본 = `_설계/_문진표/문진표_v1_농지.md` · 대표 확답 #43·#44
 #   🔴 캔버스를 새로 만들지 않는다(파일 기반 1안 · 대표 선택 2026-09-06).
 #      작도판 PNG를 내려받아 농민 확인 → 확인된 blocks/routes JSON을 올린다.
@@ -6591,12 +6592,11 @@ elif mode == "🗺️ 설계(P3)":
             _out = _st_folium(_M, height=600, width=None, key="p3_map",
                               returned_objects=["all_drawings", "last_active_drawing"])
 
-            _dws = (_out or {}).get("all_drawings") or []
+            # [V99] 지도 재생성 초기값 None은 '도형 없음'이 아니다. 화면에 복원한 도형으로 집계/반영.
+            _dws = _p3edit.drawing_snapshot(_out, st.session_state.get("p3_map_drafts"))
             _moved, _move_error = _p3edit.move_rows(_pins["blocks"], _pins["routes"], _pvm,
                                                   [(_out or {}).get("last_active_drawing") or {}], _org, _rev)
-            _dws = [_f for _f in _dws if (_f.get("properties") or {}).get("kind") != _p3edit.HANDLE]
-            if (_out or {}).get("all_drawings") is not None:
-                st.session_state.p3_map_drafts = _dws
+            st.session_state.p3_map_drafts = _dws
             if _move_error:
                 st.session_state.p3_row_message = "가지관 이동을 적용하지 못했습니다: " + _move_error
                 st.session_state.p3_map_epoch = st.session_state.get("p3_map_epoch", 0) + 1
@@ -7021,7 +7021,8 @@ elif mode == "🗺️ 설계(P3)":
                 st.warning("다음 → 지도 왼쪽 **╱(선)** 으로 급수원에서 밭까지 주배관을 그리세요.")
             else:
                 st.success("다 모였습니다 → 아래 단추를 누르고 **③ 작도판**으로 가세요.")
-            if st.button("✅ 이 좌표를 설계에 씁니다", type="primary", key="p3_pin_apply"):
+            if st.button("✅ 이 좌표를 설계에 씁니다", type="primary", key="p3_pin_apply",
+                         disabled=not (_nb and _ns and _nr)):
                 _dw = dict(st.session_state.get("p3_drawn") or {})
                 if _pins["blocks"]:
                     _dw["blocks"] = _p3edit.design_blocks(_pins["blocks"])

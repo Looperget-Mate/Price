@@ -11,6 +11,14 @@ from .layout import RowPolicy, rows_from_polygon
 HANDLE = "looperget_lateral"
 
 
+def drawing_snapshot(result, saved=None):
+    """iframe 초기 응답(None)은 저장 도형을 사용; 명시적인 []는 전부 지운 결과다."""
+    incoming = (result or {}).get("all_drawings")
+    features = saved if incoming is None else incoming
+    return deepcopy([f for f in (features or [])
+                     if (f.get("properties") or {}).get("kind") != HANDLE])
+
+
 def map_policy(policy=None):
     """신규 현장 지도: 표시한 첫 여백을 주배관 교점부터 적용. 승인본 엔진 기본값은 유지."""
     out = {"S": 14.0, "lat_gap": 14.0, "std": 7.0, "maxm": 8.0}

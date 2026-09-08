@@ -1053,7 +1053,7 @@ from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 �
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
 if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V102)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V103)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1066,8 +1066,8 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 94:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V102)와 짝이 맞지 않습니다.\n\n"
+if _LG_VER < 95:
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V103)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -6161,6 +6161,8 @@ elif mode == "🏪 아쿠나리스":
 #   [V102] ➕ **스프링클러 추가**(가장 가까운 가지관에 투영) · 📏 **열 안 균등 정렬**(첫·마지막 고정)과 열별 간격표 ·
 #          살수원 **안쪽 7 m**(귀환 살수) · 「닿지 않음」의 뜻·거리·고치는 법 · 작도판을 대상지에 맞춰 꽉 ·
 #          ④에서 **제안서 PPTX · 견적서 XLSX 초안** 생성(대표 2026-09-08)
+#   [V103] 🔀 **인입관↔주배관 연결은 여러 가지다** — 시작점만 보던 판정을 **양쪽 끝**으로 넓혔다.
+#          주배관 중간에 T(tap) · 끝점끼리(tail) · 분배점 = **물을 받는 자리** · 말단 = **열린 끝**(대표 2026-09-08)
 #   흐름 정본 = `_설계/_문진표/문진표_v1_농지.md` · 대표 확답 #43·#44
 #   🔴 캔버스를 새로 만들지 않는다(파일 기반 1안 · 대표 선택 2026-09-06).
 #      작도판 PNG를 내려받아 농민 확인 → 확인된 blocks/routes JSON을 올린다.
@@ -6171,6 +6173,20 @@ elif mode == "🗺️ 설계(P3)":
     from looperget.design import design as _p3_design, hydro_zone as _p3hz, pipes as _p3p
     from looperget.design import mainline as _p3ml, site as _p3s      # [V96] 규칙 21 인입관·분배점
     from looperget.design import preview as _p3v, mapedit as _p3edit
+
+    def _p3_headers(_pins_):
+        """🔀 분배점 — **물을 받는 자리** 기준(V103). 인입관이 주배관 중간에 T 로 붙으면
+        그 관의 첫 점이 아니라 **붙은 자리**가 분배점이다(대표 2026-09-08).
+        급수원이 있으면 ④와 같은 연결 판정(`analyze`)을 태워 그 자리를 쓴다."""
+        _rt = _pins_.get("routes") or []
+        if not _rt:
+            return []
+        if _pins_.get("sources"):
+            try:
+                return _p3ml.analyze(_rt, _pins_["sources"])["headers"]
+            except Exception:
+                pass
+        return _p3ml.headers(_rt)
 
     def _p3_orient(_uu, _blk, _pins_):
         """[V100] 밭 `_blk` 의 고랑 방향 `_uu` 를 **급수원(없으면 관)에서 멀어지는 쪽**으로 맞춘다.
@@ -6562,7 +6578,7 @@ elif mode == "🗺️ 설계(P3)":
                                                             _p3s.MATERIAL_LABEL.get(_rt.get("material") or "hose50"))
                                           if _isf else "주배관 %s · 구역 %s" % (_rt.get("name") or "", _rt.get("zone")))
                                  ).add_to(_M)
-            for _h in (_p3ml.headers(_pins["routes"]) if _pins["routes"] else []):
+            for _h in _p3_headers(_pins):
                 _lo, _la = _p3m.from_local_m([_h["pt"]], _org)[0]
                 _fo.CircleMarker([_la, _lo], radius=7, color="#0C3B81", weight=2, fill=True,
                                  fill_color="#F3DC18", fill_opacity=1,
@@ -7073,7 +7089,11 @@ elif mode == "🗺️ 설계(P3)":
                     except Exception:
                         _an = None
                     if _an:
-                        _how = {"source": "급수원 「%s」", "end": "「%s」 끝", "mid": "「%s」 중간(T 분기)"}
+                        # [V103] 연결은 **시작점에서만** 일어나지 않는다(대표 2026-09-08).
+                        #   tap  = 이 관 **중간**에 상대 끝이 붙었다(T 분배점)
+                        #   tail = 이 관 **끝**에서 받는다(관을 접점 쪽으로 그린 경우)
+                        _how = {"source": "급수원 「%s」", "end": "「%s」 끝", "mid": "「%s」 중간(T 분기)",
+                                "tap": "「%s」 — 이 관 **중간**에 T 로 붙음", "tail": "「%s」 — 이 관 **끝**에서 받음"}
                         _ln, _bad = [], 0
                         for _rr in _an["routes"]:
                             _lab = _p3s.ROLE_LABEL.get(_rr["role"], _rr["role"])
@@ -7101,7 +7121,9 @@ elif mode == "🗺️ 설계(P3)":
                                        "인입관 끝에서 주배관이 시작하면 그 자리가 **분배점**이 됩니다.")
                         else:
                             st.success("🔗 **연결** — " + " · ".join(_ln)
-                                       + "  \n④에서도 같은 판정입니다. 인입관 끝에서 주배관이 시작하면 그 자리가 분배점입니다.")
+                                       + "  \n④에서도 같은 판정입니다. **분배점 = 주배관이 물을 받는 자리**입니다 — "
+                                       "인입관 끝에서 주배관이 시작해도 되고, 주배관을 한 줄로 긋고 "
+                                       "인입관을 그 **중간에 T 로** 붙여도 됩니다.")
                 if _new != _pins["routes"]:
                     _pins["routes"] = _new
                     st.session_state.p3_pins = _pins
@@ -7183,7 +7205,7 @@ elif mode == "🗺️ 설계(P3)":
                               else "**지정 없음**(전부 공통 구간)"))
                 # 🔵 [V96] 규칙 21(#79) — 구역 밸브는 **분배점**(주배관이 갈라지는 자리)마다 구역 수만큼.
                 #    엔진이 그린 선에서 분배점을 찾아 센다. 대표가 직접 적으면 그 값이 우선한다.
-                _hdrs = _p3ml.headers(_pins["routes"]) if _pins["routes"] else []
+                _hdrs = _p3_headers(_pins)
                 _hv = sum(_h["valves"] for _h in _hdrs)
                 if _hdrs:
                     st.caption("🔀 **분배점 %d곳** — %s" % (len(_hdrs), " · ".join(

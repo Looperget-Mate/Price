@@ -25,12 +25,16 @@ HEADER_NEAR = 2.0      # 규칙 21 F3 — 주배관 출발점끼리 이 거리 �
                        # 넘으면 분배점을 나누고 그 사이는 인입관이다. 대표 확정 2026-09-08(#79) — T 합침 거리와 같게 시작.
 
 
-def headers(routes: Sequence[Dict], near: float = HEADER_NEAR) -> List[Dict]:
-    """분배점(규칙 21) — 주배관(role=main)의 출발점을 `near` 안에서 묶은 자리.
+def headers(routes: Sequence[Dict], near: float = HEADER_NEAR, feed: Optional[Dict] = None) -> List[Dict]:
+    """분배점(규칙 21) — 주배관(role=main)이 **물을 받는 자리**를 `near` 안에서 묶은 자리.
 
     → [{"pt", "routes": [이름], "zones": [구역], "outlets": 주배관 수, "valves": 구역 수}]
     구역 밸브는 **분배점마다 구역 수**만큼이다 — 같은 구역의 두 갈래는 밸브 하나 뒤에서 T 로 갈라진다
-    (승인본 02: 한 입구에서 두 갈래 · 구역 1 · 밸브 1)."""
+    (승인본 02: 한 입구에서 두 갈래 · 구역 1 · 밸브 1).
+
+    🔵 [V103] 받는 자리는 보통 그 관의 **첫 점**이지만, 인입관이 주배관 **중간**에 T 로 붙거나
+      주배관을 접점 쪽으로 그려 **끝점**이 만나면 첫 점이 아니다(대표 2026-09-08).
+      그 경우 `analyze()` 가 `feed`(경로 index → 좌표)로 실제 자리를 알려 준다."""
     from .site import route_role
     mains = [(i, r) for i, r in enumerate(routes) if route_role(r) == "main" and len(r.get("pts") or []) >= 2]
     parent = list(range(len(mains)))
@@ -41,7 +45,8 @@ def headers(routes: Sequence[Dict], near: float = HEADER_NEAR) -> List[Dict]:
             a = parent[a]
         return a
 
-    pts = [tuple(r["pts"][0]) for _, r in mains]
+    feed = feed or {}
+    pts = [tuple(feed.get(i, r["pts"][0])) for i, r in mains]
     for a in range(len(mains)):
         for b in range(a + 1, len(mains)):
             if G.dist(pts[a], pts[b]) <= near:
@@ -114,6 +119,7 @@ def analyze(routes: Sequence[Dict], sources: Sequence[Dict]) -> Dict:
 
     # ── 출발점 분류: 급수점 클러스터 / 다른 경로 끝 / 다른 경로 중간 ─────────
     tee_pts: List[Tuple[Pt, str]] = []
+    extra_tees = 0                       # [V103] 끝점 쪽 연결에서 생긴 T(중간 분기)
     src_groups: Dict[int, List[int]] = {}
     end_groups: Dict[int, List[int]] = {}
     for i, r in enumerate(R):
@@ -141,9 +147,65 @@ def analyze(routes: Sequence[Dict], sources: Sequence[Dict]) -> Dict:
             r["from"] = ("mid", mj[0])
             tee_pts.append((mj[2], "분기 T"))
             continue
-        # 🔴 [V102] **얼마나 떨어졌는지**와 **무엇을 하면 되는지**를 함께 말한다 —
-        #    「닿지 않음」만으로는 대표가 무엇을 고쳐야 할지 알 수 없다(대표 2026-09-08 「닿지 않았다는 게 뭐지?」).
         r["from"] = ("free", None)
+
+    # ── [V103] 연결은 **시작점에서만** 일어나지 않는다(대표 2026-09-08) ─────────
+    # 「인입관과 주배관의 연결을 T자로 할 수도 있잖아. 꼭 주배관의 끝에서만 이루어지지 않아.」
+    # 위 분류는 관의 **첫 점**만 봤다. 그래서 ① 주배관을 한 줄로 긋고 인입관을 그 **중간**에 T 로 붙이거나
+    # ② 주배관을 접점 쪽으로 그려 **끝점**이 만나면, 멀쩡히 이어진 관이 「닿지 않음」으로 나왔다.
+    # 여기서 **끝점 쪽 연결**을 마저 본다. 이미 분류된 관은 건드리지 않는다(승인본 5필지 무영향).
+    end_junction = set()          # 그 관의 **끝**이 연결부라 말단(규칙 1)이 아닌 관
+    for i, r in enumerate(R):
+        if r["from"][0] != "free":
+            continue
+        q_end = r["pts"][-1]
+        # ② 이 관의 끝이 다른 관의 끝점에 닿는다 — 거꾸로 그린 관(일자 연결)
+        ej = next((j for j, q in enumerate(R)
+                   if j != i and G.dist(q_end, q["pts"][-1]) <= END_NEAR), None)
+        if ej is not None:
+            end_groups.setdefault(ej, []).append(i)
+            end_junction.add(i)
+            r["from"] = ("tail", ej)
+            r["feed_pt"] = [round(q_end[0], 1), round(q_end[1], 1)]
+            continue
+        # ②' 이 관의 끝이 다른 관의 **중간**에 닿는다 — 거꾸로 그렸고 T 로 붙었다
+        hit = None
+        for j, q in enumerate(R):
+            if j == i:
+                continue
+            sj, cj, _ = G.nearest_on_polyline(q["pts"], q_end)
+            if G.dist(cj, q_end) <= MID_NEAR and END_NEAR < sj < q["len"] - END_NEAR:
+                hit = (j, cj)
+                break
+        if hit is not None:
+            end_junction.add(i)
+            r["from"] = ("tail", hit[0])
+            r["feed_pt"] = [round(hit[1][0], 1), round(hit[1][1], 1)]
+            tee_pts.append((hit[1], "분기 T"))
+            extra_tees += 1
+            continue
+        # ① 다른 관의 **끝점**이 이 관의 중간에 닿는다 — 인입관이 주배관 중간에 T 로(대표 그림)
+        hit = None
+        for j, q in enumerate(R):
+            if j == i:
+                continue
+            sj, cj, _ = G.nearest_on_polyline(r["pts"], q["pts"][-1])
+            if G.dist(cj, q["pts"][-1]) <= MID_NEAR and END_NEAR < sj < r["len"] - END_NEAR:
+                hit = (j, cj)
+                break
+        if hit is not None:
+            end_junction.add(hit[0])          # 붙은 쪽(인입관)의 끝은 말단이 아니다
+            r["from"] = ("tap", hit[0])
+            r["feed_pt"] = [round(hit[1][0], 1), round(hit[1][1], 1)]
+            tee_pts.append((hit[1], "분기 T"))
+            extra_tees += 1
+
+    # 그래도 남은 「닿지 않음」만 말한다 — **얼마나 떨어졌는지·무엇을 하면 되는지**와 함께
+    # (대표 2026-09-08 「닿지 않았다는 게 뭐지?」).
+    for i, r in enumerate(R):
+        if r["from"][0] != "free":
+            continue
+        p = r["pts"][0]
         cand = []
         if sources:
             k = min(range(len(sources)), key=lambda j: G.dist(p, tuple(sources[j]["pt"])))
@@ -155,17 +217,20 @@ def analyze(routes: Sequence[Dict], sources: Sequence[Dict]) -> Dict:
             cand.append((G.dist(p, q["pts"][-1]), "'%s' 끝점" % q["name"], END_NEAR))
             _s, _c, _ = G.nearest_on_polyline(q["pts"], p)
             cand.append((G.dist(_c, p), "'%s' 중간" % q["name"], MID_NEAR))
+            _s2, _c2, _ = G.nearest_on_polyline(r["pts"], q["pts"][-1])
+            cand.append((G.dist(_c2, q["pts"][-1]), "'%s' 끝점(이 관 중간에)" % q["name"], MID_NEAR))
         near_txt = ""
         if cand:
             d, what, lim = min(cand)
             r["from_gap"] = round(d, 1)
             r["from_near"] = what
             near_txt = " — 가장 가까운 것은 %s 이고 **%.1f m** 떨어져 있다(%.0f m 안이어야 이어진다)" % (what, d, lim)
-        warnings.append("%s '%s' 출발점이 급수원·다른 관 어디에도 닿지 않았다%s. "
-                        "선의 **첫 점**을 그 자리로 옮기거나, 인입관을 주배관 시작점까지 늘려 주세요"
+        warnings.append("%s '%s' 이 급수원·다른 관 어디에도 닿지 않았다%s. "
+                        "이 관의 **첫 점이나 끝점**을 그 자리로 옮기거나, 인입관을 이 관까지 늘려 주세요 "
+                        "— 인입관 끝을 주배관 **중간**에 대면 그 자리가 분배점(T)이 됩니다"
                         % ("주배관" if r["role"] == "main" else "인입관", r["name"], near_txt))
 
-    tees = 0
+    tees = extra_tees
     for si, idx in src_groups.items():
         th = sources[si].get("tees_here")
         k = len(idx)
@@ -194,11 +259,22 @@ def analyze(routes: Sequence[Dict], sources: Sequence[Dict]) -> Dict:
             (r["bends_at_tee"] if at_tee else r["elbows_over45"]).append(b)
 
     # 말단 = 다른 경로가 이어 받지 않는 끝점 (규칙 1)
+    # 말단(규칙 1 · E호스밸브 마감세트) = **물을 받는 자리가 아닌 열린 끝**.
+    # [V103] 받는 자리가 첫 점이 아닐 수 있으므로 열린 끝이 어디인지 갈래마다 다르다 —
+    #   첫 점에서 받으면 끝점이 열려 있고, 끝에서 받으면(tail) 첫 점이, 중간에서 받으면(tap) **양쪽**이 열려 있다.
     end_pts = []
     for j, r in enumerate(R):
-        if j in end_groups:
-            continue
-        end_pts.append(r["pts"][-1])
+        kind = r["from"][0]
+        if kind == "tap":
+            opens = [r["pts"][0], r["pts"][-1]]
+        elif kind == "tail":
+            opens = [r["pts"][0]]
+        else:
+            opens = [r["pts"][-1]]
+        for q in opens:
+            if tuple(q) == tuple(r["pts"][-1]) and (j in end_groups or j in end_junction):
+                continue                              # 그 끝은 연결부다(다른 관이 출발하거나 붙었다)
+            end_pts.append(q)
     ends = len(end_pts)
     joints = sum(r["joints"] for r in R)
     elbows = sum(len(r["elbows_over45"]) for r in R)
@@ -207,14 +283,24 @@ def analyze(routes: Sequence[Dict], sources: Sequence[Dict]) -> Dict:
         for p, d in r["elbows_over45"]:
             warnings.append(f"'{r['name']}' 꺾임 {d:.0f}° > 45° @ {tuple(round(x, 1) for x in p)} — 규칙 3(T 양쪽) 검토")
 
-    hdrs = headers(routes)
+    hdrs = headers(routes, feed={i: r["feed_pt"] for i, r in enumerate(R) if r.get("feed_pt")})
+
+    # 🔵 [V103] 중간에서 받는 주배관은 **양쪽으로 갈라져** 흐른다. 수리 계산은 여전히
+    #    「한쪽 끝에서 전 길이를 흐른다」로 잡는다 — 실제보다 손실을 **크게** 보는 쪽이라 안전하지만,
+    #    그 사실을 숨기지 않는다(불변 원칙 1 — 모델을 임의로 바꾸지 않는다).
+    for r in R:
+        if r["from"][0] == "tap" and r["role"] == "main":
+            warnings.append("주배관 '%s' 는 **중간에서 물을 받는다**(T 분배). 손실·양정은 여전히 "
+                            "「한쪽 끝에서 전 길이」로 계산한다 — 실제보다 **크게** 잡는 쪽이라 "
+                            "설계는 안전측이다. 정확히 나누려면 그 자리에서 선을 둘로 끊어 그리세요"
+                            % r["name"])
 
     def _from_ref(r):
         """출발점이 닿은 상대의 이름 — 급수점 이름 또는 다른 경로 이름(화면 「🔗 연결」용 · V100)."""
         kind, v = r["from"]
         if kind == "source":
             return sources[v].get("name")
-        if kind in ("end", "mid"):
+        if kind in ("end", "mid", "tap", "tail"):
             return R[v]["name"]
         return None
 
@@ -233,6 +319,7 @@ def analyze(routes: Sequence[Dict], sources: Sequence[Dict]) -> Dict:
                     "len_m": round(r["len"], 1),
                     "joints": r["joints"], "from": r["from"][0], "from_ref": _from_ref(r),
                     "from_gap": r.get("from_gap"), "from_near": r.get("from_near"),
+                    "feed_pt": r.get("feed_pt"),          # [V103] 물을 받는 자리(첫 점이 아닐 수 있다)
                     "bends": [[list(p), round(d, 1)] for p, d in r["bends"]]} for r in R],
         "tee_pts": [[list(p), tag] for p, tag in tee_pts],
         "end_pts": [list(p) for p in end_pts],

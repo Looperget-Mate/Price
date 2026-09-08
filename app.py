@@ -1053,7 +1053,7 @@ from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 �
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
 if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V99)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V100)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1066,8 +1066,8 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 91:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V99)와 짝이 맞지 않습니다.\n\n"
+if _LG_VER < 92:
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V100)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -6154,6 +6154,8 @@ elif mode == "🏪 아쿠나리스":
 #   [V97] 검토 패치 — 역할·이름 변경 즉시 반영 · 빈 밭 합계 · 계산 관경/자재 일치 · 입력 검증
 #   [V98] 가지관 지도 손잡이 · 주배관 기준 첫 여백 · 그리기 전 인입관/주배관 선택
 #   [V99] 지도 재생성 때 복원 도형의 집계·목록 반영 유지(None과 명시적 삭제 [] 구별)
+#   [V100] ②탭 🔗 연결 판정(④와 같은 `mainline.analyze`) · 새 밭 고랑 방향 = 긴 변 · 표 각도 부호 자동(`_p3_orient`) ·
+#          가지관 이동 거부 이유를 지도 아래에(대표 2026-09-08 「깜빡이고 원상복구」)
 #   흐름 정본 = `_설계/_문진표/문진표_v1_농지.md` · 대표 확답 #43·#44
 #   🔴 캔버스를 새로 만들지 않는다(파일 기반 1안 · 대표 선택 2026-09-06).
 #      작도판 PNG를 내려받아 농민 확인 → 확인된 blocks/routes JSON을 올린다.
@@ -6164,6 +6166,19 @@ elif mode == "🗺️ 설계(P3)":
     from looperget.design import design as _p3_design, hydro_zone as _p3hz, pipes as _p3p
     from looperget.design import mainline as _p3ml, site as _p3s      # [V96] 규칙 21 인입관·분배점
     from looperget.design import preview as _p3v, mapedit as _p3edit
+
+    def _p3_orient(_uu, _blk, _pins_):
+        """[V100] 밭 `_blk` 의 고랑 방향 `_uu` 를 **급수원(없으면 관)에서 멀어지는 쪽**으로 맞춘다.
+        표의 각도·🧭·새 밭 기본값 셋이 같은 규칙을 탄다(`preview.orient_u`)."""
+        _pg = _blk.get("polygon") or []
+        if not _pg:
+            return [round(float(_uu[0]), 6), round(float(_uu[1]), 6)]
+        _c = [sum(q[0] for q in _pg) / len(_pg), sum(q[1] for q in _pg) / len(_pg)]
+        _cands = [_x["pt"] for _x in (_pins_.get("sources") or []) if _x.get("pt")]
+        if not _cands:
+            _cands = [q for _r2 in (_pins_.get("routes") or []) for q in (_r2.get("pts") or [])]
+        _ref = min(_cands, key=lambda q: (q[0] - _c[0]) ** 2 + (q[1] - _c[1]) ** 2) if _cands else None
+        return _p3v.orient_u(_uu, _c, _ref)
 
     def _p3_keys():
         """지도 키 주입 — 배포 환경엔 `.secrets/` 가 없다(불변 원칙 4)."""
@@ -6440,8 +6455,6 @@ elif mode == "🗺️ 설계(P3)":
                     for _b in _pins["blocks"]:
                         (_b.get("policy") or {}).pop("manual_rows", None)
                     st.rerun()
-            if st.session_state.get("p3_row_message"):
-                st.warning(st.session_state.pop("p3_row_message"))
             _rev = _p3edit.revision(_pins["blocks"], _pins["routes"]) + "|%s|%s" % (
                 _org, st.session_state.get("p3_map_epoch", 0))
             try:
@@ -6591,6 +6604,12 @@ elif mode == "🗺️ 설계(P3)":
             #    화면이 깜빡이고 그리던 것이 끊긴다(대표 실사용 2026-09-07). 자리는 위 JS 가 지킨다.
             _out = _st_folium(_M, height=600, width=None, key="p3_map",
                               returned_objects=["all_drawings", "last_active_drawing"])
+            # 🔴 [V100] 가지관 이동이 거부되면 **지도 바로 아래**에 이유를 적는다 — 위쪽에 띄우니 못 보고
+            #    「깜빡이고 원상복구된다」로 보였다(대표 2026-09-08). 되돌린 것은 엔진이고 이유가 있다.
+            if st.session_state.get("p3_row_message"):
+                st.error("↔ " + st.session_state.pop("p3_row_message")
+                         + "  \n옮길 수 있는 범위 — **이웃 가지관과 6 m 이상** · **밭 안쪽**. "
+                         "가지관을 **돌리려면** 손잡이가 아니라 위 표의 **고랑 방향(도)** 또는 🧭 를 쓰세요.")
 
             # [V99] 지도 재생성 초기값 None은 '도형 없음'이 아니다. 화면에 복원한 도형으로 집계/반영.
             _dws = _p3edit.drawing_snapshot(_out, st.session_state.get("p3_map_drafts"))
@@ -6633,11 +6652,16 @@ elif mode == "🗺️ 설계(P3)":
                         #    「계란 모양」이 됐다(대표 2026-09-07). 둥글게는 **골라서 쓰는 것**이다.
                         _sm = 0
                         _pg = _p3m.smooth_ring(_raw, _sm)
+                        # 🔵 [V100] 고랑 방향 기본 = **밭의 긴 변**(동쪽 고정이 기울어진 밭에서 사선을 만들었다 ·
+                        #    대표 2026-09-08). 부호는 같은 단추로 찍은 급수원까지 보고 밭 안쪽으로 맞춘다.
+                        _src_pts = [_x["pt"] for _x in _pins["sources"] if _x.get("pt")] + [
+                            _p3m.to_local_m([_f2["geometry"]["coordinates"]], _org)[0] for _f2 in _points]
+                        _u0 = _p3_orient(_p3v.long_axis_u(_pg), {"polygon": _pg}, {"sources": [{"pt": q} for q in _src_pts]})
                         _pins["blocks"].append(
                             {"id": "B%d" % (_i + 1), "name": chr(65 + _i),
                              "polygon_raw": _raw, "smooth": _sm, "polygon": _pg,
                              "area_m2": round(_p3m.polygon_area_m2(_pg), 1),
-                             "u": [1.0, 0.0], "crop": "",
+                             "u": _u0, "crop": "",
                              # 🔴 대표 확답 2026-09-08 — 「설치간격은 가지관이나 스프링클러나 14 m,
                              #    첫 시작은 7 m」. 427B 권장값이고 **신규 현장의 기본**이다.
                              #    (승인본 재현은 `reproduce.py` 가 자기 policy 를 주므로 무영향.)
@@ -6711,6 +6735,8 @@ elif mode == "🗺️ 설계(P3)":
                 st.caption("**둥글게 0~3** — 기본은 **0(그린 그대로)** 입니다. 올리면 모서리가 깎여 "
                            "부드러워지지만 **점이 적으면 계란처럼 됩니다** — 면적을 보고 정하세요. "
                            "🔴 **고랑(열) 방향은 대표 입력입니다** — 0°=동 · 90°=북. "
+                           "**새 밭은 긴 변 방향이 기본**이고, 앞뒤 부호는 엔진이 **급수원에서 밭 안쪽으로** 맞춥니다"
+                           "(-25° 를 적으면 155° 로 보일 수 있습니다 — 같은 고랑입니다). "
                            "작물은 알면 넣습니다. 줄을 지우면 없어집니다.")
                 _bdf = pd.DataFrame([{"id": _b.get("id") or "B%d" % (_i + 1), "이름": _b["name"],
                                       "둥글게": int(_b.get("smooth", 0)),
@@ -6755,7 +6781,18 @@ elif mode == "🗺️ 설계(P3)":
                     _dg = _r["고랑 방향(도)"]
                     _th = math.radians(0.0 if pd.isna(_dg) else float(_dg))
                     _u_new = [round(math.cos(_th), 6), round(math.sin(_th), 6)]
-                    if _u_new != list(_b.get("u") or []):
+                    # 🔴 [V100] 표에 적은 각도도 **부호를 엔진이 맞춘다** — -25° 를 적으면 주배관 쪽을 향해
+                    #    열이 주배관에 안 닿았다(대표 2026-09-08 「-25도를 적용하니까 가지관이 한 줄만」).
+                    #    🧭 만 뒤집던 것을 표·새 밭 기본값과 한 규칙으로(`_p3_orient`). 표에는 맞춘 각도가 보인다.
+                    _u_new = _p3_orient(_u_new, _b, _pins)
+                    # 표는 정수 각도라 🧭·긴 변으로 잡은 소수 각도가 매번 재양자화되면 수동 열이 풀린다 — 1° 안이면 같은 값.
+                    _u_old = list(_b.get("u") or [])
+                    if _u_old:
+                        _dd = (math.degrees(math.atan2(_u_new[1], _u_new[0]) - math.atan2(_u_old[1], _u_old[0]))
+                               + 180.0) % 360.0 - 180.0
+                        if abs(_dd) < 1.0:
+                            _u_new = _u_old
+                    if _u_new != _u_old:
                         _b["u"] = _u_new
                         (_b.get("policy") or {}).pop("manual_rows", None)
                         _chg = True
@@ -6821,18 +6858,8 @@ elif mode == "🗺️ 설계(P3)":
                                             + (t[0][1] - _c[1]) ** 2)
                             # 🔴 `u` 는 **주배관 쪽 → 밭 안쪽**이다(`layout.py`) — 부호가 뒤집히면
                             #    열이 주배관에 안 닿아 「급수 불가」가 뜬다(2026-09-08 실측).
-                            #    그린 선의 방향이 어느 쪽이든, **급수원에서 멀어지는 쪽**으로 돌려 놓는다.
-                            _ref = None
-                            if _pins["sources"]:
-                                _ref = min((_x["pt"] for _x in _pins["sources"]),
-                                           key=lambda q: (q[0] - _c[0]) ** 2 + (q[1] - _c[1]) ** 2)
-                            elif _pins["routes"]:
-                                _ref = min((q for _r2 in _pins["routes"] for q in _r2["pts"]),
-                                           key=lambda q: (q[0] - _c[0]) ** 2 + (q[1] - _c[1]) ** 2)
-                            if _ref is not None:
-                                if (_c[0] - _ref[0]) * _uu[0] + (_c[1] - _ref[1]) * _uu[1] < 0:
-                                    _uu = [-_uu[0], -_uu[1]]
-                            _b["u"] = [round(_uu[0], 6), round(_uu[1], 6)]
+                            #    그린 선의 방향이 어느 쪽이든, **급수원에서 멀어지는 쪽**으로 돌려 놓는다(V100: `_p3_orient`).
+                            _b["u"] = _p3_orient(_uu, _b, _pins)
                             (_b.get("policy") or {}).pop("manual_rows", None)
                         st.session_state.p3_pins = _pins
                         st.rerun()
@@ -6901,6 +6928,28 @@ elif mode == "🗺️ 설계(P3)":
                     if _r.get("role") == "feeder" and _r.get("material") in ("pipe", "buried") and not _r.get("d_mm"):
                         st.error("인입관 **%s** (%s) 의 **관경을 모릅니다** — [미확정]이라 설계가 멈춥니다."
                                  % (_r["name"], _p3s.MATERIAL_LABEL[_r["material"]]))
+                # 🔗 [V100] 연결 판정을 **여기서** 낸다 — 지금까지는 ④에 가야 「출발점이 닿지 않음」이 나왔다
+                #    (대표 2026-09-08 「연결이 제대로 반영된 건가? 다음으로 넘어가야 알 수 있는 건가?」).
+                #    ④와 같은 함수(`mainline.analyze`)라 여기서 ✅ 면 ④에서도 같다.
+                if _new and _pins.get("sources"):
+                    try:
+                        _an = _p3ml.analyze(_new, _pins["sources"])
+                    except Exception:
+                        _an = None
+                    if _an:
+                        _how = {"source": "급수원 「%s」", "end": "「%s」 끝", "mid": "「%s」 중간(T 분기)"}
+                        _ln, _bad = [], 0
+                        for _rr in _an["routes"]:
+                            _lab = _p3s.ROLE_LABEL.get(_rr["role"], _rr["role"])
+                            if _rr["from"] == "free":
+                                _bad += 1
+                                _ln.append("🔴 %s **%s** — 출발점이 급수원(4 m 안)·다른 관(2 m 안)에 닿지 않음"
+                                           % (_lab, _rr["name"]))
+                            else:
+                                _ln.append("✅ %s **%s** ← %s" % (_lab, _rr["name"], _how[_rr["from"]] % _rr["from_ref"]))
+                        (st.error if _bad else st.success)(
+                            "🔗 **연결** — " + " · ".join(_ln)
+                            + ("" if _bad else "  \n④에서도 같은 판정입니다. 인입관 끝에서 주배관이 시작하면 그 자리가 분배점입니다."))
                 if _new != _pins["routes"]:
                     _pins["routes"] = _new
                     st.session_state.p3_pins = _pins

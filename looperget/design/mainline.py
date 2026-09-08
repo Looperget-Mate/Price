@@ -187,6 +187,16 @@ def analyze(routes: Sequence[Dict], sources: Sequence[Dict]) -> Dict:
             warnings.append(f"'{r['name']}' 꺾임 {d:.0f}° > 45° @ {tuple(round(x, 1) for x in p)} — 규칙 3(T 양쪽) 검토")
 
     hdrs = headers(routes)
+
+    def _from_ref(r):
+        """출발점이 닿은 상대의 이름 — 급수점 이름 또는 다른 경로 이름(화면 「🔗 연결」용 · V100)."""
+        kind, v = r["from"]
+        if kind == "source":
+            return sources[v].get("name")
+        if kind in ("end", "mid"):
+            return R[v]["name"]
+        return None
+
     return {
         "total_m": round(total, 1),                      # 송수호스 길이 = 주배관 + 호스 인입관
         "rolls": math.ceil(total / ROLL_M),
@@ -200,7 +210,7 @@ def analyze(routes: Sequence[Dict], sources: Sequence[Dict]) -> Dict:
                     "material": r["material"],
                     "d_mm": (feeder_d_mm(r) if r["role"] == "feeder" else None),   # 계산 내경(규칙 21)
                     "len_m": round(r["len"], 1),
-                    "joints": r["joints"], "from": r["from"][0],
+                    "joints": r["joints"], "from": r["from"][0], "from_ref": _from_ref(r),
                     "bends": [[list(p), round(d, 1)] for p, d in r["bends"]]} for r in R],
         "tee_pts": [[list(p), tag] for p, tag in tee_pts],
         "end_pts": [list(p) for p in end_pts],

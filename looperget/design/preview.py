@@ -103,6 +103,41 @@ def zone_cap_by_pressure(main_m: float, lat_n: int, lat_m: float, n_max: int,
     return best
 
 
+def long_axis_u(poly: Sequence[Sequence[float]]) -> List[float]:
+    """밭 폴리곤의 **가장 긴 변**의 방향(단위벡터). 새 밭의 고랑 방향 기본값(V100).
+
+    대표 실사용 2026-09-08 — 새 밭은 u=(1,0)(동쪽)으로 시작해 기울어진 밭에서 가지관이
+    **사선**으로 나왔다. 농가는 보통 긴 경계와 나란히 고랑을 내므로 긴 변을 기본으로 둔다.
+    조정은 표의 각도나 🧭 로 한다(대표 입력). 부호는 `orient_u` 가 맞춘다."""
+    pts = [(float(p[0]), float(p[1])) for p in (poly or []) if p is not None and len(p) >= 2]
+    if len(pts) < 2:
+        return [1.0, 0.0]
+    best, bl = None, -1.0
+    for i in range(len(pts)):
+        p, q = pts[i], pts[(i + 1) % len(pts)]
+        L = math.hypot(q[0] - p[0], q[1] - p[1])
+        if L > bl:
+            bl, best = L, (q[0] - p[0], q[1] - p[1])
+    if not best or bl <= 1e-9:
+        return [1.0, 0.0]
+    return [round(best[0] / bl, 6), round(best[1] / bl, 6)]
+
+
+def orient_u(u: Sequence[float], center: Sequence[float],
+             ref: Optional[Sequence[float]]) -> List[float]:
+    """`u` 의 부호를 **급수원(또는 관)에서 밭 안쪽으로** 맞춘다.
+
+    🔴 `u` 는 「주배관 쪽 → 밭 안쪽」이다(`layout.py`). 뒤집히면 열이 주배관에 안 닿아
+    「급수 불가」가 뜬다(2026-09-08 실측 — 같은 밭이 u=[1,0] 0두 · u=[-1,0] 28두).
+    🧭 도구만 이 규칙을 적용하고 **표에 적은 각도는 그대로 들어가던** 것을 한곳으로 모았다(V100)."""
+    ux, uy = float(u[0]), float(u[1])
+    if ref is None:
+        return [round(ux, 6), round(uy, 6)]
+    if (float(center[0]) - float(ref[0])) * ux + (float(center[1]) - float(ref[1])) * uy < 0:
+        ux, uy = -ux, -uy
+    return [round(ux, 6), round(uy, 6)]
+
+
 def _lat_path(row, route_pts) -> List[List[float]]:
     """가지관 1열의 **실제 경로**. 주배관이 있고 직각에서 벗어나면 곡선으로 꺾인다(규칙 14).
 

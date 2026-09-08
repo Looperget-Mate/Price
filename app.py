@@ -1053,7 +1053,7 @@ from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 �
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
 if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V93)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V94)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1067,7 +1067,7 @@ try:
 except Exception:
     _LG_VER = 0
 if _LG_VER < 86:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V93)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V94)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -6147,6 +6147,7 @@ elif mode == "🏪 아쿠나리스":
 #   [V91] 둥글게 **기본 0**(#70) · 운전 구역·밸브를 지도 화면에서(#71)
 #   [V92] 밭만 그려도 **열·헤드·유량·권고 구역**이 나온다(#72)
 #   [V93] 간격을 고른다 · **예상 살수를 지도에** · 구역 자동 매김(#73)
+#   [V94] **고랑 방향을 지도에서**(#74) · 각도 수정이 먹게 · 간격 기본 14/14/7
 #   흐름 정본 = `_설계/_문진표/문진표_v1_농지.md` · 대표 확답 #43·#44
 #   🔴 캔버스를 새로 만들지 않는다(파일 기반 1안 · 대표 선택 2026-09-06).
 #      작도판 PNG를 내려받아 농민 확인 → 확인된 blocks/routes JSON을 올린다.
@@ -6459,6 +6460,25 @@ elif mode == "🗺️ 설계(P3)":
                                      weight=2, opacity=0.5, dash_array="4,6").add_to(_fgh)
                 _fgh.add_to(_M)
 
+            # 🧭 고랑 방향 — 밭마다 가운데를 지나는 선으로 그려 **눈으로 확인**하게 한다(#74).
+            for _bk in _pins["blocks"]:
+                _pg = _bk.get("polygon") or []
+                if len(_pg) < 3:
+                    continue
+                _uu = _bk.get("u") or [1.0, 0.0]
+                _cx = sum(q[0] for q in _pg) / len(_pg)
+                _cy = sum(q[1] for q in _pg) / len(_pg)
+                _ext = max(max(q[0] for q in _pg) - min(q[0] for q in _pg),
+                           max(q[1] for q in _pg) - min(q[1] for q in _pg)) * 0.42
+                _seg = [[_cx - _uu[0] * _ext, _cy - _uu[1] * _ext],
+                        [_cx + _uu[0] * _ext, _cy + _uu[1] * _ext]]
+                _ll = _p3m.from_local_m(_seg, _org)
+                _fo.PolyLine([[_q[1], _q[0]] for _q in _ll], color="#b6ff5c", weight=3,
+                             opacity=0.95, dash_array="14,7",
+                             tooltip="고랑 방향 %d° · %s"
+                                     % (round(math.degrees(math.atan2(_uu[1], _uu[0]))),
+                                        _bk.get("name") or "")).add_to(_M)
+
             # 🔴 한국어 이름표는 **Draw 보다 먼저** 붙는다(상수 주석 참조).
             _lc = _fo.MacroElement()
             _lc._template = _BrancaTemplate(P3_DRAW_LOCALE_JS)
@@ -6530,7 +6550,11 @@ elif mode == "🗺️ 설계(P3)":
                             {"id": "B%d" % (_i + 1), "name": chr(65 + _i),
                              "polygon_raw": _raw, "smooth": _sm, "polygon": _pg,
                              "area_m2": round(_p3m.polygon_area_m2(_pg), 1),
-                             "u": [1.0, 0.0], "crop": ""})
+                             "u": [1.0, 0.0], "crop": "",
+                             # 🔴 대표 확답 2026-09-08 — 「설치간격은 가지관이나 스프링클러나 14 m,
+                             #    첫 시작은 7 m」. 427B 권장값이고 **신규 현장의 기본**이다.
+                             #    (승인본 재현은 `reproduce.py` 가 자기 policy 를 주므로 무영향.)
+                             "policy": {"S": 14.0, "lat_gap": 14.0, "std": 7.0, "maxm": 8.0}})
                 if _lines:
                     # 🔵 [V93] 구역을 **그린 순서대로 1·2…** 로 매겨 둔다 — 표에서 고칠 수 있다.
                     #    비워 두면 「공통 구간(펌프→매니폴드)」이라 구역이 하나도 안 생기고,
@@ -6594,8 +6618,8 @@ elif mode == "🗺️ 설계(P3)":
 
             if _pins["blocks"]:
                 st.markdown("##### 🟨 밭 구역")
-                st.caption("**간격** — 기본은 **헤드 10 · 열 10 · 첫 여백 5 m**(승인 시공 배추밭). "
-                           "427B 권장은 **14 · 14 · 7** 입니다 — 넓히면 두수가 줄고, 좁히면 늘어납니다. "
+                st.caption("**간격** — 기본은 **헤드 14 · 열 14 · 첫 여백 7 m**"
+                           "(427B 권장 · 대표 확답 2026-09-08). 좁히면 두수가 늘고 촘촘해집니다. "
                            "바꾸면 위 지도의 **💦 예상 살수**와 아래 숫자가 다시 계산됩니다.")
                 st.caption("**둥글게 0~3** — 기본은 **0(그린 그대로)** 입니다. 올리면 모서리가 깎여 "
                            "부드러워지지만 **점이 적으면 계란처럼 됩니다** — 면적을 보고 정하세요. "
@@ -6608,9 +6632,9 @@ elif mode == "🗺️ 설계(P3)":
                                       "작물": _b.get("crop", ""),
                                       "고랑 방향(도)": round(math.degrees(
                                           math.atan2(_b["u"][1], _b["u"][0]))),
-                                      "헤드 간격(m)": float((_b.get("policy") or {}).get("S", 10.0)),
-                                      "열 간격(m)": float((_b.get("policy") or {}).get("lat_gap", 10.0)),
-                                      "첫 여백(m)": float((_b.get("policy") or {}).get("std", 5.0))}
+                                      "헤드 간격(m)": float((_b.get("policy") or {}).get("S", 14.0)),
+                                      "열 간격(m)": float((_b.get("policy") or {}).get("lat_gap", 14.0)),
+                                      "첫 여백(m)": float((_b.get("policy") or {}).get("std", 7.0))}
                                      for _i, _b in enumerate(_pins["blocks"])])
                 _bed = st.data_editor(
                     _bdf, width="stretch", hide_index=True, num_rows="dynamic",
@@ -6636,15 +6660,20 @@ elif mode == "🗺️ 설계(P3)":
                         continue
                     _b["name"] = ("" if pd.isna(_r["이름"]) else str(_r["이름"])) or _b["id"]
                     _b["crop"] = "" if pd.isna(_r["작물"]) else str(_r["작물"]).strip()
+                    # 🔴 [V94] 각도를 바꿔도 **다시 계산하라는 신호를 안 보내고 있었다** —
+                    #    값은 들어갔는데 미리보기·지도가 그대로라 「안 먹힌다」로 보였다(대표 2026-09-08).
                     _dg = _r["고랑 방향(도)"]
                     _th = math.radians(0.0 if pd.isna(_dg) else float(_dg))
-                    _b["u"] = [round(math.cos(_th), 6), round(math.sin(_th), 6)]
+                    _u_new = [round(math.cos(_th), 6), round(math.sin(_th), 6)]
+                    if _u_new != list(_b.get("u") or []):
+                        _b["u"] = _u_new
+                        _chg = True
                     # 둥글게는 **매번 그린 그대로에서 다시 만든다** — 깎은 것을 또 깎지 않는다.
                     # 간격 — 바뀌면 미리보기가 다시 돈다(캐시 서명에 policy 가 들어 있다).
                     _pol = dict(_b.get("policy") or {})
-                    for _key, _col, _dflt in (("S", "헤드 간격(m)", 10.0),
-                                              ("lat_gap", "열 간격(m)", 10.0),
-                                              ("std", "첫 여백(m)", 5.0)):
+                    for _key, _col, _dflt in (("S", "헤드 간격(m)", 14.0),
+                                              ("lat_gap", "열 간격(m)", 14.0),
+                                              ("std", "첫 여백(m)", 7.0)):
                         _val = _dflt if pd.isna(_r[_col]) else float(_r[_col])
                         _pol[_key] = _val
                     _pol.setdefault("maxm", max(6.0, float(_pol["std"]) + 1.0))
@@ -6665,7 +6694,49 @@ elif mode == "🗺️ 설계(P3)":
                 _pins["blocks"] = _new
                 if _pins["blocks"]:
                     _tot = sum(_b["area_m2"] for _b in _pins["blocks"])
-                    st.caption("합계 **%s m² (%s 평)** · %d구역"
+                    # 🧭 [V94] 고랑 방향을 **지도에서** 잡는다 — 각도를 숫자로 넣는 건 감이 안 온다.
+                #    ╱(선)으로 고랑을 하나 그어 두고 이 단추를 누르면 그 선의 방향이 들어간다.
+                st.caption("🧭 **고랑 방향을 지도에서 잡으려면** — 왼쪽 **╱(선)** 으로 고랑을 따라 "
+                           "선을 하나 긋고 아래 단추를 누르세요. **어느 쪽으로 그으셔도 됩니다** — "
+                           "급수원에서 밭 안쪽으로 향하게 알아서 돌려 놓습니다. "
+                           "그 뒤 그 선은 **🗑 로 지우고** 주배관을 그리시면 됩니다.")
+                if st.button("🧭 그린 선 %d개로 고랑 방향 잡기" % len(_lines),
+                             key="p3_furrow", disabled=not _lines):
+                    _fur = []
+                    for _f in _lines:
+                        _pp = _p3m.to_local_m(_f["geometry"]["coordinates"], _org)
+                        if len(_pp) >= 2:
+                            _dx = _pp[-1][0] - _pp[0][0]
+                            _dy = _pp[-1][1] - _pp[0][1]
+                            _n = math.hypot(_dx, _dy)
+                            if _n > 1e-6:
+                                _mid = [(_pp[0][0] + _pp[-1][0]) / 2, (_pp[0][1] + _pp[-1][1]) / 2]
+                                _fur.append((_mid, [_dx / _n, _dy / _n]))
+                    if _fur:
+                        for _b in _pins["blocks"]:
+                            _pg = _b.get("polygon") or []
+                            _c = [sum(q[0] for q in _pg) / len(_pg),
+                                  sum(q[1] for q in _pg) / len(_pg)] if _pg else [0, 0]
+                            # 밭마다 **가장 가까운 선**의 방향을 쓴다(선이 하나면 전부 같은 방향).
+                            _mid, _uu = min(_fur, key=lambda t: (t[0][0] - _c[0]) ** 2
+                                            + (t[0][1] - _c[1]) ** 2)
+                            # 🔴 `u` 는 **주배관 쪽 → 밭 안쪽**이다(`layout.py`) — 부호가 뒤집히면
+                            #    열이 주배관에 안 닿아 「급수 불가」가 뜬다(2026-09-08 실측).
+                            #    그린 선의 방향이 어느 쪽이든, **급수원에서 멀어지는 쪽**으로 돌려 놓는다.
+                            _ref = None
+                            if _pins["sources"]:
+                                _ref = min((_x["pt"] for _x in _pins["sources"]),
+                                           key=lambda q: (q[0] - _c[0]) ** 2 + (q[1] - _c[1]) ** 2)
+                            elif _pins["routes"]:
+                                _ref = min((q for _r2 in _pins["routes"] for q in _r2["pts"]),
+                                           key=lambda q: (q[0] - _c[0]) ** 2 + (q[1] - _c[1]) ** 2)
+                            if _ref is not None:
+                                if (_c[0] - _ref[0]) * _uu[0] + (_c[1] - _ref[1]) * _uu[1] < 0:
+                                    _uu = [-_uu[0], -_uu[1]]
+                            _b["u"] = [round(_uu[0], 6), round(_uu[1], 6)]
+                        st.session_state.p3_pins = _pins
+                        st.rerun()
+                st.caption("합계 **%s m² (%s 평)** · %d구역"
                                % (format(round(_tot), ","), format(round(_tot / 3.3058), ","),
                                   len(_pins["blocks"])))
 

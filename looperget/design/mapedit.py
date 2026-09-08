@@ -6,9 +6,10 @@ import json
 import math
 
 from . import geom as G, mapsrc, site
-from .layout import RowPolicy, rows_from_polygon
+from .layout import DROP_TOL, RowPolicy, rows_from_polygon
 
 HANDLE = "looperget_lateral"
+HEAD = "looperget_head"          # 스프링클러 빼기·되살리기 표식(대표 요청 2026-09-08)
 
 
 def drawing_snapshot(result, saved=None):
@@ -16,7 +17,7 @@ def drawing_snapshot(result, saved=None):
     incoming = (result or {}).get("all_drawings")
     features = saved if incoming is None else incoming
     return deepcopy([f for f in (features or [])
-                     if (f.get("properties") or {}).get("kind") != HANDLE])
+                     if (f.get("properties") or {}).get("kind") not in (HANDLE, HEAD)])
 
 
 def map_policy(policy=None):
@@ -50,6 +51,63 @@ def handles(preview, origin, rev):
                                        "block_index": block["block_index"], "row_index": i,
                                        "xy": xy}})
     return out
+
+
+def head_marks(preview, origin, rev):
+    """지도에서 누를 수 있는 스프링클러 표식. 놓인 헤드는 `drop`, 뺀 자리는 `restore`."""
+    out = []
+    for block in preview.get("blocks", []):
+        if "block_index" not in block:
+            continue
+        for action, pts in (("drop", block.get("head_pts") or []),
+                            ("restore", block.get("drop_pts") or [])):
+            for xy in pts:
+                lon, lat = mapsrc.from_local_m([xy], origin)[0]
+                out.append({"type": "Feature",
+                            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                            "properties": {"kind": HEAD, "revision": rev, "action": action,
+                                           "block_index": block["block_index"],
+                                           "xy": [round(float(xy[0]), 1), round(float(xy[1]), 1)]}})
+    return out
+
+
+def toggle_heads(blocks, features, rev):
+    """누른 스프링클러를 빼거나 되살린다. 바뀌면 복사본, 아니면 None + 안내.
+
+    🔴 자리는 **표식이 들고 있던 로컬 좌표**를 쓴다 — 클릭 위경도를 되돌려 계산하면
+      투영 오차가 붙어 옆 헤드를 빼는 일이 생긴다.
+    """
+    out = deepcopy(blocks)
+    hit = False
+    try:
+        for feature in features:
+            prop = feature.get("properties") or {}
+            if prop.get("kind") != HEAD or prop.get("revision") != rev:
+                continue
+            xy = [float(v) for v in prop["xy"]]
+            if not all(math.isfinite(v) for v in xy):
+                raise ValueError("올바르지 않은 지도 좌표입니다")
+            block = out[int(prop["block_index"])]
+            policy = dict(block.get("policy") or {})
+            drops = [[float(q[0]), float(q[1])] for q in (policy.get("drop_heads") or [])]
+            near = [q for q in drops if math.dist(q, xy) <= DROP_TOL]
+            if prop.get("action") == "restore":
+                if not near:
+                    continue
+                drops = [q for q in drops if q not in near]
+            else:
+                if near:
+                    continue                       # 이미 빠진 자리 — 두 번 넣지 않는다
+                drops.append([round(xy[0], 1), round(xy[1], 1)])
+            if drops:
+                policy["drop_heads"] = drops
+            else:
+                policy.pop("drop_heads", None)
+            block["policy"] = policy
+            hit = True
+    except (ValueError, TypeError, KeyError, IndexError, OverflowError) as exc:
+        return None, str(exc)
+    return (out, "") if hit else (None, "")
 
 
 def move_rows(blocks, routes, preview, features, origin, rev):
@@ -123,12 +181,16 @@ def merge_routes(existing, features, origin, default_role="main"):
     return out
 
 
-def draw_bridge(draw, handle_features, role="main", drafts=None):
-    """일반 마커 드래그를 draw:edited 이벤트로 전달; 손잡이는 급수원과 구별한다."""
+def draw_bridge(draw, handle_features, role="main", drafts=None, head_features=None):
+    """일반 마커 드래그를 draw:edited 이벤트로 전달; 손잡이는 급수원과 구별한다.
+
+    `head_features` = 스프링클러 표식(`head_marks`). **클릭**을 같은 통로로 보낸다.
+    """
     from branca.element import MacroElement, Template
     bridge = MacroElement()
     bridge.draw = draw
-    payload = json.dumps({"handles": handle_features, "role": role, "drafts": drafts or []},
+    payload = json.dumps({"handles": handle_features, "role": role, "drafts": drafts or [],
+                          "heads": head_features or []},
                          ensure_ascii=False).replace("<", "\\u003c")
     bridge._template = Template(r"""
 {% macro script(this, kwargs) %}
@@ -149,6 +211,22 @@ def draw_bridge(draw, handle_features, role="main", drafts=None):
      e.layer.setStyle({color:data.role==='feeder'?'#ffa040':'#ff4b4b',
                        dashArray:data.role==='feeder'?'12,8':null});
    }
+ });
+ (data.heads||[]).forEach(function(f){
+   const xy=f.geometry.coordinates, back=f.properties.action==='restore';
+   const mark=L.marker([xy[1],xy[0]], {
+     icon:L.divIcon({className:'p3-head-pick',iconSize:[22,22],iconAnchor:[11,11],
+       html:'<div style="background:'+(back?'rgba(60,66,72,.92)':'rgba(6,42,58,.92)')+
+            ';color:'+(back?'#d7dde3':'#7ff3ff')+';border:2px solid '+(back?'#9aa4ae':'#00e5ff')+
+            ';border-radius:50%;text-align:center;line-height:18px;font-size:12px;cursor:pointer">'+
+            (back?'✕':'●')+'</div>'})});
+   mark.feature=f;
+   mark.bindTooltip(back?'뺀 스프링클러 — 누르면 되살립니다':'누르면 이 스프링클러를 뺍니다');
+   mark.on('click', function(e){
+     if(e.originalEvent){L.DomEvent.stopPropagation(e.originalEvent);}
+     map.fire('draw:edited',{layer:mark,layers:L.featureGroup([mark])});
+   });
+   mark.addTo(map);
  });
  data.handles.forEach(function(f){
    const xy=f.geometry.coordinates;

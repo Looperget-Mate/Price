@@ -12,7 +12,8 @@ app.py에서 **자립도가 높은 출력 엔진**을 기계적으로 추출해 
 📌 모듈을 추가/변경할 때는 `PKG_VER`를 올리고, app.py의 가드 기준도 함께 올린다.
 """
 
-PKG_VER = 92   # [V100, 2026-09-08] 연결 판정(from_ref) · 고랑 방향 긴 변 기본·부호 자동(orient_u)
+PKG_VER = 93   # [V101, 2026-09-08] 스프링클러 빼기(layout.drop_heads · mapedit.toggle_heads) · 빈 작물 정규화
+#              [V100, 2026-09-08] 연결 판정(from_ref) · 고랑 방향 긴 변 기본·부호 자동(orient_u)
 #              [V79, 2026-09-06] design 패키지 — 「설계(P3)」 모드 연결(intake·mapsrc·design·bom)
 #              [V77, 2026-08-11] aq_print 가이드북 지면 — 통로 묶음(그룹명 '통로-쪽')·한 펼침면 한 통로
 

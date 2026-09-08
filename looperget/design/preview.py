@@ -170,7 +170,7 @@ def block_preview(blocks: Sequence[Dict], flow_lpm: Optional[float] = None,
                  for r in (routes or []) if len(r.get("pts") or []) >= 2 and _role(r) == "main"] or None
     prof = HZ.head_profile(model)
     rows_out: List[Dict] = []
-    n_heads = n_rows = 0
+    n_heads = n_rows = n_dropped = 0
     lat_total = 0.0
     main_est = 0.0
     area_all = 0.0
@@ -190,6 +190,10 @@ def block_preview(blocks: Sequence[Dict], flow_lpm: Optional[float] = None,
         heads = sum(len(r.heads) for r in rows)
         lat_m = sum(r.len for r in rows)
         area = _area_m2(poly)
+        # 🚫 대표가 **검토로 뺀 자리**(`policy.drop_heads`) — 위 숫자에는 이미 빠져 있다.
+        #    지도에 회색 ✕ 로 남겨 두어야 **되살릴 수 있다**(대표 요청 2026-09-08).
+        drops = [[round(float(q[0]), 1), round(float(q[1]), 1)]
+                 for q in (pol.drop_heads or []) if q is not None and len(q) >= 2]
         rows_out.append({"name": blk.get("name") or "?", "crop": blk.get("crop") or "",
                          "block_index": block_index,
                          "row_details": [{"a": r.a, "deg": r.deg, "p0": list(r.p0),
@@ -198,6 +202,7 @@ def block_preview(blocks: Sequence[Dict], flow_lpm: Optional[float] = None,
                                          for r in rows],
                          "area_m2": round(area, 1), "rows": len(rows), "heads": heads,
                          "lat_m": round(lat_m, 1),
+                         "drop_pts": drops, "dropped": len(drops),
                          "u_deg": round(math.degrees(math.atan2(u[1], u[0]))),
                          # 🔴 **실제로 쓴 간격**을 그대로 낸다 — 화면이 다른 값을 적으면 안 된다.
                          "spacing": {"head_m": pol.S, "row_m": pol.lat_gap, "first_m": pol.std},
@@ -207,11 +212,13 @@ def block_preview(blocks: Sequence[Dict], flow_lpm: Optional[float] = None,
                          "row_lines": [_lat_path(r, route_pts) for r in rows]})
         n_rows += len(rows)
         n_heads += heads
+        n_dropped += len(drops)
         lat_total += lat_m
         area_all += area
         main_est += _long_side_m(poly)
 
     out = {"schema": SCHEMA, "blocks": rows_out, "n_rows": n_rows, "n_heads": n_heads,
+           "n_dropped": n_dropped,
            "area_m2": round(area_all, 1), "lat_total_m": round(lat_total, 1),
            "main_est_m": round(main_est, 1),
            "spacing": {"head_m": None, "row_m": None, "first_m": None,
@@ -226,6 +233,10 @@ def block_preview(blocks: Sequence[Dict], flow_lpm: Optional[float] = None,
         out["spacing"].update(head_m=_h, row_m=_r, first_m=_f)
     elif len(_sp) > 1:
         out["notes"].append("밭마다 간격이 다릅니다 — 표에서 확인하세요.")
+
+    if n_dropped:
+        out["notes"].append("🚫 **검토로 뺀 스프링클러 %d두**는 위 숫자에서 이미 빠졌습니다 — "
+                            "지도의 회색 ✕ 를 다시 누르면 되살아납니다." % n_dropped)
 
     if n_heads == 0:
         out["notes"].append("밭을 먼저 그려 주세요 — 열·헤드가 나오지 않습니다.")

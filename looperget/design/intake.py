@@ -166,6 +166,11 @@ def to_site(answers: Dict, drawn: Optional[Dict] = None, name: Optional[str] = N
     blocks = []
     for b in (d.get("blocks") or []):
         b = dict(b)
+        # 🔴 작물은 **모르면 비운다.** 빈 칸은 「모른다」의 표현이지 값이 아니다 — 화면이 빈 칸을
+        #    ""로 넘기면 `site.validate` 가 「비어 있지 않은 문자열이어야 한다」로 설계를 막았다
+        #    (대표 실사용 2026-09-08 · 지도로 그린 밭은 전부 crop="" 이었다).
+        if _blank(b.get("crop")):
+            b.pop("crop", None)
         if not _blank(crop) and b.get("crop") is None:
             b["crop"] = str(crop).strip()          # 작물은 문진표가 유일한 출처다
         blocks.append(b)

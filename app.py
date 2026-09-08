@@ -1053,7 +1053,7 @@ from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 �
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
 if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V100)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V101)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1066,8 +1066,8 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 92:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V100)와 짝이 맞지 않습니다.\n\n"
+if _LG_VER < 93:
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V101)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -6156,6 +6156,8 @@ elif mode == "🏪 아쿠나리스":
 #   [V99] 지도 재생성 때 복원 도형의 집계·목록 반영 유지(None과 명시적 삭제 [] 구별)
 #   [V100] ②탭 🔗 연결 판정(④와 같은 `mainline.analyze`) · 새 밭 고랑 방향 = 긴 변 · 표 각도 부호 자동(`_p3_orient`) ·
 #          가지관 이동 거부 이유를 지도 아래에(대표 2026-09-08 「깜빡이고 원상복구」)
+#   [V101] 🚫 **스프링클러 빼기** — 지도에서 눌러 그 자리만 뺀다(되살리기 · 회색 ✕) ·
+#          작물 빈 칸을 None 으로(""가 ④ 설계를 막고 있었다 · 대표 2026-09-08)
 #   흐름 정본 = `_설계/_문진표/문진표_v1_농지.md` · 대표 확답 #43·#44
 #   🔴 캔버스를 새로 만들지 않는다(파일 기반 1안 · 대표 선택 2026-09-06).
 #      작도판 PNG를 내려받아 농민 확인 → 확인된 blocks/routes JSON을 올린다.
@@ -6449,6 +6451,31 @@ elif mode == "🗺️ 설계(P3)":
             _edit_rows = st.checkbox("↔ 가지관 위치 조정", value=True, key="p3_edit_rows")
             st.caption("가지관 가운데 **초록 ↔ 손잡이**를 잡고 옆으로 옮기세요. 놓으면 바로 반영됩니다. "
                        "**노란 점선**은 가지관 시작→첫 헤드 거리입니다. 주배관과 교차하지 않는 열은 밭 경계 기준입니다.")
+            # 🚫 [V101] 스프링클러 빼기 — 「표시한 곳의 스프링클러를 검토에 따라 뺄 수도 있어야
+            #    한다」(대표 2026-09-08). 밭 밖으로 살수가 새는 자리·길 쪽 자리를 **대표가 보고 뺀다.**
+            #    🔴 빼도 **남은 배치는 그대로 둔다** — 다시 풀어 벌리면 대표가 보고 결정한 그림이 바뀐다.
+            _pick_heads = st.checkbox("🚫 스프링클러 빼기 (지도에서 눌러서)", value=False,
+                                      key="p3_pick_heads", disabled=not _shw,
+                                      help="켜면 지도의 스프링클러가 눌리는 표식이 됩니다. "
+                                           "누르면 빠지고, 회색 ✕ 를 누르면 되살아납니다. "
+                                           "「💦 예상 살수 보기」가 켜져 있어야 합니다.")
+            if _pick_heads:
+                st.caption("🚫 지도에서 **파란 ● 를 누르면 그 스프링클러가 빠집니다**. "
+                           "**회색 ✕** 를 누르면 되살아납니다. 두수·가지관 길이·자재·유량이 바로 다시 계산됩니다. "
+                           "한 열의 스프링클러를 **전부** 빼면 그 가지관도 없어집니다. "
+                           "**간격·고랑 방향·밭 모양을 바꾸면** 헤드 자리가 통째로 옮겨지므로 "
+                           "빼 놓은 것은 풀립니다 — 그때는 다시 보고 빼시면 됩니다.")
+            _ndrop = sum(len((_b.get("policy") or {}).get("drop_heads") or [])
+                         for _b in _pins["blocks"])
+            if _ndrop:
+                _dc1, _dc2 = st.columns([3, 1])
+                _dc1.caption("🚫 지금 **%d두**를 빼 놓았습니다 — 두수·자재·유량에서 이미 빠진 값입니다." % _ndrop)
+                if _dc2.button("뺀 것 전부 되살리기", key="p3_drop_reset"):
+                    for _b in _pins["blocks"]:
+                        (_b.get("policy") or {}).pop("drop_heads", None)
+                    st.session_state.pop("p3_result", None)
+                    st.session_state.pop("p3_site", None)
+                    st.rerun()
             if any((_b.get("policy") or {}).get("manual_rows") is not None for _b in _pins["blocks"]):
                 st.caption("수동으로 옮긴 열 위치를 유지 중입니다. 열 간격·고랑 방향·밭 모양을 바꾸면 자동배치로 돌아갑니다.")
                 if st.button("가지관 자동배치로 되돌리기", key="p3_reset_rows"):
@@ -6511,7 +6538,7 @@ elif mode == "🗺️ 설계(P3)":
 
             # 💦 예상 살수 — 헤드 자리와 반경. 그린 것과 겹쳐 보아야 「이렇게 젖는다」가 보인다.
             _pvm = st.session_state.get("p3_preview") or {}
-            if _shw and _pvm.get("n_heads"):
+            if _shw and (_pvm.get("n_heads") or _pvm.get("n_dropped")):
                 _rad = float((_pvm.get("spacing") or {}).get("radius_m") or 10.0)
                 _fgh = _fo.FeatureGroup(name="💦 예상 살수 (%d두)" % _pvm["n_heads"], show=True)
                 for _bp in (_pvm.get("blocks") or []):
@@ -6522,6 +6549,13 @@ elif mode == "🗺️ 설계(P3)":
                                    fill_opacity=0.10).add_to(_fgh)
                         _fo.CircleMarker([_la, _lo], radius=2, color="#00e5ff", weight=2,
                                          fill=True, fill_opacity=1).add_to(_fgh)
+                    # 🚫 [V101] 뺀 자리는 **지워 없애지 않고 회색 ✕ 로 남긴다** — 되살릴 수 있어야 한다.
+                    for _dp in (_bp.get("drop_pts") or []):
+                        _lo, _la = _p3m.from_local_m([_dp], _org)[0]
+                        _fo.CircleMarker([_la, _lo], radius=5, color="#9aa4ae", weight=2,
+                                         fill=True, fill_color="#3c4248", fill_opacity=0.85,
+                                         tooltip="뺀 스프링클러 — 「🚫 스프링클러 빼기」를 켜고 누르면 되살아납니다"
+                                         ).add_to(_fgh)
                     # 가지관 — **실제 경로**다. 주배관과 직각이 아니면 분기부가 곡선으로 꺾인다(규칙 14).
                     for _rl in (_bp.get("row_lines") or []):
                         _ll = _p3m.from_local_m(_rl, _org)
@@ -6580,7 +6614,9 @@ elif mode == "🗺️ 설계(P3)":
                                                 "fillColor": "#78dcff", "fillOpacity": 0.12,
                                                 "maintainColor": False}}).add_to(_M)
             _p3edit.draw_bridge(_draw, _p3edit.handles(_pvm, _org, _rev) if _edit_rows else [],
-                                role=_draw_role, drafts=st.session_state.get("p3_map_drafts") or []).add_to(_M)
+                                role=_draw_role, drafts=st.session_state.get("p3_map_drafts") or [],
+                                head_features=(_p3edit.head_marks(_pvm, _org, _rev)
+                                               if (_shw and _pick_heads) else [])).add_to(_M)
             _FoGeo(collapsed=True, position="topright", add_marker=False, zoom=18).add_to(_M)
             try:
                 _vkey = (_p3m._keys().get("vworld") or {}).get("key", "")
@@ -6616,6 +6652,19 @@ elif mode == "🗺️ 설계(P3)":
             _moved, _move_error = _p3edit.move_rows(_pins["blocks"], _pins["routes"], _pvm,
                                                   [(_out or {}).get("last_active_drawing") or {}], _org, _rev)
             st.session_state.p3_map_drafts = _dws
+            # 🚫 [V101] 스프링클러 빼기·되살리기. 손잡이와 **같은 통로**(draw:edited)로 오고
+            #    표식의 `kind` 로 갈린다. 지난 클릭은 `revision` 이 달라 다시 적용되지 않는다.
+            _dropped, _drop_error = _p3edit.toggle_heads(
+                _pins["blocks"], [(_out or {}).get("last_active_drawing") or {}], _rev)
+            if _drop_error:
+                st.session_state.p3_row_message = "스프링클러를 빼지 못했습니다: " + _drop_error
+                st.session_state.p3_map_epoch = st.session_state.get("p3_map_epoch", 0) + 1
+                st.rerun()
+            if _dropped is not None:
+                _pins["blocks"] = _dropped
+                st.session_state.pop("p3_result", None)
+                st.session_state.pop("p3_site", None)
+                st.rerun()
             if _move_error:
                 st.session_state.p3_row_message = "가지관 이동을 적용하지 못했습니다: " + _move_error
                 st.session_state.p3_map_epoch = st.session_state.get("p3_map_epoch", 0) + 1
@@ -6661,7 +6710,9 @@ elif mode == "🗺️ 설계(P3)":
                             {"id": "B%d" % (_i + 1), "name": chr(65 + _i),
                              "polygon_raw": _raw, "smooth": _sm, "polygon": _pg,
                              "area_m2": round(_p3m.polygon_area_m2(_pg), 1),
-                             "u": _u0, "crop": "",
+                             # 🔴 [V101] 작물은 **모르면 None**. ""로 두었더니 ④에서
+                             #    「crop 은 비어 있지 않은 문자열이어야 한다」로 설계가 멈췄다.
+                             "u": _u0, "crop": None,
                              # 🔴 대표 확답 2026-09-08 — 「설치간격은 가지관이나 스프링클러나 14 m,
                              #    첫 시작은 7 m」. 427B 권장값이고 **신규 현장의 기본**이다.
                              #    (승인본 재현은 `reproduce.py` 가 자기 policy 를 주므로 무영향.)
@@ -6742,7 +6793,7 @@ elif mode == "🗺️ 설계(P3)":
                                       "둥글게": int(_b.get("smooth", 0)),
                                       "면적(m²)": _b["area_m2"],
                                       "평": round(_b["area_m2"] / 3.3058),
-                                      "작물": _b.get("crop", ""),
+                                      "작물": _b.get("crop") or "",
                                       "고랑 방향(도)": round(math.degrees(
                                           math.atan2(_b["u"][1], _b["u"][0]))),
                                       "헤드 간격(m)": float((_b.get("policy") or {}).get("S", 14.0)),
@@ -6771,10 +6822,11 @@ elif mode == "🗺️ 설계(P3)":
                     _b = _byid.get(_r["id"])
                     if not _b:
                         continue
-                    _old_labels = (_b.get("name"), _b.get("crop", ""))
+                    _old_labels = (_b.get("name"), _b.get("crop") or "")
                     _b["name"] = ("" if pd.isna(_r["이름"]) else str(_r["이름"])) or _b["id"]
-                    _b["crop"] = "" if pd.isna(_r["작물"]) else str(_r["작물"]).strip()
-                    if _old_labels != (_b["name"], _b["crop"]):
+                    # 🔴 [V101] 빈 칸 = 「모른다」 = None. ""는 값이 아니라서 설계가 거부한다.
+                    _b["crop"] = ("" if pd.isna(_r["작물"]) else str(_r["작물"]).strip()) or None
+                    if _old_labels != (_b["name"], _b["crop"] or ""):
                         _chg = True
                     # 🔴 [V94] 각도를 바꿔도 **다시 계산하라는 신호를 안 보내고 있었다** —
                     #    값은 들어갔는데 미리보기·지도가 그대로라 「안 먹힌다」로 보였다(대표 2026-09-08).
@@ -6795,6 +6847,7 @@ elif mode == "🗺️ 설계(P3)":
                     if _u_new != _u_old:
                         _b["u"] = _u_new
                         (_b.get("policy") or {}).pop("manual_rows", None)
+                        (_b.get("policy") or {}).pop("drop_heads", None)
                         _chg = True
                     # 둥글게는 **매번 그린 그대로에서 다시 만든다** — 깎은 것을 또 깎지 않는다.
                     # 간격 — 바뀌면 미리보기가 다시 돈다(캐시 서명에 policy 가 들어 있다).
@@ -6803,6 +6856,10 @@ elif mode == "🗺️ 설계(P3)":
                                               ("lat_gap", "열 간격(m)", 14.0),
                                               ("std", "첫 여백(m)", 7.0)):
                         _val = _dflt if pd.isna(_r[_col]) else float(_r[_col])
+                        if _val != _pol.get(_key):
+                            # 🚫 [V101] 간격이 바뀌면 헤드 자리가 통째로 옮겨진다 —
+                            #    빼 놓은 자리는 뜻을 잃으므로 함께 푼다(다시 보고 빼신다).
+                            _pol.pop("drop_heads", None)
                         if _key == "lat_gap" and _val != _pol.get(_key):
                             _pol.pop("manual_rows", None)
                         _pol[_key] = _val
@@ -6816,6 +6873,7 @@ elif mode == "🗺️ 설계(P3)":
                     _sm = 0 if pd.isna(_r["둥글게"]) else int(_r["둥글게"])
                     if _sm != int(_b.get("smooth", -1)) or not _b.get("polygon"):
                         (_b.get("policy") or {}).pop("manual_rows", None)
+                        (_b.get("policy") or {}).pop("drop_heads", None)
                         _b["smooth"] = _sm
                         _b["polygon"] = _p3m.smooth_ring(_b.get("polygon_raw") or _b["polygon"], _sm)
                         _b["area_m2"] = round(_p3m.polygon_area_m2(_b["polygon"]), 1)
@@ -6861,6 +6919,7 @@ elif mode == "🗺️ 설계(P3)":
                             #    그린 선의 방향이 어느 쪽이든, **급수원에서 멀어지는 쪽**으로 돌려 놓는다(V100: `_p3_orient`).
                             _b["u"] = _p3_orient(_uu, _b, _pins)
                             (_b.get("policy") or {}).pop("manual_rows", None)
+                            (_b.get("policy") or {}).pop("drop_heads", None)
                         st.session_state.p3_pins = _pins
                         st.rerun()
                 st.caption("합계 **%s m² (%s 평)** · %d구역"
@@ -6985,7 +7044,7 @@ elif mode == "🗺️ 설계(P3)":
                                   _sp["radius_m"], format(round(_pv["lat_total_m"]), ",")))
                     if len(_pv.get("blocks") or []) > 1:
                         st.dataframe(pd.DataFrame(
-                            [{"밭": _x.get("name"), "작물": _x.get("crop", ""),
+                            [{"밭": _x.get("name"), "작물": _x.get("crop") or "",
                               "면적(m²)": _x.get("area_m2"), "열": _x.get("rows"),
                               "헤드(두)": _x.get("heads"), "가지관(m)": _x.get("lat_m"),
                               "고랑(도)": _x.get("u_deg")} for _x in _pv["blocks"]]),
@@ -7276,6 +7335,10 @@ elif mode == "🗺️ 설계(P3)":
             _m2.metric("가지관 열", "%d 열" % _res["n_laterals"])
             _m3.metric("주배관", "%.0f m" % _res["mainline"]["total_m"])
             _m4.metric("자재 합계", format((_res["money"] or {}).get("total", 0), ",") + " 원")
+            _nd4 = sum(len((_b.get("policy") or {}).get("drop_heads") or [])
+                       for _b in (_site.get("blocks") or []))
+            if _nd4:
+                st.caption("🚫 ②에서 **검토로 빼신 스프링클러 %d두**가 빠진 결과입니다." % _nd4)
             _mm = int(_res.get("main_mm") or _p3p.APPROVED_MAIN_MM)
             st.caption("주배관 %s — **%s**. 여유 하한은 두지 않습니다: 말단 1.5 bar 를 지키는 "
                        "가장 가는 관을 고릅니다."

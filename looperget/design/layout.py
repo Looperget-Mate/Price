@@ -19,6 +19,10 @@ from . import geom as G
 
 Pt = Tuple[float, float]
 
+# 🔴 대표가 **검토로 뺀 헤드**를 다시 찾을 때 쓰는 허용 오차(m). P3 표의 헤드 간격 하한이 4 m 라
+#    그 절반보다 작게 잡는다 — 옆 헤드를 잘못 빼면 안 된다.
+DROP_TOL = 1.5
+
 
 # ── 헤드 모델별 배치 기본값 (설계 규칙 20 · 대표 2026-09-04) ──
 # 기본은 **프로필**이 정한다. RowPolicy의 데이터클래스 기본값(10/10/5)은 배추밭 5필지의 「농가 요청 조정값」이고
@@ -77,6 +81,10 @@ class RowPolicy:
     scan_origin: Pt = (0.0, 0.0)    # 격자 원점(01 = O · 02 = (0,0))
 
     manual_rows: Optional[List[Dict]] = None     # 지도에서 확정한 열별 {a, deg}; 자동 재정렬하지 않음
+    # 🔴 대표가 지도에서 **빼기로 한 헤드 자리**(로컬 m). 배치를 다시 풀지 않고 **그 자리만 뺀다** —
+    #    남은 헤드를 다시 벌리면 대표가 보고 결정한 그림이 바뀐다(대표 요청 2026-09-08).
+    #    한 열의 헤드를 전부 빼면 **그 가지관도 없어진다**(헤드 없는 호스는 깔지 않는다).
+    drop_heads: Optional[List[Pt]] = None
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -241,12 +249,15 @@ class Block:
         if best is None:
             return None
         _, deg, off, hs, uu = best
-        last = G.dist(p0, hs[-1])
-        ext = P.ext
+        p1, hose = self._hose_end(p0, uu, G.dist(p0, hs[-1]))
+        return Row(a=a, p0=p0, p1=p1, dir=uu, heads=list(hs), off=off, deg=deg, len=hose)
+
+    def _hose_end(self, p0: Pt, uu: Pt, last: float) -> Tuple[Pt, float]:
+        """마지막 헤드 뒤 호스 여유(ext)를 경계 안에서 0.5 m씩 줄여 호스 끝과 길이를 정한다."""
+        ext = self.P.ext
         while ext > 0 and not self.inside((p0[0] + uu[0] * (last + ext), p0[1] + uu[1] * (last + ext))):
             ext -= 0.5
-        p1 = (p0[0] + uu[0] * (last + ext), p0[1] + uu[1] * (last + ext))
-        return Row(a=a, p0=p0, p1=p1, dir=uu, heads=list(hs), off=off, deg=deg, len=round(last + ext, 1))
+        return (p0[0] + uu[0] * (last + ext), p0[1] + uu[1] * (last + ext)), round(last + ext, 1)
 
     def _row_along(self, a: float) -> Optional[Row]:
         """01·02 방식: 열 방향의 진입·이탈만 보고(경계 2D 이격 없음) 첫 헤드 여백 + 끝 여유."""
@@ -315,6 +326,36 @@ class Block:
             i += 1
         return out
 
+    def drop(self) -> "Block":
+        """대표가 검토로 뺀 헤드를 배치에서 덜어낸다(`RowPolicy.drop_heads`).
+
+        🔴 **배치를 다시 풀지 않는다.** 빼면 그 자리만 빈다 — 남은 헤드를 다시 벌리면
+          대표가 지도에서 보고 결정한 그림이 바뀐다. 호스 끝(`p1`·`len`)만 다시 잡는다.
+        """
+        pts = [(float(q[0]), float(q[1])) for q in (self.P.drop_heads or [])
+               if q is not None and len(q) >= 2]
+        if not pts:
+            return self
+        kept: List[Row] = []
+        for r in self.rows:
+            hs = [h for h in r.heads if min(G.dist(h, q) for q in pts) > DROP_TOL]
+            if len(hs) == len(r.heads):
+                kept.append(r)
+                continue
+            if not hs:
+                continue                       # 열의 헤드를 전부 빼면 그 가지관도 없어진다
+            r.heads = hs
+            last = G.dist(r.p0, hs[-1])
+            if self.P.mode == "along_row":     # 01·02 방식은 마지막 헤드 뒤 여유가 고정이다
+                hose = last + self.P.tail
+                r.p1 = (r.p0[0] + r.dir[0] * hose, r.p0[1] + r.dir[1] * hose)
+                r.len = round(hose, 1)
+            else:
+                r.p1, r.len = self._hose_end(r.p0, r.dir, last)
+            kept.append(r)
+        self.rows = kept
+        return self
+
     def solve(self) -> "Block":
         P = self.P
         if P.manual_rows is not None:
@@ -327,7 +368,7 @@ class Block:
                 if row is None:
                     raise ValueError("옮긴 가지관에 헤드를 놓을 수 없습니다. 밭 안쪽으로 옮겨 주세요.")
                 self.rows.append(row)
-            return self
+            return self.drop()
         cs = [P.anchor_fixed] if P.anchor_fixed is not None else _frange(*P.anchor_sweep)
         best = None
         for c in cs:
@@ -349,7 +390,7 @@ class Block:
         _, self.c1, self.c2, self.rows = best
         if P.refine and P.mode == "edge2d":
             self.refine()
-        return self
+        return self.drop()
 
     def refine(self, rounds: int = 2) -> "Block":
         """평행이 기본. 두수가 모자란 열부터 ±swing 각도를 훑어 더 들어가면 바꾼다(이웃 이격 min_sep)."""

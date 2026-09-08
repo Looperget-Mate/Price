@@ -41,13 +41,130 @@ def _slug(s: str) -> str:
     return re.sub(r"[^\w가-힣\-]+", "_", s).strip("_")
 
 
+def _price_db(meta: Dict) -> Dict:
+    """단가 DB — **경로**(P2 파일)와 **값**(P3 앱이 시트에서 읽은 dict) 둘 다 받는다."""
+    pdb = meta.get("price_db")
+    if isinstance(pdb, dict):
+        return pdb
+    if isinstance(pdb, str) and pdb:
+        try:
+            with open(pdb, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+# ══════════════ P3(지도) → job ══════════════
+# 🔴 좌표계가 다르다. P3 는 **북쪽이 +y**(지도), 제안서 지면은 **아래쪽이 +y**(승인본 작도 · MapFrame).
+#    그래서 지면으로 넘길 때 y 의 부호를 뒤집는다 — **배치를 다시 풀지 않는다.**
+#    (밭을 뒤집어 다시 계산하면 앵커가 반대 변에서 시작해 열이 달라진다 — ②에서 본 그림과 달라진다.)
+def _fy(q):
+    return [float(q[0]), -float(q[1])]
+
+
+def _fpts(seq):
+    return [_fy(q) for q in (seq or [])]
+
+
+def flip_y(site: Dict, design: Dict):
+    """P3(북쪽 +y) → 지면(아래쪽 +y). 좌표를 담은 칸만 골라서 뒤집는다(순수 · 복사본)."""
+    import copy as _c
+    site, design = _c.deepcopy(site), _c.deepcopy(design)
+    for b in site.get("blocks") or []:
+        b["polygon"] = _fpts(b.get("polygon"))
+        if b.get("polygon_raw"):
+            b["polygon_raw"] = _fpts(b["polygon_raw"])
+        if b.get("u"):
+            b["u"] = _fy(b["u"])
+        if b.get("bars"):
+            b["bars"] = [[_fy(a), _fy(c)] for a, c in b["bars"]]
+    for r in site.get("routes") or []:
+        r["pts"] = _fpts(r.get("pts"))
+    for x in site.get("sources") or []:
+        x["pt"] = _fy(x["pt"])
+    for l in design.get("laterals") or []:
+        for k in ("p0", "p1", "dir", "tap"):
+            if l.get(k):
+                l[k] = _fy(l[k])
+        l["heads"] = _fpts(l.get("heads"))
+        if l.get("path"):
+            l["path"] = _fpts(l["path"])
+    for h in design.get("heads") or []:
+        h["pt"] = _fy(h["pt"])
+    m = design.get("mainline") or {}
+    for hd in m.get("headers") or []:
+        hd["pt"] = _fy(hd["pt"])
+    for r in m.get("routes") or []:
+        if r.get("bends"):
+            r["bends"] = [[_fy(q), d] for q, d in r["bends"]]
+    m["tee_pts"] = [[_fy(q), tag] for q, tag in (m.get("tee_pts") or [])]
+    m["end_pts"] = _fpts(m.get("end_pts"))
+    return site, design
+
+
+def map_contract(frame: Dict, origin, png_path: str, site: Dict, pad_m: float = 12.0) -> Dict:
+    """`meta["map"]` — 지면이 읽는 **좌표 계약**(render_pptx.Map). 좌표는 이미 뒤집힌 것을 넣는다.
+
+    `frame` = mapsrc 프레임(작도판과 같은 것) · `origin` = 그 좌표들의 기준 원점.
+    """
+    from . import mapsrc as _ms
+    W, H = frame["size"]
+    mpp = float(frame["m_per_px"])
+    xs, ys = [], []
+    for b in site.get("blocks") or []:
+        for q in b.get("polygon") or []:
+            xs.append(q[0])
+            ys.append(q[1])
+    for r in site.get("routes") or []:
+        for q in r.get("pts") or []:
+            xs.append(q[0])
+            ys.append(q[1])
+    for x in site.get("sources") or []:
+        xs.append(x["pt"][0])
+        ys.append(x["pt"][1])
+    if not xs:
+        raise ValueError("지면에 얹을 좌표가 없다")
+    crop = [min(xs) - pad_m, min(ys) - pad_m, max(xs) + pad_m, max(ys) + pad_m]
+    wide = [min(xs) - pad_m * 2.2, min(ys) - pad_m * 2.2, max(xs) + pad_m * 2.2, max(ys) + pad_m * 2.2]
+    # 🔵 계약은 **선형**이고 지도 화소는 메르카토르라 조금 휜다. 그래서 상수(중심 m/px)로 잡지 않고
+    #    **대상지 두 모서리에서 정확히 맞도록** 눈금을 뽑는다 — 밭 안에서는 오차가 사실상 0 이 된다.
+    #    (300×120 m 실측: 중심 상수 0.81 m → 두 모서리 맞춤 0.0x m.)
+    ax, ay = min(xs), min(ys)                      # 뒤집힌 좌표(아래쪽 +y)
+    bx, by = max(xs), max(ys)
+    pa = _ms.to_px(frame, *_ms.from_local_m([[ax, -ay]], origin)[0])
+    pb = _ms.to_px(frame, *_ms.from_local_m([[bx, -by]], origin)[0])
+    sx = (pb[0] - pa[0]) / (bx - ax) if abs(bx - ax) > 1e-6 else 1.0 / mpp
+    sy = (pb[1] - pa[1]) / (by - ay) if abs(by - ay) > 1e-6 else 1.0 / mpp
+    if not (sx > 0 and sy > 0):                    # 뒤집힌 좌표에서 두 눈금은 모두 양수여야 한다
+        sx = sy = 1.0 / mpp
+    px0 = pa[0] - ax * sx
+    py0 = pa[1] - ay * sy
+    return {"png": png_path, "m_per_in": 1.0,
+            "pic": {"left_in": -px0 / sx, "top_in": -py0 / sy,
+                    "w_in": W / sx, "h_in": H / sy, "src": [0, 0, W, H]},
+            "crop_m": [round(v, 1) for v in crop], "wide_m": [round(v, 1) for v in wide]}
+
+
+def job_from_p3(site: Dict, design: Dict, *, frame: Dict, origin, png_path: str,
+                meta: Optional[Dict] = None) -> Dict:
+    """지도로 그린 설계(P3) → 제안서·견적서 job. **값은 만들지 않는다** — 나온 설계를 옮길 뿐이다."""
+    fsite, fdesign = flip_y(site, design)
+    m = dict(meta or {})
+    m.setdefault("name", site.get("name") or "대상지")
+    m.setdefault("parcel", site.get("name") or "")
+    m.setdefault("site_label", site.get("name") or "")
+    m.setdefault("site_short", "관수 설계")
+    m["map"] = map_contract(frame, origin, png_path, fsite)
+    return {"schema": SCHEMA_JOB, "site": fsite, "design": fdesign, "meta": m}
+
+
 def run(job: Dict, out_dir: Optional[str] = None, *, pdf: bool = False, png: bool = False,
         xlsx: bool = True, verbose: bool = True) -> Dict:
     assert job.get("schema") == SCHEMA_JOB, "job schema != %s" % SCHEMA_JOB
     meta = job.setdefault("meta", {})
     if "design" not in job or not job["design"]:
-        price_db = json.load(open(meta["price_db"], encoding="utf-8")) if meta.get("price_db") else None
-        job["design"] = _design(job["site"], price_db)
+        job["design"] = _design(job["site"], _price_db(meta) or None)
     S = _summary.build(job)
     date = meta.get("date") or _date.today().isoformat()
     out_dir = out_dir or meta.get("out_dir") or os.path.join(ROOT, "_제안", "P2_" + _slug(S["name"]))
@@ -73,7 +190,7 @@ def run(job: Dict, out_dir: Optional[str] = None, *, pdf: bool = False, png: boo
 
     if xlsx:
         q = meta.get("quote", {})
-        price_db = json.load(open(meta["price_db"], encoding="utf-8")) if meta.get("price_db") else {}
+        price_db = _price_db(meta)
         remarks = q.get("remarks")
         if isinstance(remarks, list):
             remarks = "\n".join(remarks)

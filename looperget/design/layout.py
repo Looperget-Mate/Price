@@ -22,6 +22,8 @@ Pt = Tuple[float, float]
 # 🔴 대표가 **검토로 뺀 헤드**를 다시 찾을 때 쓰는 허용 오차(m). P3 표의 헤드 간격 하한이 4 m 라
 #    그 절반보다 작게 잡는다 — 옆 헤드를 잘못 빼면 안 된다.
 DROP_TOL = 1.5
+ADD_MIN_SEP = 2.0    # 이미 놓인 헤드와 이만큼(m) 안이면 같은 자리로 본다 — 두 번 놓지 않는다
+ADD_FAR = 0.75       # 누른 자리가 가지관에서 열 간격의 이 배보다 멀면 붙일 열을 못 고른다
 
 
 # ── 헤드 모델별 배치 기본값 (설계 규칙 20 · 대표 2026-09-04) ──
@@ -39,6 +41,10 @@ HEAD_PROFILES: Dict[str, Dict] = {
         "nozzle_bar": 3.0,          # 그때의 압력(노즐 K 산출점)
         "r_ref": (1.5, 10.0),       # 대표 실증 기준점: 1.5 bar = 반경 10 m
         "r_slope": 2.0,             # bar당 +2 m (2.5 bar = 12 m)
+        # 🔵 안쪽 원 = **귀환 살수 7 m(고정)**. 임팩트 헤드는 조절 반경(바깥) 안쪽으로도 물이 돌아온다 —
+        #    승인 제안서가 이미 두 겹으로 그린다(`tools/agri_overlay.spray_double` r_in=7 · 대표 교정 2026-08-26).
+        #    지도에도 같은 원을 얹는다(대표 요청 2026-09-08) — 지면과 화면이 다른 그림이면 안 된다.
+        "r_in": 7.0,
         "note": "360° 기준 첫 헤드 7 m · 이후 14 m (2~3 bar · 반경 12 m)"},
 }
 
@@ -85,6 +91,13 @@ class RowPolicy:
     #    남은 헤드를 다시 벌리면 대표가 보고 결정한 그림이 바뀐다(대표 요청 2026-09-08).
     #    한 열의 헤드를 전부 빼면 **그 가지관도 없어진다**(헤드 없는 호스는 깔지 않는다).
     drop_heads: Optional[List[Pt]] = None
+    # 🔵 대표가 지도에서 **더 놓은 헤드**(로컬 m). 가장 가까운 가지관에 **투영해서** 붙인다 —
+    #    가지관에 붙지 않은 헤드는 물을 못 받는다(대표 요청 2026-09-08).
+    add_heads: Optional[List[Pt]] = None
+    # 🔵 **열 안 균등 정렬** — 첫 헤드와 마지막 헤드를 **그대로 두고** 사이를 고르게 나눈다.
+    #    규칙 11 말단 보충이 끝을 좁히면 「6번과 7번 사이만 좁다」가 된다(대표 2026-09-08).
+    #    두수는 바뀌지 않는다 — **자리만 고르게** 한다.
+    even_spacing: bool = False
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -356,6 +369,71 @@ class Block:
         self.rows = kept
         return self
 
+    def add(self) -> "Block":
+        """대표가 지도에서 더 놓은 헤드(`RowPolicy.add_heads`)를 **가장 가까운 가지관에 투영해** 넣는다.
+
+        🔴 가지관에 붙지 않은 헤드는 물을 못 받는다 — 그래서 누른 자리를 그대로 쓰지 않고
+          그 열의 축 위로 옮긴다. 넣을 열을 못 고르면 그 점은 버린다(경고는 화면이 낸다).
+        """
+        pts = [(float(q[0]), float(q[1])) for q in (self.P.add_heads or [])
+               if q is not None and len(q) >= 2]
+        if not pts or not self.rows:
+            return self
+        far = max(self.P.lat_gap * ADD_FAR, 3.0)
+        for q in pts:
+            best = None
+            for r in self.rows:
+                t = G.dot(G.sub(q, r.p0), r.dir)              # 열 방향 거리
+                if t <= 0:
+                    continue                                  # 주배관 뒤쪽에는 놓지 않는다
+                foot = (r.p0[0] + r.dir[0] * t, r.p0[1] + r.dir[1] * t)
+                d = G.dist(q, foot)
+                if d <= far and (best is None or d < best[0]):
+                    best = (d, r, t, foot)
+            if best is None:
+                continue
+            _, r, t, foot = best
+            h = (round(foot[0], 1), round(foot[1], 1))
+            if not self.inside(h) or self.edge_dist(h) < self.P.tail_floor:
+                continue                                      # 밭 밖·경계에 너무 붙은 자리
+            if any(G.dist(h, x) <= ADD_MIN_SEP for x in r.heads):
+                continue                                      # 이미 그 자리에 있다
+            hs = sorted(r.heads + [h], key=lambda x: G.dot(G.sub(x, r.p0), r.dir))
+            r.heads = hs
+            last = G.dist(r.p0, hs[-1])
+            if self.P.mode == "along_row":
+                hose = last + self.P.tail
+                r.p1 = (r.p0[0] + r.dir[0] * hose, r.p0[1] + r.dir[1] * hose)
+                r.len = round(hose, 1)
+            else:
+                r.p1, r.len = self._hose_end(r.p0, r.dir, last)
+        return self
+
+    def even(self) -> "Block":
+        """열 안 헤드를 **고르게** 놓는다 — 첫·마지막은 그대로, 사이를 같은 간격으로(`even_spacing`).
+
+        규칙 11 말단 보충 헤드가 끝을 좁히면 「6번과 7번 사이만 좁다」가 된다(대표 2026-09-08).
+        🔴 **두수는 바뀌지 않는다.** 자리만 고른다. 옮긴 자리가 밭 밖이거나 경계에 너무 붙으면
+          그 열은 **손대지 않는다** — 고르게 만들자고 밭을 벗어날 수는 없다.
+        """
+        if not self.P.even_spacing:
+            return self
+        for r in self.rows:
+            n = len(r.heads)
+            if n < 3:
+                continue                                      # 사이가 없으면 고를 것도 없다
+            a, b = r.heads[0], r.heads[-1]
+            L = G.dist(a, b)
+            if L <= 0:
+                continue
+            u = ((b[0] - a[0]) / L, (b[1] - a[1]) / L)
+            gap = L / (n - 1)
+            hs = [a] + [(round(a[0] + u[0] * gap * k, 1), round(a[1] + u[1] * gap * k, 1))
+                        for k in range(1, n - 1)] + [b]
+            if all(self.inside(h) and self.edge_dist(h) >= self.P.tail_floor for h in hs):
+                r.heads = hs
+        return self
+
     def solve(self) -> "Block":
         P = self.P
         if P.manual_rows is not None:
@@ -368,7 +446,7 @@ class Block:
                 if row is None:
                     raise ValueError("옮긴 가지관에 헤드를 놓을 수 없습니다. 밭 안쪽으로 옮겨 주세요.")
                 self.rows.append(row)
-            return self.drop()
+            return self.drop().add().even()
         cs = [P.anchor_fixed] if P.anchor_fixed is not None else _frange(*P.anchor_sweep)
         best = None
         for c in cs:
@@ -390,7 +468,7 @@ class Block:
         _, self.c1, self.c2, self.rows = best
         if P.refine and P.mode == "edge2d":
             self.refine()
-        return self.drop()
+        return self.drop().add().even()
 
     def refine(self, rounds: int = 2) -> "Block":
         """평행이 기본. 두수가 모자란 열부터 ±swing 각도를 훑어 더 들어가면 바꾼다(이웃 이격 min_sep)."""

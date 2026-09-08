@@ -138,6 +138,12 @@ def orient_u(u: Sequence[float], center: Sequence[float],
     return [round(ux, 6), round(uy, 6)]
 
 
+def _gaps(heads: Sequence[Sequence[float]]) -> Dict:
+    """열 안 헤드 사이 거리(m). 「6번과 7번 사이만 좁다」를 **숫자로** 보이게 한다(대표 2026-09-08)."""
+    g = [round(math.dist(heads[i - 1], heads[i]), 1) for i in range(1, len(heads))]
+    return {"gaps": g, "gap_min": min(g) if g else None, "gap_max": max(g) if g else None}
+
+
 def _lat_path(row, route_pts) -> List[List[float]]:
     """가지관 1열의 **실제 경로**. 주배관이 있고 직각에서 벗어나면 곡선으로 꺾인다(규칙 14).
 
@@ -170,7 +176,7 @@ def block_preview(blocks: Sequence[Dict], flow_lpm: Optional[float] = None,
                  for r in (routes or []) if len(r.get("pts") or []) >= 2 and _role(r) == "main"] or None
     prof = HZ.head_profile(model)
     rows_out: List[Dict] = []
-    n_heads = n_rows = n_dropped = 0
+    n_heads = n_rows = n_dropped = n_added = 0
     lat_total = 0.0
     main_est = 0.0
     area_all = 0.0
@@ -194,15 +200,20 @@ def block_preview(blocks: Sequence[Dict], flow_lpm: Optional[float] = None,
         #    지도에 회색 ✕ 로 남겨 두어야 **되살릴 수 있다**(대표 요청 2026-09-08).
         drops = [[round(float(q[0]), 1), round(float(q[1]), 1)]
                  for q in (pol.drop_heads or []) if q is not None and len(q) >= 2]
+        adds = [[round(float(q[0]), 1), round(float(q[1]), 1)]
+                for q in (pol.add_heads or []) if q is not None and len(q) >= 2]
         rows_out.append({"name": blk.get("name") or "?", "crop": blk.get("crop") or "",
                          "block_index": block_index,
-                         "row_details": [{"a": r.a, "deg": r.deg, "p0": list(r.p0),
-                                          "p1": list(r.p1), "first": list(r.heads[0]),
-                                          "first_m": round(math.dist(r.p0, r.heads[0]), 1)}
-                                         for r in rows],
+                         "row_details": [dict(
+                             {"a": r.a, "deg": r.deg, "p0": list(r.p0),
+                              "p1": list(r.p1), "first": list(r.heads[0]),
+                              "first_m": round(math.dist(r.p0, r.heads[0]), 1),
+                              "n_heads": len(r.heads)}, **_gaps(r.heads))
+                             for r in rows],
                          "area_m2": round(area, 1), "rows": len(rows), "heads": heads,
                          "lat_m": round(lat_m, 1),
                          "drop_pts": drops, "dropped": len(drops),
+                         "add_pts": adds, "added": len(adds), "even": bool(pol.even_spacing),
                          "u_deg": round(math.degrees(math.atan2(u[1], u[0]))),
                          # 🔴 **실제로 쓴 간격**을 그대로 낸다 — 화면이 다른 값을 적으면 안 된다.
                          "spacing": {"head_m": pol.S, "row_m": pol.lat_gap, "first_m": pol.std},
@@ -213,16 +224,19 @@ def block_preview(blocks: Sequence[Dict], flow_lpm: Optional[float] = None,
         n_rows += len(rows)
         n_heads += heads
         n_dropped += len(drops)
+        n_added += len(adds)
         lat_total += lat_m
         area_all += area
         main_est += _long_side_m(poly)
 
     out = {"schema": SCHEMA, "blocks": rows_out, "n_rows": n_rows, "n_heads": n_heads,
-           "n_dropped": n_dropped,
+           "n_dropped": n_dropped, "n_added": n_added,
            "area_m2": round(area_all, 1), "lat_total_m": round(lat_total, 1),
            "main_est_m": round(main_est, 1),
            "spacing": {"head_m": None, "row_m": None, "first_m": None,
                        "radius_m": HZ.radius_m(HZ.P_END_TARGET, model),
+                       # 🔵 안쪽 원 = 귀환 살수(427B 7 m 고정) — 제안서 지면과 같은 그림(대표 2026-09-08)
+                       "radius_in_m": prof.get("r_in"),
                        "profile_head_m": prof.get("S"), "profile_row_m": prof.get("lat_gap"),
                        "profile_first_m": prof.get("std")},
            "flow_lpm": flow_lpm, "notes": []}
@@ -233,6 +247,21 @@ def block_preview(blocks: Sequence[Dict], flow_lpm: Optional[float] = None,
         out["spacing"].update(head_m=_h, row_m=_r, first_m=_f)
     elif len(_sp) > 1:
         out["notes"].append("밭마다 간격이 다릅니다 — 표에서 확인하세요.")
+
+    _gap_all = [g for _x in rows_out for g in (_x.get("gaps") or [])]
+    _gap_all += [g for _x in rows_out for _rd in (_x.get("row_details") or [])
+                 for g in (_rd.get("gaps") or [])]
+    if _gap_all:
+        _lo, _hi = min(_gap_all), max(_gap_all)
+        out["gap_min"], out["gap_max"] = _lo, _hi
+        if _hi - _lo >= 1.0:
+            out["notes"].append("열 안 헤드 간격이 **%.1f ~ %.1f m** 로 고르지 않습니다 — 끝에 헤드를 하나 더 "
+                                "넣느라 마지막 칸이 좁아집니다(규칙 11). **「열 안 균등 정렬」**을 켜면 "
+                                "처음·마지막을 그대로 두고 사이를 **고르게** 놓습니다." % (_lo, _hi))
+        else:
+            out["notes"].append("열 안 헤드 간격은 **%.1f ~ %.1f m** 로 고릅니다." % (_lo, _hi))
+    if n_added:
+        out["notes"].append("➕ **더 놓은 스프링클러 %d두**가 들어가 있습니다(가장 가까운 가지관에 붙습니다)." % n_added)
 
     if n_dropped:
         out["notes"].append("🚫 **검토로 뺀 스프링클러 %d두**는 위 숫자에서 이미 빠졌습니다 — "

@@ -320,7 +320,8 @@ class Renderer:
             self.zone_color[z] = ov.PIPE_MAIN if not self.zone_color else LINE2
         self.qr_dir = os.path.join(self.work, "_qr")
         try:
-            _pdb = json.load(open(self.meta["price_db"], encoding="utf-8")) if self.meta.get("price_db") else {}
+            from .publish import _price_db as _pdbf
+            _pdb = _pdbf(self.meta)
         except Exception:
             _pdb = {}
         self.qr_links = QR.links(_pdb)          # {코드: 설치 영상 URL} — 정본 = AQ_Items `QR링크`

@@ -43,7 +43,9 @@ _R = 6378137.0                      # 웹 메르카토르 기준 반경
 _TILE = 256
 VWORLD_BASE = "https://api.vworld.kr/req"
 PARCEL_LAYER = "LP_PA_CBND_BUBUN"   # 지적도 부분(필지)
-ZOOM_RANGE = (7, 18)
+ZOOM_RANGE = (7, 18)                # 브이월드 **정지영상**(image/getmap)의 허용 줌
+TILE_ZOOM_MAX = 19                  # 🔵 **타일**은 한 단계 더 간다(WMTS·Esri 모두 z19 · ②지도가 이미 쓴다).
+                                    #    작도판이 대상지를 꽉 채우려면 이 한 단계가 필요하다(대표 2026-09-08).
 SIZE_MAX = 1024
 RETRIES = 2                         # 502 는 게이트웨이 답 — 되쏜다
 RETRY_WAIT_S = 0.8
@@ -101,8 +103,8 @@ def frame(center: Sequence[float], zoom: int = 18,
     """
     lon, lat = float(center[0]), float(center[1])
     w, h = int(size[0]), int(size[1])
-    if not (ZOOM_RANGE[0] <= zoom <= ZOOM_RANGE[1]):
-        raise ValueError(f"zoom {zoom} — 공급자 허용 범위는 {ZOOM_RANGE[0]}~{ZOOM_RANGE[1]}")
+    if not (ZOOM_RANGE[0] <= zoom <= TILE_ZOOM_MAX):
+        raise ValueError(f"zoom {zoom} — 허용 범위는 {ZOOM_RANGE[0]}~{TILE_ZOOM_MAX}(타일)")
     if not (1 <= w <= SIZE_MAX and 1 <= h <= SIZE_MAX):
         raise ValueError(f"size {w}x{h} — 공급자 상한은 {SIZE_MAX}x{SIZE_MAX}")
     res = zoom_resolution(zoom)
@@ -146,13 +148,19 @@ def tile_grid(fr: Dict) -> Dict:
 
 
 def fit_frame(pts_m: Sequence[Sequence[float]], origin: Sequence[float],
-              size: int = 1024, margin: float = 1.35, pad_m: float = 30.0,
-              zoom_max: int = 18, zoom_min: int = 13) -> Dict:
+              size: int = 1024, margin: float = 1.10, pad_m: float = 14.0,
+              zoom_max: int = TILE_ZOOM_MAX, zoom_min: int = 13,
+              w_min: int = 620, h_min: int = 340) -> Dict:
     """**그린 것에 맞춰 판을 잡는다**(순수). 로컬 미터 점들 → 그 전부가 들어가는 frame.
 
     지도를 손으로 옮겨 그렸으면 원점은 엉뚱한 데 있을 수 있다 — 판의 중심은
     **원점이 아니라 그린 것**이어야 한다(2026-09-07 대표 「애매한 곳으로 지도가 나오네」).
-    줌은 **가장 크게 보이는 단계**를 고른다(공급자 상한 18).
+    줌은 **가장 크게 보이는 단계**를 고른다.
+
+    🔵 [V102] 판의 **크기도 그린 것에 맞춘다** — 정사각 1024 로 고정하니 100 m 밭이
+      495 m 판 한가운데 점처럼 나왔다(대표 2026-09-08 「대상지가 너무 작게 나와」).
+      가로·세로를 따로 잡아 **화면 밖으로 넘기지 않는 선에서 꽉** 채운다.
+      제목칸(560 px)·각주칸(76 px)이 들어갈 최소 크기는 지킨다.
     """
     pts = [q for q in (pts_m or []) if q is not None and len(q) >= 2]
     if not pts:
@@ -160,7 +168,9 @@ def fit_frame(pts_m: Sequence[Sequence[float]], origin: Sequence[float],
     xs = [float(q[0]) for q in pts]
     ys = [float(q[1]) for q in pts]
     cx, cy = (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
-    span = max(max(xs) - min(xs), max(ys) - min(ys)) * margin + pad_m
+    span_x = (max(xs) - min(xs)) * margin + pad_m
+    span_y = (max(ys) - min(ys)) * margin + pad_m
+    span = max(span_x, span_y)
     lon, lat = from_local_m([[cx, cy]], origin)[0]
     k = math.cos(math.radians(lat))
     zoom = zoom_min
@@ -168,8 +178,12 @@ def fit_frame(pts_m: Sequence[Sequence[float]], origin: Sequence[float],
         if zoom_resolution(z) * k * size >= span:
             zoom = z
             break
-    fr = frame((lon, lat), zoom=zoom, size=(size, size))
+    mpp = zoom_resolution(zoom) * k
+    w = int(min(size, max(w_min, math.ceil(span_x / mpp))))
+    h = int(min(size, max(h_min, math.ceil(span_y / mpp))))
+    fr = frame((lon, lat), zoom=zoom, size=(w, h))
     fr["fit_span_m"] = round(span, 1)
+    fr["fit_span_xy_m"] = [round(span_x, 1), round(span_y, 1)]
     return fr
 
 
@@ -451,6 +465,9 @@ def print_tile(fr: Dict, basemap: str = "PHOTO", fmt: str = "png",
 
     basemap: PHOTO(위성) · PHOTO_HYBRID(위성+주기) · GRAPHIC · BASE.
     """
+    if fr["zoom"] > ZOOM_RANGE[1]:
+        # 정지영상 API 는 18 까지다. 그 위는 **타일**로 받는다(basemap_image 가 알아서 넘어간다).
+        raise ValueError(f"zoom {fr['zoom']} — 브이월드 정지영상은 {ZOOM_RANGE[1]} 까지다(타일로 받으세요)")
     key, dom = _vworld(key_kind)
     lon, lat = fr["center"]
     w, h = fr["size"]
@@ -649,8 +666,13 @@ def basemap_image(fr: Dict, prefer: str = "auto", basemap: str = "PHOTO_HYBRID")
         try:
             return print_tile(fr, basemap=basemap, fmt="jpeg"), "vworld"
         except Exception:
-            if prefer == "vworld":
-                raise
+            # 🔵 정지영상이 막히거나 줌이 19 면 **브이월드 타일**로 한 번 더 간다 —
+            #    Esri 로 넘어가기 전에 우리 배경을 지키는 길이다(대표 2026-09-08 작도판 꽉 채우기).
+            try:
+                return tile_mosaic(fr, wmts_url("Satellite")), "vworld"
+            except Exception:
+                if prefer == "vworld":
+                    raise
     return tile_mosaic(fr), "esri"
 
 

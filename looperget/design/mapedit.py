@@ -10,6 +10,7 @@ from .layout import DROP_TOL, RowPolicy, rows_from_polygon
 
 HANDLE = "looperget_lateral"
 HEAD = "looperget_head"          # 스프링클러 빼기·되살리기 표식(대표 요청 2026-09-08)
+HEAD_ADD = "looperget_head_add"  # 스프링클러 더 놓기 — 지도의 빈 자리를 누른 것
 
 
 def drawing_snapshot(result, saved=None):
@@ -17,7 +18,7 @@ def drawing_snapshot(result, saved=None):
     incoming = (result or {}).get("all_drawings")
     features = saved if incoming is None else incoming
     return deepcopy([f for f in (features or [])
-                     if (f.get("properties") or {}).get("kind") not in (HANDLE, HEAD)])
+                     if (f.get("properties") or {}).get("kind") not in (HANDLE, HEAD, HEAD_ADD)])
 
 
 def map_policy(policy=None):
@@ -69,6 +70,59 @@ def head_marks(preview, origin, rev):
                                            "block_index": block["block_index"],
                                            "xy": [round(float(xy[0]), 1), round(float(xy[1]), 1)]}})
     return out
+
+
+def _rows_of(block, mains):
+    """그 밭의 가지관(엔진 그대로). 화면과 설계가 다른 열을 보면 안 된다."""
+    return rows_from_polygon(block["polygon"], tuple(block.get("u") or (1, 0)),
+                             RowPolicy(**map_policy(block.get("policy"))),
+                             bars=block.get("bars"), mains=mains)
+
+
+def add_head(blocks, routes, features, origin, rev):
+    """지도의 빈 자리를 누르면 **가장 가까운 가지관에 스프링클러를 하나 더** 놓는다.
+
+    🔴 어디에 붙일지는 **엔진이 정한다**(`layout.Block.add` 가 열 축에 투영한다) — 여기서는
+      누른 자리를 그 밭의 `policy.add_heads` 에 넣고 **두수가 실제로 늘었는지** 다시 돌려서 본다.
+      늘지 않으면 놓을 수 없는 자리다 — 조용히 삼키지 않고 이유를 돌려준다.
+    """
+    out = deepcopy(blocks)
+    mains = [r["pts"] for r in (routes or []) if site.route_role(r) == "main"]
+    hit = False
+    try:
+        for feature in features:
+            prop = feature.get("properties") or {}
+            if prop.get("kind") != HEAD_ADD or prop.get("revision") != rev:
+                continue
+            xy = mapsrc.to_local_m([feature["geometry"]["coordinates"]], origin)[0]
+            if not all(math.isfinite(v) for v in xy):
+                raise ValueError("올바르지 않은 지도 좌표입니다")
+            pick = None
+            for bi, block in enumerate(out):
+                if len(block.get("polygon") or []) < 3:
+                    continue
+                rows = _rows_of(block, mains)
+                if not rows:
+                    continue
+                d = min(G.seg_dist(tuple(xy), r.p0, r.p1) for r in rows)
+                if pick is None or d < pick[0]:
+                    pick = (d, bi, sum(len(r.heads) for r in rows))
+            if pick is None:
+                raise ValueError("아직 가지관이 없습니다 — 밭과 주배관을 먼저 그려 주세요")
+            _, bi, before = pick
+            block = out[bi]
+            policy = dict(block.get("policy") or {})
+            adds = [[float(q[0]), float(q[1])] for q in (policy.get("add_heads") or [])]
+            adds.append([round(xy[0], 1), round(xy[1], 1)])
+            policy["add_heads"] = adds
+            block["policy"] = policy
+            if sum(len(r.heads) for r in _rows_of(block, mains)) <= before:
+                raise ValueError("그 자리에는 놓을 수 없습니다 — **가지관 가까이·밭 안쪽**을 눌러 주세요"
+                                 "(이미 헤드가 있는 자리이거나 경계에 너무 붙었습니다)")
+            hit = True
+    except (ValueError, TypeError, KeyError, IndexError, OverflowError) as exc:
+        return None, str(exc)
+    return (out, "") if hit else (None, "")
 
 
 def toggle_heads(blocks, features, rev):
@@ -181,7 +235,8 @@ def merge_routes(existing, features, origin, default_role="main"):
     return out
 
 
-def draw_bridge(draw, handle_features, role="main", drafts=None, head_features=None):
+def draw_bridge(draw, handle_features, role="main", drafts=None, head_features=None,
+                mode="none", rev=None):
     """일반 마커 드래그를 draw:edited 이벤트로 전달; 손잡이는 급수원과 구별한다.
 
     `head_features` = 스프링클러 표식(`head_marks`). **클릭**을 같은 통로로 보낸다.
@@ -190,7 +245,7 @@ def draw_bridge(draw, handle_features, role="main", drafts=None, head_features=N
     bridge = MacroElement()
     bridge.draw = draw
     payload = json.dumps({"handles": handle_features, "role": role, "drafts": drafts or [],
-                          "heads": head_features or []},
+                          "heads": head_features or [], "mode": mode, "rev": rev},
                          ensure_ascii=False).replace("<", "\\u003c")
     bridge._template = Template(r"""
 {% macro script(this, kwargs) %}
@@ -212,6 +267,20 @@ def draw_bridge(draw, handle_features, role="main", drafts=None, head_features=N
                        dashArray:data.role==='feeder'?'12,8':null});
    }
  });
+ let p3drawing=false;
+ map.on('draw:drawstart', function(){p3drawing=true;});
+ map.on('draw:drawstop',  function(){p3drawing=false;});
+ if(data.mode==='add'){                       // 빈 자리를 누르면 그 자리에 한 두 더
+   map.on('click', function(e){
+     if(p3drawing) return;                    // 그리는 중의 클릭은 도형의 것이다
+     const f={type:'Feature',geometry:{type:'Point',coordinates:[e.latlng.lng,e.latlng.lat]},
+              properties:{kind:'looperget_head_add',revision:data.rev,click_id:String(Date.now())}};
+     const m=L.marker(e.latlng,{opacity:0.01});
+     m.feature=f; m.addTo(map);
+     map.fire('draw:edited',{layer:m,layers:L.featureGroup([m])});
+     setTimeout(function(){map.removeLayer(m);},50);
+   });
+ }
  (data.heads||[]).forEach(function(f){
    const xy=f.geometry.coordinates, back=f.properties.action==='restore';
    const mark=L.marker([xy[1],xy[0]], {

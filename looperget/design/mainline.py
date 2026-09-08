@@ -141,8 +141,29 @@ def analyze(routes: Sequence[Dict], sources: Sequence[Dict]) -> Dict:
             r["from"] = ("mid", mj[0])
             tee_pts.append((mj[2], "분기 T"))
             continue
+        # 🔴 [V102] **얼마나 떨어졌는지**와 **무엇을 하면 되는지**를 함께 말한다 —
+        #    「닿지 않음」만으로는 대표가 무엇을 고쳐야 할지 알 수 없다(대표 2026-09-08 「닿지 않았다는 게 뭐지?」).
         r["from"] = ("free", None)
-        warnings.append(f"주배관 '{r['name']}' 출발점 {p} 이 급수점·다른 경로에 닿지 않음")
+        cand = []
+        if sources:
+            k = min(range(len(sources)), key=lambda j: G.dist(p, tuple(sources[j]["pt"])))
+            cand.append((G.dist(p, tuple(sources[k]["pt"])),
+                         "급수원 '%s'" % (sources[k].get("name") or "?"), SOURCE_NEAR))
+        for j, q in enumerate(R):
+            if j == i:
+                continue
+            cand.append((G.dist(p, q["pts"][-1]), "'%s' 끝점" % q["name"], END_NEAR))
+            _s, _c, _ = G.nearest_on_polyline(q["pts"], p)
+            cand.append((G.dist(_c, p), "'%s' 중간" % q["name"], MID_NEAR))
+        near_txt = ""
+        if cand:
+            d, what, lim = min(cand)
+            r["from_gap"] = round(d, 1)
+            r["from_near"] = what
+            near_txt = " — 가장 가까운 것은 %s 이고 **%.1f m** 떨어져 있다(%.0f m 안이어야 이어진다)" % (what, d, lim)
+        warnings.append("%s '%s' 출발점이 급수원·다른 관 어디에도 닿지 않았다%s. "
+                        "선의 **첫 점**을 그 자리로 옮기거나, 인입관을 주배관 시작점까지 늘려 주세요"
+                        % ("주배관" if r["role"] == "main" else "인입관", r["name"], near_txt))
 
     tees = 0
     for si, idx in src_groups.items():
@@ -211,6 +232,7 @@ def analyze(routes: Sequence[Dict], sources: Sequence[Dict]) -> Dict:
                     "d_mm": (feeder_d_mm(r) if r["role"] == "feeder" else None),   # 계산 내경(규칙 21)
                     "len_m": round(r["len"], 1),
                     "joints": r["joints"], "from": r["from"][0], "from_ref": _from_ref(r),
+                    "from_gap": r.get("from_gap"), "from_near": r.get("from_near"),
                     "bends": [[list(p), round(d, 1)] for p, d in r["bends"]]} for r in R],
         "tee_pts": [[list(p), tag] for p, tag in tee_pts],
         "end_pts": [list(p) for p in end_pts],

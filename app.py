@@ -1053,7 +1053,7 @@ from aquanaris_layout import *   # [V66] 아쿠나리스 배치 엔진 분리 �
 # [V67] 신구 짝 검증 — 모듈이 구버전이면(NameError로 죽기 전에) 원인과 조치를 한국어로 안내하고 정지.
 #  (2026-07-24 실배포에서 app.py만 푸시되어 line 6573 NameError 발생 → 재발 방지 가드)
 if int(globals().get("AQ_LAYOUT_VER", 0) or 0) < 77:
-    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V101)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **aquanaris_layout.py가 구버전입니다** — app.py(V102)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **최신 `aquanaris_layout.py`를 app.py와 함께** 올린 뒤 "
              "재배포하세요. 두 파일은 항상 세트로 푸시해야 합니다.")
     st.stop()
@@ -1066,8 +1066,8 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 93:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V101)와 짝이 맞지 않습니다.\n\n"
+if _LG_VER < 94:
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V102)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/` 폴더를 통째로** "
              "`app.py`·`aquanaris_layout.py`와 함께 올린 뒤 재배포하세요. **셋은 항상 세트입니다.**")
     st.stop()
@@ -6158,6 +6158,9 @@ elif mode == "🏪 아쿠나리스":
 #          가지관 이동 거부 이유를 지도 아래에(대표 2026-09-08 「깜빡이고 원상복구」)
 #   [V101] 🚫 **스프링클러 빼기** — 지도에서 눌러 그 자리만 뺀다(되살리기 · 회색 ✕) ·
 #          작물 빈 칸을 None 으로(""가 ④ 설계를 막고 있었다 · 대표 2026-09-08)
+#   [V102] ➕ **스프링클러 추가**(가장 가까운 가지관에 투영) · 📏 **열 안 균등 정렬**(첫·마지막 고정)과 열별 간격표 ·
+#          살수원 **안쪽 7 m**(귀환 살수) · 「닿지 않음」의 뜻·거리·고치는 법 · 작도판을 대상지에 맞춰 꽉 ·
+#          ④에서 **제안서 PPTX · 견적서 XLSX 초안** 생성(대표 2026-09-08)
 #   흐름 정본 = `_설계/_문진표/문진표_v1_농지.md` · 대표 확답 #43·#44
 #   🔴 캔버스를 새로 만들지 않는다(파일 기반 1안 · 대표 선택 2026-09-06).
 #      작도판 PNG를 내려받아 농민 확인 → 확인된 blocks/routes JSON을 올린다.
@@ -6454,25 +6457,54 @@ elif mode == "🗺️ 설계(P3)":
             # 🚫 [V101] 스프링클러 빼기 — 「표시한 곳의 스프링클러를 검토에 따라 뺄 수도 있어야
             #    한다」(대표 2026-09-08). 밭 밖으로 살수가 새는 자리·길 쪽 자리를 **대표가 보고 뺀다.**
             #    🔴 빼도 **남은 배치는 그대로 둔다** — 다시 풀어 벌리면 대표가 보고 결정한 그림이 바뀐다.
-            _pick_heads = st.checkbox("🚫 스프링클러 빼기 (지도에서 눌러서)", value=False,
-                                      key="p3_pick_heads", disabled=not _shw,
-                                      help="켜면 지도의 스프링클러가 눌리는 표식이 됩니다. "
-                                           "누르면 빠지고, 회색 ✕ 를 누르면 되살아납니다. "
-                                           "「💦 예상 살수 보기」가 켜져 있어야 합니다.")
+            _hm1, _hm2 = st.columns([3, 2])
+            _mm = _hm1.radio("지도에서 스프링클러 손보기", ["보기만", "🚫 빼기", "➕ 추가"],
+                             horizontal=True, key="p3_head_mode", disabled=not _shw,
+                             help="「💦 예상 살수 보기」가 켜져 있어야 합니다.")
+            _pick_heads = _shw and _mm.startswith("🚫")
+            _add_heads = _shw and _mm.startswith("➕")
+            # 📏 [V102] 열 안 균등 정렬 — 「6번째와 7번째 간격이 좁다」(대표 2026-09-08).
+            #    규칙 11 말단 보충이 끝 칸을 좁힌다. 첫·마지막을 고정하고 사이를 고르게 놓는다.
+            _even_now = bool(_pins["blocks"]) and all((_b.get("policy") or {}).get("even_spacing")
+                                                      for _b in _pins["blocks"])
+            _even = _hm2.checkbox("📏 열 안 균등 정렬 (첫·마지막 고정)", value=_even_now,
+                                  key="p3_even", disabled=not _pins["blocks"],
+                                  help="두수는 그대로 두고 **자리만** 고르게 합니다. 간격은 아래 표에 나옵니다.")
+            if _even != _even_now and _pins["blocks"]:
+                for _b in _pins["blocks"]:
+                    _pol2 = dict(_b.get("policy") or {})
+                    if _even:
+                        _pol2["even_spacing"] = True
+                    else:
+                        _pol2.pop("even_spacing", None)
+                    _b["policy"] = _pol2
+                st.session_state.pop("p3_result", None)
+                st.session_state.pop("p3_site", None)
+                st.rerun()
             if _pick_heads:
                 st.caption("🚫 지도에서 **파란 ● 를 누르면 그 스프링클러가 빠집니다**. "
                            "**회색 ✕** 를 누르면 되살아납니다. 두수·가지관 길이·자재·유량이 바로 다시 계산됩니다. "
                            "한 열의 스프링클러를 **전부** 빼면 그 가지관도 없어집니다. "
                            "**간격·고랑 방향·밭 모양을 바꾸면** 헤드 자리가 통째로 옮겨지므로 "
                            "빼 놓은 것은 풀립니다 — 그때는 다시 보고 빼시면 됩니다.")
+            if _add_heads:
+                st.caption("➕ 지도에서 **놓고 싶은 자리를 누르세요**. **가장 가까운 가지관 위로 붙여** 놓습니다 "
+                           "— 가지관에 붙지 않은 스프링클러는 물을 못 받기 때문입니다. "
+                           "밭 밖이거나 가지관에서 멀면 놓지 않고 이유를 알려 드립니다. "
+                           "🔴 이 모드에서는 **지도 클릭이 스프링클러 추가**입니다 — 선·면을 그리시려면 "
+                           "「보기만」으로 돌려 두세요.")
             _ndrop = sum(len((_b.get("policy") or {}).get("drop_heads") or [])
                          for _b in _pins["blocks"])
-            if _ndrop:
+            _nadd = sum(len((_b.get("policy") or {}).get("add_heads") or [])
+                        for _b in _pins["blocks"])
+            if _ndrop or _nadd:
                 _dc1, _dc2 = st.columns([3, 1])
-                _dc1.caption("🚫 지금 **%d두**를 빼 놓았습니다 — 두수·자재·유량에서 이미 빠진 값입니다." % _ndrop)
-                if _dc2.button("뺀 것 전부 되살리기", key="p3_drop_reset"):
+                _dc1.caption("손본 스프링클러 — 🚫 뺀 것 **%d두** · ➕ 더한 것 **%d두**. "
+                             "두수·자재·유량에 이미 반영된 값입니다." % (_ndrop, _nadd))
+                if _dc2.button("손본 것 전부 되돌리기", key="p3_drop_reset"):
                     for _b in _pins["blocks"]:
                         (_b.get("policy") or {}).pop("drop_heads", None)
+                        (_b.get("policy") or {}).pop("add_heads", None)
                     st.session_state.pop("p3_result", None)
                     st.session_state.pop("p3_site", None)
                     st.rerun()
@@ -6540,13 +6572,21 @@ elif mode == "🗺️ 설계(P3)":
             _pvm = st.session_state.get("p3_preview") or {}
             if _shw and (_pvm.get("n_heads") or _pvm.get("n_dropped")):
                 _rad = float((_pvm.get("spacing") or {}).get("radius_m") or 10.0)
+                # 🔵 [V102] 안쪽 원 = **귀환 살수 7 m**(427B 고정). 승인 제안서 지면이 이미 두 겹으로
+                #    그린다(`agri_overlay.spray_double`) — 화면과 지면이 다른 그림이면 안 된다(대표 2026-09-08).
+                _rin = (_pvm.get("spacing") or {}).get("radius_in_m")
                 _fgh = _fo.FeatureGroup(name="💦 예상 살수 (%d두)" % _pvm["n_heads"], show=True)
                 for _bp in (_pvm.get("blocks") or []):
                     for _hp in (_bp.get("head_pts") or []):
                         _lo, _la = _p3m.from_local_m([_hp], _org)[0]
                         _fo.Circle([_la, _lo], radius=_rad, color="#78dcff", weight=1,
                                    opacity=0.55, fill=True, fill_color="#78dcff",
-                                   fill_opacity=0.10).add_to(_fgh)
+                                   fill_opacity=0.10,
+                                   tooltip="살수 반경 %.0f m (말단 1.5 bar)" % _rad).add_to(_fgh)
+                        if _rin:
+                            _fo.Circle([_la, _lo], radius=float(_rin), color="#0c3b81", weight=1,
+                                       opacity=0.85, fill=False, dash_array="5,5",
+                                       tooltip="귀환 살수 %.0f m (427B 고정)" % float(_rin)).add_to(_fgh)
                         _fo.CircleMarker([_la, _lo], radius=2, color="#00e5ff", weight=2,
                                          fill=True, fill_opacity=1).add_to(_fgh)
                     # 🚫 [V101] 뺀 자리는 **지워 없애지 않고 회색 ✕ 로 남긴다** — 되살릴 수 있어야 한다.
@@ -6573,6 +6613,27 @@ elif mode == "🗺️ 설계(P3)":
                         _fo.CircleMarker([_ll[1][1], _ll[1][0]], radius=4, color="#ffe36e", fill=True,
                                          tooltip=_gap_text).add_to(_fgh)
                 _fgh.add_to(_M)
+
+            # 📏 [V102] 열별 헤드 간격 — 좁은 칸이 **숫자로** 보여야 고칠지 말지 정할 수 있다.
+            if _pvm.get("blocks"):
+                _grows = []
+                for _bp in (_pvm.get("blocks") or []):
+                    for _i2, _rd in enumerate(_bp.get("row_details") or [], 1):
+                        _gp = _rd.get("gaps") or []
+                        _grows.append({"밭": _bp.get("name") or "?", "가지관": _i2,
+                                       "두수": _rd.get("n_heads"),
+                                       "첫 헤드까지(m)": _rd.get("first_m"),
+                                       "간격(m)": " · ".join("%.1f" % g for g in _gp) or "-",
+                                       "가장 좁은 칸(m)": _rd.get("gap_min"),
+                                       "가장 넓은 칸(m)": _rd.get("gap_max")})
+                if _grows:
+                    with st.expander("📏 열별 스프링클러 간격 (%d열)" % len(_grows),
+                                     expanded=bool(_pvm.get("gap_max", 0) and
+                                                   (_pvm.get("gap_max") - _pvm.get("gap_min", 0)) >= 1.0)):
+                        st.caption("한 열 안에서 헤드 사이 거리입니다. **끝 칸이 좁으면** 규칙 11(말단 보충)로 "
+                                   "헤드를 하나 더 넣은 것입니다 — 위 **「📏 열 안 균등 정렬」**을 켜면 "
+                                   "**첫·마지막을 그대로 두고** 사이를 고르게 놓습니다(두수는 그대로).")
+                        st.dataframe(pd.DataFrame(_grows), width="stretch", hide_index=True)
 
             # 🧭 고랑 방향 — 밭마다 가운데를 지나는 선으로 그려 **눈으로 확인**하게 한다(#74).
             for _bk in _pins["blocks"]:
@@ -6616,7 +6677,10 @@ elif mode == "🗺️ 설계(P3)":
             _p3edit.draw_bridge(_draw, _p3edit.handles(_pvm, _org, _rev) if _edit_rows else [],
                                 role=_draw_role, drafts=st.session_state.get("p3_map_drafts") or [],
                                 head_features=(_p3edit.head_marks(_pvm, _org, _rev)
-                                               if (_shw and _pick_heads) else [])).add_to(_M)
+                                               if _pick_heads else []),
+                                mode=("add" if _add_heads else
+                                      "drop" if _pick_heads else "none"),
+                                rev=_rev).add_to(_M)
             _FoGeo(collapsed=True, position="topright", add_marker=False, zoom=18).add_to(_M)
             try:
                 _vkey = (_p3m._keys().get("vworld") or {}).get("key", "")
@@ -6662,6 +6726,19 @@ elif mode == "🗺️ 설계(P3)":
                 st.rerun()
             if _dropped is not None:
                 _pins["blocks"] = _dropped
+                st.session_state.pop("p3_result", None)
+                st.session_state.pop("p3_site", None)
+                st.rerun()
+            # ➕ [V102] 빈 자리를 누르면 가장 가까운 가지관에 한 두 더(대표 요청 2026-09-08).
+            _added, _add_error = _p3edit.add_head(
+                _pins["blocks"], _pins["routes"],
+                [(_out or {}).get("last_active_drawing") or {}], _org, _rev)
+            if _add_error:
+                st.session_state.p3_row_message = "스프링클러를 놓지 못했습니다: " + _add_error
+                st.session_state.p3_map_epoch = st.session_state.get("p3_map_epoch", 0) + 1
+                st.rerun()
+            if _added is not None:
+                _pins["blocks"] = _added
                 st.session_state.pop("p3_result", None)
                 st.session_state.pop("p3_site", None)
                 st.rerun()
@@ -7002,13 +7079,29 @@ elif mode == "🗺️ 설계(P3)":
                             _lab = _p3s.ROLE_LABEL.get(_rr["role"], _rr["role"])
                             if _rr["from"] == "free":
                                 _bad += 1
-                                _ln.append("🔴 %s **%s** — 출발점이 급수원(4 m 안)·다른 관(2 m 안)에 닿지 않음"
-                                           % (_lab, _rr["name"]))
+                                # 🔴 [V102] **얼마나 떨어졌는지**를 말한다 — 「닿지 않았다」만으로는
+                                #    무엇을 고쳐야 할지 알 수 없다(대표 2026-09-08 「닿지 않았다는 게 뭐지?」).
+                                _gap = _rr.get("from_gap")
+                                _ln.append("🔴 %s **%s** — 물을 어디서 받는지 **끊겨 있습니다**%s"
+                                           % (_lab, _rr["name"],
+                                              ("(가장 가까운 %s 에서 **%.1f m**)"
+                                               % (_rr.get("from_near") or "것", _gap))
+                                              if _gap is not None else ""))
                             else:
                                 _ln.append("✅ %s **%s** ← %s" % (_lab, _rr["name"], _how[_rr["from"]] % _rr["from_ref"]))
-                        (st.error if _bad else st.success)(
-                            "🔗 **연결** — " + " · ".join(_ln)
-                            + ("" if _bad else "  \n④에서도 같은 판정입니다. 인입관 끝에서 주배관이 시작하면 그 자리가 분배점입니다."))
+                        if _bad:
+                            st.error("🔗 **연결** — " + " · ".join(_ln))
+                            st.caption("**「닿지 않았다」는 뜻** — 그 관의 **첫 점**이 급수원에서 **4 m** 안에도, "
+                                       "다른 관의 끝·중간에서 **2 m** 안에도 없다는 말입니다. 그러면 엔진은 그 관에 "
+                                       "**물이 어디서 오는지 모릅니다** — 분배점·T·인입관 손실을 셀 수 없고, "
+                                       "그 관은 급수 계통에서 떨어져 나갑니다(설계는 돌지만 경고가 붙습니다)."
+                                       "\n\n"
+                                       "**고치는 법** — 지도 왼쪽 ✏️ **점 편집**으로 그 관의 **시작점**을 "
+                                       "급수원 핀이나 앞 관의 **끝점 위로** 끌어다 놓으세요. "
+                                       "인입관 끝에서 주배관이 시작하면 그 자리가 **분배점**이 됩니다.")
+                        else:
+                            st.success("🔗 **연결** — " + " · ".join(_ln)
+                                       + "  \n④에서도 같은 판정입니다. 인입관 끝에서 주배관이 시작하면 그 자리가 분배점입니다.")
                 if _new != _pins["routes"]:
                     _pins["routes"] = _new
                     st.session_state.p3_pins = _pins
@@ -7368,7 +7461,95 @@ elif mode == "🗺️ 설계(P3)":
             _c2.download_button("site JSON",
                                 json.dumps(_site, ensure_ascii=False, indent=1).encode("utf-8"),
                                 file_name="site.json", mime="application/json", key="p3_dl_site")
-            st.info("제안서·견적서 발행은 **대표 전담**입니다(불변 원칙 3). 이 화면은 초안까지입니다.")
+
+            # ── 📑 [V102] 제안서(PPTX) · 견적서(XLSX) 초안 ────────────────────
+            #    대표 지시 2026-09-08 — 「마지막에 설계를 누르면 ppt 제안서와 엑셀 견적서를 각각
+            #    생성하는 기능을 넣어줘. 그렇게 되면 사람의 수정을 거쳐서 소비자에게 나갈 수 있어.」
+            #    🔴 값은 여기서 만들지 않는다 — 위에 나온 설계를 P2 발행 엔진(`design.publish`)에 그대로 넘긴다.
+            #    🔴 발행은 대표 전담(불변 원칙 3). 이것은 **초안 파일**이다.
+            st.divider()
+            st.markdown("##### 📑 제안서 · 견적서 (초안 파일)")
+            _fr4 = st.session_state.get("p3_map_frame")
+            if not _fr4:
+                st.warning("②지도를 한 번 열어야 좌표 기준이 잡힙니다 — ②에 들렀다 오세요.")
+            else:
+                _q1, _q2, _q3 = st.columns([2, 2, 1])
+                _q_to = _q1.text_input("받는 분(농가·법인명)", value=(_ans.get("customer") or ""),
+                                       key="p3_q_to")
+                _q_mgr = _q2.text_input("담당자", value="박형석", key="p3_q_mgr")
+                _q_vat = _q3.checkbox("영세율", value=False, key="p3_q_vat",
+                                      help="농업경영체 등록확인서 제출 건에만 켭니다(건별 판단).")
+                st.caption("표지·수량·금액은 **위 설계 그대로** 들어갑니다. 대표 작도가 필요한 지면"
+                           "(물 공급 계통·매니폴드)은 **비어 있는 채로** 나옵니다 — 그 자리를 채우고 문안을 "
+                           "다듬는 것이 사람의 몫입니다.")
+                if st.button("📑 제안서·견적서 만들기", type="primary", key="p3_pub_btn"):
+                    st.session_state.pop("p3_pub", None)
+                    with st.spinner("위성 받고 지면 그리는 중… (20~40초)"):
+                        try:
+                            from looperget.design import publish as _p3pub
+                            _o4 = _fr4["origin"]
+                            _all4 = ([_q for _b in (_site.get("blocks") or []) for _q in (_b.get("polygon") or [])]
+                                     + [_x["pt"] for _x in (_site.get("sources") or [])]
+                                     + [_q for _r in (_site.get("routes") or []) for _q in (_r.get("pts") or [])])
+                            _ff4 = _p3m.fit_frame(_all4, _o4, size=1024)
+                            _p3_keys()
+                            _bg4, _src4 = _p3m.basemap_image(_ff4, prefer="auto")
+                            _dir4 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                 "_제안", "P3_" + _p3pub._slug(str(_site.get("name") or "대상지")))
+                            os.makedirs(_dir4, exist_ok=True)
+                            _png4 = os.path.join(_dir4, "_위성.png")
+                            with open(_png4, "wb") as _f4:
+                                _f4.write(_bg4)
+                            _pdb4 = {}
+                            for _pr in st.session_state.db.get("products", []):
+                                _cd = str(_pr.get("code", "")).strip().zfill(5)
+                                if _cd:
+                                    _pdb4[_cd] = {"name": _pr.get("name", ""), "spec": _pr.get("spec", ""),
+                                                  "unit": _pr.get("unit", "EA"),
+                                                  "소비자가": int(_pr.get("price_cons", 0) or 0)}
+                            # 부속 사진 — 승인 제안서가 쓰는 폴더를 그대로 쓴다(있으면).
+                            _imgd = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                 "_설계", "배추밭스프링클러_20260824", "90_작업파일", "부속이미지")
+                            _job4 = _p3pub.job_from_p3(
+                                _site, _res, frame=_ff4, origin=_o4, png_path=_png4,
+                                meta={"out_dir": _dir4, "price_db": _pdb4,
+                                      "part_img_dir": _imgd if os.path.isdir(_imgd) else None,
+                                      "site_short": (_ans.get("crop") or "관수 설계"),
+                                      "quote": {"label": str(_site.get("name") or ""),
+                                                "recipient": _q_to, "manager": _q_mgr or "박형석",
+                                                "vat_zero": bool(_q_vat)}})
+                            _out4 = _p3pub.run(_job4, verbose=False)
+                            st.session_state.p3_pub = {
+                                "pptx": _out4["pptx"], "xlsx": _out4["xlsx"]["path"],
+                                "dir": _dir4, "basemap": _src4,
+                                "n_items": _out4["xlsx"]["n_items"], "total": _out4["xlsx"]["total"],
+                                "pages": sorted((_out4.get("page_check") or {}).keys())}
+                        except Exception as _e:
+                            st.error("제안서·견적서 생성 실패 — " + str(_e))
+                _pub = st.session_state.get("p3_pub")
+                if _pub:
+                    st.success("만들었습니다 — 배경 %s · 견적 %d품목 · 합계 %s원. 폴더 `%s`"
+                               % ("브이월드 위성" if _pub["basemap"] == "vworld" else "Esri 위성",
+                                  _pub["n_items"], format(_pub["total"], ","), _pub["dir"]))
+                    _d1, _d2 = st.columns(2)
+                    try:
+                        with open(_pub["pptx"], "rb") as _f:
+                            _d1.download_button("📊 제안서 PPTX 내려받기", _f.read(),
+                                                file_name=os.path.basename(_pub["pptx"]),
+                                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                                key="p3_dl_pptx")
+                        with open(_pub["xlsx"], "rb") as _f:
+                            _d2.download_button("📗 견적서 XLSX 내려받기", _f.read(),
+                                                file_name=os.path.basename(_pub["xlsx"]),
+                                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                                key="p3_dl_xlsx")
+                    except Exception as _e:
+                        st.error("파일을 여는 중 오류 — " + str(_e))
+                    if _pub["pages"]:
+                        st.caption("§9 기계 점검이 지적한 지면 — %s 면. 대개 **대표 작도가 없어 비어 있는 지면**입니다."
+                                   % ", ".join(str(_x) for _x in _pub["pages"]))
+            st.info("제안서·견적서 **발행은 대표 전담**입니다(불변 원칙 3). 여기서 나오는 것은 "
+                    "사람이 고쳐 쓰는 **초안 파일**입니다.")
 
 elif mode == "🇯🇵 일본 수출 분석":
     st.header("🇯🇵 일본 수출 이익 분석 (HQ Profit Analysis)")

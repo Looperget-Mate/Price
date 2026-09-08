@@ -70,7 +70,12 @@ def build(n_heads: int, lat_lengths: Sequence[float], main: Dict, site: Dict) ->
     main_mm = int(site.get("main_mm") or pipes.APPROVED_MAIN_MM)
     F = pipes.main_fittings(main_mm)
     v = site.get("valves_01403", {})
-    start_v, zone_v = int(v.get("start", 1)), int(v.get("zones", 0))
+    start_v = int(v.get("start", 1))
+    # 규칙 21(#79) — 구역 밸브 수: 대표가 적었으면 그 값(0 포함), 아니면 **분배점에서 엔진이 센다**.
+    if v.get("zones") is None:
+        zone_v, zone_v_src = int(main.get("header_valves") or 0), "분배점 파생"
+    else:
+        zone_v, zone_v_src = int(v["zones"]), "대표 입력"
     src_bands = sum(int(s.get("start_bands", 0)) for s in site.get("sources", []))
     tees, ends, joints = main["tees"], main["ends"], main["joints"]
     water = list(site.get("water_items", []))
@@ -80,8 +85,20 @@ def build(n_heads: int, lat_lengths: Sequence[float], main: Dict, site: Dict) ->
     lat_total = sum(lat_lengths)
     slack25 = rolls25 * LAT_ROLL_M - lat_total
     extra25 = 1 if slack25 <= ROLL_SLACK * LAT_ROLL_M else 0
-    slack50 = main["rolls"] * ROLL_M - main["total_m"]
-    extra50 = 1 if slack50 <= ROLL_SLACK * ROLL_M else 0
+    # 규칙 21 — 호칭이 다른 **호스 인입관**은 제 호칭 롤로 따로 산다. 파이프·매설 인입관은 자재가 아니다.
+    other_hose = {int(n): m for n, m in (main.get("feeder_hose_m") or {}).items() if int(n) != main_mm}
+    # 다른 호칭의 인입관 롤 이음도 그 호칭 부속으로 산출한다. 밴드 총수는 그대로다.
+    from .site import FEEDER_HOSE_NOMINAL
+    other_joints: Dict[int, int] = {}
+    for r in main.get("routes", []):
+        n = FEEDER_HOSE_NOMINAL.get(r.get("material")) if r.get("role") == "feeder" else None
+        if n is not None and n != main_mm:
+            other_joints[n] = other_joints.get(n, 0) + int(r.get("joints") or 0)
+    main_joints = joints - sum(other_joints.values())
+    same_m = main["total_m"] - sum(other_hose.values())
+    rolls50 = math.ceil(same_m / ROLL_M - 1e-9) if same_m > 0 else 0
+    slack50 = rolls50 * ROLL_M - same_m
+    extra50 = 1 if (rolls50 and slack50 <= ROLL_SLACK * ROLL_M) else 0
     rows: List[Dict] = []
 
     def put(code, base, note, spare=True):
@@ -97,15 +114,31 @@ def build(n_heads: int, lat_lengths: Sequence[float], main: Dict, site: Dict) ->
     put("01924", n_lat, f"가지관 {n_lat}열 — 주배관 20 mm 타공 분기")
     put("01786", n_lat, f"가지관 {n_lat}열 — 열마다 밸브")
     put("02000", n_lat, f"가지관 {n_lat}열 말단 마감")
-    put(F["hose"], main["rolls"] + extra50, f"주배관 {main_mm} mm {main['total_m']} m → 50 m 롤 {main['rolls']}"
-        + (f" + 여분 1(남는 길이 {slack50:.0f} m)" if extra50 else ""), spare=False)
-    put(F["e_valve"], start_v + zone_v + ends, f"시작 {start_v} + 구역밸브 {zone_v} + 말단 마감 {ends}")
+    feed_note = (f"(주배관 {main.get('main_m', main['total_m'])} m + 호스 인입관 {main['feeder_hose_m'][main_mm]} m)"
+                 if (main.get("feeder_hose_m") or {}).get(main_mm) else "")
+    if rolls50:
+        put(F["hose"], rolls50 + extra50, f"주배관 {main_mm} mm {same_m:.1f} m{feed_note} → 50 m 롤 {rolls50}"
+            + (f" + 여분 1(남는 길이 {slack50:.0f} m)" if extra50 else ""), spare=False)
+    for n, m in sorted(other_hose.items()):
+        rolls = math.ceil(m / ROLL_M - 1e-9)
+        slack = rolls * ROLL_M - m
+        extra = 1 if rolls and slack <= ROLL_SLACK * ROLL_M else 0
+        put(pipes.main_fittings(n)["hose"], rolls + extra,
+            f"인입관 송수호스 {n} mm {m:.1f} m → 50 m 롤 {rolls}(규칙 21)"
+            + (f" + 여분 1(남는 길이 {slack:.0f} m)" if extra else ""), spare=False)
+    put(F["e_valve"], start_v + zone_v + ends,
+        f"시작 {start_v} + 구역밸브 {zone_v}({zone_v_src}) + 말단 마감 {ends}")
     if tees:
         put("01201", tees, f"T {tees}")
-    if 2 * tees + joints:
-        put(F["wf42"], 2 * tees + joints, f"T 나가는 쪽 2×{tees} + 일자 {joints}")
-    if joints:
-        put(F["wf41"], joints, f"주배관 잇는 자리 {joints} — 일자연결 세트")
+    if 2 * tees + main_joints:
+        put(F["wf42"], 2 * tees + main_joints, f"T 나가는 쪽 2×{tees} + 일자 {main_joints}")
+    if main_joints:
+        put(F["wf41"], main_joints, f"주배관·동일 호칭 인입관 잇는 자리 {main_joints} — 일자연결 세트")
+    for n, count in sorted(other_joints.items()):
+        if count:
+            fittings = pipes.main_fittings(n)
+            put(fittings["wf41"], count, f"인입관 {n} mm 잇는 자리 {count} — 일자연결 세트")
+            put(fittings["wf42"], count, f"인입관 {n} mm 일자 {count}")
     put("00278", src_bands + 2 * ends + 4 * tees + 4 * joints + 2 * zone_v,
         f"시작 {src_bands} + 말단 2×{ends} + T 4×{tees} + 일자 4×{joints} + 구역밸브 2×{zone_v}")
     put("02038", _up10((n_lat + gauge_saddles) * 2 * 1.5), "주배관·분기 고정 — 루퍼젯 H25·H20 부속마다 2개 (여유 1.5배)", spare=False)

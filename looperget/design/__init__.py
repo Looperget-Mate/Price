@@ -24,7 +24,10 @@ SCHEMA_OUT = "looperget.design.answer/1"
 
 def design(site: Dict, price_db: Optional[Dict] = None, tier: str = "소비자가") -> Dict:
     site = _site.validate(site)
-    route_pts = [[tuple(p) for p in r["pts"]] for r in site["routes"]]
+    # 규칙 21 F1 — 열(가지관)은 **주배관(role=main)에만** 붙는다. 인입관은 물을 옮기기만 한다.
+    main_idx = [i for i, r in enumerate(site["routes"]) if _site.route_role(r) == "main"]
+    route_pts = [[tuple(p) for p in site["routes"][i]["pts"]] for i in main_idx]
+    feeder_pts = [[tuple(p) for p in r["pts"]] for r in site["routes"] if _site.route_role(r) == "feeder"]
     warnings: List[str] = []
 
     laterals: List[Dict] = []
@@ -39,10 +42,14 @@ def design(site: Dict, price_db: Optional[Dict] = None, tier: str = "소비자�
             d["block"] = blk["name"]
             tap = branch.find_tap(r.p0, r.dir, route_pts)
             if tap is None:
-                warnings.append(f"{blk['name']} 열 a={r.a:.1f}: 주배관에 닿지 않음(급수 불가) — 경로 검토")
+                if feeder_pts and branch.find_tap(r.p0, r.dir, feeder_pts) is not None:
+                    warnings.append(f"{blk['name']} 열 a={r.a:.1f}: 인입관에만 닿는다 — "
+                                    "인입관에는 가지관을 내지 않는다(규칙 21). 그 선을 주배관으로 바꾸거나 주배관을 그리세요")
+                else:
+                    warnings.append(f"{blk['name']} 열 a={r.a:.1f}: 주배관에 닿지 않음(급수 불가) — 경로 검토")
                 d.update(tap=None, route=None, zone=None)
             else:
-                rt = site["routes"][tap["route"]]
+                rt = site["routes"][main_idx[tap["route"]]]
                 d.update(tap=[round(tap["pt"][0], 1), round(tap["pt"][1], 1)], tap_how=tap["how"],
                          route=rt["name"], zone=rt["zone"])
             pts, Lp, extra, dev = branch.branch_path(r.p0, r.p1, r.off, route_pts)

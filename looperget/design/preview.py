@@ -24,6 +24,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from .. import hydro as H
 from . import hydro_zone as HZ
+from . import branch as _branch
 from .layout import RowPolicy, rows_from_polygon
 
 SCHEMA = "looperget.design.preview/1"
@@ -102,12 +103,36 @@ def zone_cap_by_pressure(main_m: float, lat_n: int, lat_m: float, n_max: int,
     return best
 
 
+def _lat_path(row, route_pts) -> List[List[float]]:
+    """가지관 1열의 **실제 경로**. 주배관이 있고 직각에서 벗어나면 곡선으로 꺾인다(규칙 14).
+
+    없으면 직선 두 점. `design()` 이 쓰는 `branch.branch_path` 를 그대로 부른다 —
+    **미리보기와 설계가 다른 선을 그리면 안 된다.**
+    """
+    if route_pts:
+        try:
+            pts, _L, extra, _dev = _branch.branch_path(row.p0, row.p1, row.off, route_pts)
+            if extra > 0:
+                return [[round(q[0], 1), round(q[1], 1)] for q in pts]
+        except Exception:
+            pass
+    return [[round(row.p0[0], 1), round(row.p0[1], 1)],
+            [round(row.p1[0], 1), round(row.p1[1], 1)]]
+
+
 def block_preview(blocks: Sequence[Dict], flow_lpm: Optional[float] = None,
-                  model: Optional[str] = None) -> Dict:
+                  model: Optional[str] = None,
+                  routes: Optional[Sequence[Dict]] = None) -> Dict:
     """밭 목록 → **열·헤드·요구 유량·권고 구역 수**. 주배관이 없어도 나온다.
 
     `blocks` = [{"name", "polygon"(로컬 m), "u"[, "policy"]}] · `flow_lpm` = 쓸 수 있는 분당 L.
+    `routes` 를 주면 **④와 같은 결과**가 나온다 — 열이 주배관에서 시작하고,
+    직각에서 벗어난 분기부는 `branch_path` 가 **곡선으로 꺾는다**(규칙 14).
     """
+    # 규칙 21 F1 — 열은 **주배관(role=main)에만** 붙는다. 인입관(zone 없음)은 열 기준이 아니다.
+    from .site import route_role as _role
+    route_pts = [[tuple(q) for q in (r.get("pts") or [])]
+                 for r in (routes or []) if len(r.get("pts") or []) >= 2 and _role(r) == "main"] or None
     prof = HZ.head_profile(model)
     rows_out: List[Dict] = []
     n_heads = n_rows = 0
@@ -122,7 +147,8 @@ def block_preview(blocks: Sequence[Dict], flow_lpm: Optional[float] = None,
         u = tuple(blk.get("u") or (1.0, 0.0))
         pol = RowPolicy(**(blk.get("policy") or {}))
         try:
-            rows = rows_from_polygon(poly, u, pol)          # 🔴 mains 없이 — 주배관 전에도 나온다
+            # 주배관을 알면 그 기준으로(=④와 같게), 모르면 밭 경계 기준으로 — 둘 다 정직하다.
+            rows = rows_from_polygon(poly, u, pol, mains=route_pts)
         except Exception as e:                              # 기하가 이상하면 그 밭만 건너뛴다
             rows_out.append({"name": blk.get("name") or "?", "error": str(e)})
             continue
@@ -138,8 +164,7 @@ def block_preview(blocks: Sequence[Dict], flow_lpm: Optional[float] = None,
                          # 예상 살수를 눈으로 보게 — 헤드 좌표(로컬 m)
                          "head_pts": [[round(h[0], 1), round(h[1], 1)]
                                       for r in rows for h in r.heads],
-                         "row_lines": [[[round(r.p0[0], 1), round(r.p0[1], 1)],
-                                        [round(r.p1[0], 1), round(r.p1[1], 1)]] for r in rows]})
+                         "row_lines": [_lat_path(r, route_pts) for r in rows]})
         n_rows += len(rows)
         n_heads += heads
         lat_total += lat_m

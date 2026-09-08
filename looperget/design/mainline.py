@@ -21,6 +21,51 @@ END_NEAR = 2.0         # 다른 경로의 끝점에서 출발하면 그 끝점�
 MID_NEAR = 2.0         # 다른 경로 중간에서 출발하면 그 자리의 T
 ELBOW_DEG = 45.0       # 규칙 2·3: 45° 이내 현장 굽힘, 초과는 T 양쪽
 TEE_NEAR = 2.0         # 꺾임점이 이 거리 안의 T와 같은 자리면 규칙 3(T 양쪽)이 이미 선 것으로 본다
+HEADER_NEAR = 2.0      # 규칙 21 F3 — 주배관 출발점끼리 이 거리 안이면 **한 분배점**(매니폴드 세트 · 부속만).
+                       # 넘으면 분배점을 나누고 그 사이는 인입관이다. 대표 확정 2026-09-08(#79) — T 합침 거리와 같게 시작.
+
+
+def headers(routes: Sequence[Dict], near: float = HEADER_NEAR) -> List[Dict]:
+    """분배점(규칙 21) — 주배관(role=main)의 출발점을 `near` 안에서 묶은 자리.
+
+    → [{"pt", "routes": [이름], "zones": [구역], "outlets": 주배관 수, "valves": 구역 수}]
+    구역 밸브는 **분배점마다 구역 수**만큼이다 — 같은 구역의 두 갈래는 밸브 하나 뒤에서 T 로 갈라진다
+    (승인본 02: 한 입구에서 두 갈래 · 구역 1 · 밸브 1)."""
+    from .site import route_role
+    mains = [(i, r) for i, r in enumerate(routes) if route_role(r) == "main" and len(r.get("pts") or []) >= 2]
+    parent = list(range(len(mains)))
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    pts = [tuple(r["pts"][0]) for _, r in mains]
+    for a in range(len(mains)):
+        for b in range(a + 1, len(mains)):
+            if G.dist(pts[a], pts[b]) <= near:
+                parent[find(a)] = find(b)
+    groups: Dict[int, List[int]] = {}
+    for a in range(len(mains)):
+        groups.setdefault(find(a), []).append(a)
+    out = []
+    for idx in sorted(groups.values(), key=lambda g: min(g)):
+        rs = [mains[k][1] for k in idx]
+        cx = sum(pts[k][0] for k in idx) / len(idx)
+        cy = sum(pts[k][1] for k in idx) / len(idx)
+        zones = []
+        for r in rs:
+            if r.get("zone") not in zones:
+                zones.append(r.get("zone"))
+        out.append({"pt": [round(cx, 1), round(cy, 1)], "routes": [r["name"] for r in rs],
+                    "zones": zones, "outlets": len(rs), "valves": len(zones)})
+    return out
+
+
+def header_valves(routes: Sequence[Dict], near: float = HEADER_NEAR) -> int:
+    """구역 밸브 수 파생값 = Σ 분배점의 구역 수(규칙 21 · #79). 대표 입력이 있으면 bom 이 그것을 우선한다."""
+    return sum(h["valves"] for h in headers(routes, near))
 
 
 def _bends(pts: Sequence[Pt]) -> List[Tuple[Pt, float]]:
@@ -38,14 +83,34 @@ def analyze(routes: Sequence[Dict], sources: Sequence[Dict]) -> Dict:
     """routes = [{"name","zone","pts"}], sources = [{"name","pt","tees_here"?}]
     → {"total_m","rolls","tees","ends","joints","elbows_over45","bends_at_tee","routes":[...],
        "tee_pts","end_pts","warnings"}"""
+    from .site import route_role, feeder_d_mm, FEEDER_HOSE_NOMINAL
     R = [dict(r, pts=[tuple(p) for p in r["pts"]]) for r in routes]
     for r in R:
+        r["role"] = route_role(r)
+        r["material"] = (r.get("material") or "hose50") if r["role"] == "feeder" else None
         r["len"] = G.polyline_len(r["pts"])
-        r["joints"] = max(0, math.ceil(r["len"] / ROLL_M) - 1)        # 50 m 롤이 모자라 잇는 자리
+        # 롤 이음은 송수호스에만 — 파이프·매설 인입관은 우리가 파는 자재가 아니다(규칙 7 계통도).
+        r["is_hose"] = r["role"] == "main" or r["material"] in FEEDER_HOSE_NOMINAL
+        r["joints"] = max(0, math.ceil(r["len"] / ROLL_M) - 1) if r["is_hose"] else 0
         r["bends"] = _bends(r["pts"])
         r["over45"] = [b for b in r["bends"] if b[1] > ELBOW_DEG]
-    total = sum(r["len"] for r in R)
+    # 규칙 21 — 주배관과 **호스 인입관**만 송수호스 물량이다. 파이프·매설 인입관은 길이만 따로 적는다.
+    main_m = sum(r["len"] for r in R if r["role"] == "main")
+    feeder_m = sum(r["len"] for r in R if r["role"] == "feeder")
+    feeder_hose_m: Dict[int, float] = {}
+    feeder_other_m = 0.0
+    for r in R:
+        if r["role"] != "feeder":
+            continue
+        if r["is_hose"]:
+            n = FEEDER_HOSE_NOMINAL[r["material"]]
+            feeder_hose_m[n] = feeder_hose_m.get(n, 0.0) + r["len"]
+        else:
+            feeder_other_m += r["len"]
+    total = main_m + sum(feeder_hose_m.values())
     warnings: List[str] = []
+    if not any(r["role"] == "main" for r in R):
+        warnings.append("주배관(role=main)이 하나도 없다 — 전부 인입관이면 가지관을 낼 곳이 없다(규칙 21)")
 
     # ── 출발점 분류: 급수점 클러스터 / 다른 경로 끝 / 다른 경로 중간 ─────────
     tee_pts: List[Tuple[Pt, str]] = []
@@ -121,12 +186,20 @@ def analyze(routes: Sequence[Dict], sources: Sequence[Dict]) -> Dict:
         for p, d in r["elbows_over45"]:
             warnings.append(f"'{r['name']}' 꺾임 {d:.0f}° > 45° @ {tuple(round(x, 1) for x in p)} — 규칙 3(T 양쪽) 검토")
 
+    hdrs = headers(routes)
     return {
-        "total_m": round(total, 1),
+        "total_m": round(total, 1),                      # 송수호스 길이 = 주배관 + 호스 인입관
         "rolls": math.ceil(total / ROLL_M),
+        "main_m": round(main_m, 1), "feeder_m": round(feeder_m, 1),          # 규칙 21
+        "feeder_hose_m": {k: round(v, 1) for k, v in feeder_hose_m.items()},
+        "feeder_other_m": round(feeder_other_m, 1),
+        "headers": hdrs, "header_valves": sum(h["valves"] for h in hdrs),
         "tees": tees, "ends": ends, "joints": joints, "elbows_over45": elbows,
         "bends_at_tee": at_tee_n,
-        "routes": [{"name": r["name"], "zone": r.get("zone"), "len_m": round(r["len"], 1),
+        "routes": [{"name": r["name"], "role": r["role"], "zone": r.get("zone"),
+                    "material": r["material"],
+                    "d_mm": (feeder_d_mm(r) if r["role"] == "feeder" else None),   # 계산 내경(규칙 21)
+                    "len_m": round(r["len"], 1),
                     "joints": r["joints"], "from": r["from"][0],
                     "bends": [[list(p), round(d, 1)] for p, d in r["bends"]]} for r in R],
         "tee_pts": [[list(p), tag] for p, tag in tee_pts],

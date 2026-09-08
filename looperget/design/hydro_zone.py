@@ -119,8 +119,12 @@ def pump_head(curve: Sequence[Tuple[float, float]], q_lpm: float) -> float:
     return 0.0
 
 
+Feeders = Optional[Sequence[Tuple[float, float]]]   # 규칙 21 — 관경이 다른 인입관 [(길이 m, 내경 mm)]
+
+
 def sys_head(n_heads: int, main_m: float, lat_n: int, lat_m: float, p_end: float,
-             model: Optional[str] = None, pipe_mm: Optional[Tuple[float, float]] = None) -> Dict:
+             model: Optional[str] = None, pipe_mm: Optional[Tuple[float, float]] = None,
+             feeders: Feeders = None) -> Dict:
     """말단압 p_end를 만들려면 펌프가 내야 하는 양정(m)과 그때의 유량(L/분).
     임계 열(두수·길이 최대)로 가지관 손실을, 열 수만큼의 분기로 주배관 손실(Christiansen)을 본다.
 
@@ -141,53 +145,59 @@ def sys_head(n_heads: int, main_m: float, lat_n: int, lat_m: float, p_end: float
     Q = n_heads * q1
     n_branch = max(2, int(math.ceil(n_heads / max(1, lat_n))))
     hf_main = H.lateral_loss_m(Q, main_mm, main_m, n_branch)
-    p_start = p_in_lat + H.head_m_to_bar(hf_main)
+    # 규칙 21 — 관경이 다른 인입관은 **분출구 없이 전 유량**이 지나므로 Christiansen 없이 그 관경으로 본다.
+    hf_feed = sum(H.hazen_williams_loss_m(Q, d, L) for L, d in (feeders or []) if L > 0 and d)
+    p_start = p_in_lat + H.head_m_to_bar(hf_main + hf_feed)
     return {"need_head_m": H.bar_to_head_m(p_start) + SUCTION_MARGIN_M, "Q": Q, "q_head": q1,
             "p_start": p_start, "p_in_lat": p_in_lat, "hf_lat": hf_lat, "hf_main": hf_main,
+            "hf_feed": hf_feed,
             "v50": H.velocity_ms(Q, main_mm)}   # 열 이름은 「v50」 그대로 — 호칭 50 관의 유속이다
 
 
 def zone_point(n_heads: int, main_m: float, lat_n: int, lat_m: float,
                curve: Sequence[Tuple[float, float]], model: Optional[str] = None,
-               pipe_mm: Optional[Tuple[float, float]] = None) -> Dict:
+               pipe_mm: Optional[Tuple[float, float]] = None, feeders: Feeders = None) -> Dict:
     """펌프 곡선 ∩ 시스템 곡선 — 실제 말단압을 이분법으로 찾는다."""
     lo, hi = 0.2, 4.0
     for _ in range(80):
         p_end = (lo + hi) / 2
-        s = sys_head(n_heads, main_m, lat_n, lat_m, p_end, model, pipe_mm)
+        s = sys_head(n_heads, main_m, lat_n, lat_m, p_end, model, pipe_mm, feeders)
         if pump_head(curve, s["Q"]) >= s["need_head_m"]:
             lo = p_end
         else:
             hi = p_end
     p_end = lo
-    s = sys_head(n_heads, main_m, lat_n, lat_m, p_end, model, pipe_mm)
+    s = sys_head(n_heads, main_m, lat_n, lat_m, p_end, model, pipe_mm, feeders)
     verdict = "OK" if p_end >= P_END_TARGET else ("주의" if p_end >= 1.2 else "부족")
     return {"heads": n_heads, "main_m": round(main_m, 1), "lat_n": lat_n, "lat_m": round(lat_m, 1),
             "Q": round(s["Q"]), "q_head": round(s["q_head"], 1),
             "p_start": round(s["p_start"], 2), "p_end": round(p_end, 2),
             "hf_lat": round(s["hf_lat"], 1), "hf_main": round(s["hf_main"], 1),
+            "hf_feed": round(s["hf_feed"], 1),
             "need_head_m": round(s["need_head_m"]), "have_head_m": round(pump_head(curve, s["Q"]), 1),
             "radius_end": round(radius_m(p_end, model), 1), "v50": round(s["v50"], 2), "verdict": verdict}
 
 
 def zone_demand(n_heads: int, main_m: float, lat_n: int, lat_m: float,
-                model: Optional[str] = None, pipe_mm: Optional[Tuple[float, float]] = None) -> Dict:
+                model: Optional[str] = None, pipe_mm: Optional[Tuple[float, float]] = None,
+                feeders: Feeders = None) -> Dict:
     """펌프가 없을 때 — 말단 1.5 bar를 지키는 요구 사양(유량·양정·축동력)."""
-    s = sys_head(n_heads, main_m, lat_n, lat_m, P_END_TARGET, model, pipe_mm)
+    s = sys_head(n_heads, main_m, lat_n, lat_m, P_END_TARGET, model, pipe_mm, feeders)
     return {"heads": n_heads, "main_m": round(main_m, 1), "lat_n": lat_n, "lat_m": round(lat_m, 1),
             "Q": round(s["Q"]), "q_head": round(s["q_head"], 1),
             "p_start": round(s["p_start"], 2), "p_end": P_END_TARGET,
             "hf_lat": round(s["hf_lat"], 1), "hf_main": round(s["hf_main"], 1),
+            "hf_feed": round(s["hf_feed"], 1),
             "need_head_m": round(s["need_head_m"]), "need_hp": round(H.pump_shaft_hp(s["Q"], s["need_head_m"]), 1),
             "radius_end": radius_m(P_END_TARGET, model), "v50": round(s["v50"], 2), "verdict": "[미확정 펌프]"}
 
 
 def cap_heads_15bar(main_m: float, lat_n: int, lat_m: float, curve, n_from: int,
                     model: Optional[str] = None,
-                    pipe_mm: Optional[Tuple[float, float]] = None) -> int:
+                    pipe_mm: Optional[Tuple[float, float]] = None, feeders: Feeders = None) -> int:
     """말단 1.5 bar를 지키는 동시 두수 상한(미달 구역의 대안 수치)."""
     for n in range(n_from, 3, -1):
-        if zone_point(n, main_m, lat_n, lat_m, curve, model, pipe_mm)["p_end"] >= P_END_TARGET:
+        if zone_point(n, main_m, lat_n, lat_m, curve, model, pipe_mm, feeders)["p_end"] >= P_END_TARGET:
             return n
     return 0
 
@@ -202,18 +212,30 @@ def _curve_of(site: Dict):
     return None
 
 
-def _zone_inputs(design: Dict):
-    """구역별 (구역, 두수, 주배관 길이, 임계 열 두수, 임계 열 길이).
-    구역 주배관 길이 = 그 구역 경로 길이 + 공통 구간(zone None) 길이."""
+def _zone_inputs(design: Dict, main_id_mm: Optional[float] = None):
+    """구역별 (구역, 두수, 주배관 길이, 임계 열 두수, 임계 열 길이, 인입관 [(길이, 내경)]).
+
+    규칙 21 — 인입관(role=feeder)은 **모든 구역**의 손실에 들어간다.
+    관경이 주배관과 같으면(또는 모르면) 승인본 보정 그대로 주배관 길이에 합산하고,
+    다르면 (길이, 내경)을 따로 내어 `sys_head` 가 그 관경으로 본다."""
     routes = {r["name"]: r for r in design["mainline"]["routes"]}
-    common_m = sum(r["len_m"] for r in routes.values() if r.get("zone") is None)
+    common_m, feeders = 0.0, []
+    for r in routes.values():
+        role = r.get("role") or ("feeder" if r.get("zone") is None else "main")
+        if role != "feeder":
+            continue
+        d = r.get("d_mm")
+        if main_id_mm is None or not d or abs(float(d) - float(main_id_mm)) < 0.05:
+            common_m += r["len_m"]
+        else:
+            feeders.append((r["len_m"], float(d)))
     lats = {l["id"]: l for l in design["laterals"]}
     for z in design["zones"]:
         rows = [lats[i] for i in z["laterals"]]
         if not rows:
             continue
         crit = max(rows, key=lambda r: (r["n_heads"], r["len_m"]))
-        yield z, z["n_heads"], sum(routes[n]["len_m"] for n in z["routes"]) + common_m,             crit["n_heads"], crit["len_m"]
+        yield z, z["n_heads"], sum(routes[n]["len_m"] for n in z["routes"]) + common_m, crit["n_heads"], crit["len_m"], feeders
 
 
 def _pipe_mm_of(site: Dict) -> Tuple[float, float]:
@@ -255,8 +277,8 @@ def resolve_main_mm(design: Dict, site: Dict) -> Dict:
         seen.append(mm)
         d_main = pipes.by_nominal(mm)["id_mm"]
         picks, need = [], []
-        for z, n_heads, main_m, lat_n, lat_m in _zone_inputs(design):
-            r = zone_point(n_heads, main_m, lat_n, lat_m, curve, pipe_mm=(d_main, LAT_MM))
+        for z, n_heads, main_m, lat_n, lat_m, fd in _zone_inputs(design, d_main):
+            r = zone_point(n_heads, main_m, lat_n, lat_m, curve, pipe_mm=(d_main, LAT_MM), feeders=fd)
             # 🔴 이미 말단 1.5 bar 를 못 지키는 구역은 **관경으로 풀 문제가 아니다.**
             #    이런 구역의 운전점은 압력이 무너진 상태라 그대로 쓰면 오히려 가는 관을 고른다.
             #    관경을 내리지 않고 그대로 두고, 무엇을 해야 하는지 말한다(불변 원칙 1).
@@ -300,19 +322,21 @@ def resolve_main_mm(design: Dict, site: Dict) -> Dict:
 
 def zones_report(design: Dict, site: Dict) -> List[Dict]:
     """엔진 출력(zones·laterals·mainline)과 site(routes·pump)로 구역별 운전점 표를 만든다.
-    주배관 내경은 `site["main_mm"]`(호칭)을 따른다 — 없으면 실물 기본(50.8)."""
+    주배관 내경은 설계 결과의 확정 호칭을 따른다. 옛 출력에 없으면 site, 실물 기본 순서."""
     pump = site.get("pump") or {}
     curve = _curve_of(site)
-    pipe_mm = _pipe_mm_of(site)
+    pipe_mm = _pipe_mm_of(dict(site, main_mm=design.get("main_mm") or site.get("main_mm")))
     out = []
-    for z, n_heads, main_m, lat_n, lat_m in _zone_inputs(design):
+    for z, n_heads, main_m, lat_n, lat_m, fd in _zone_inputs(design, pipe_mm[0]):
         if curve:
-            r = zone_point(n_heads, main_m, lat_n, lat_m, curve, pipe_mm=pipe_mm)
+            r = zone_point(n_heads, main_m, lat_n, lat_m, curve, pipe_mm=pipe_mm, feeders=fd)
             if r["verdict"] != "OK":
                 r["cap_15bar"] = cap_heads_15bar(main_m, lat_n, lat_m, curve, n_heads,
-                                                 pipe_mm=pipe_mm)
+                                                 pipe_mm=pipe_mm, feeders=fd)
         else:
-            r = zone_demand(n_heads, main_m, lat_n, lat_m, pipe_mm=pipe_mm)
+            r = zone_demand(n_heads, main_m, lat_n, lat_m, pipe_mm=pipe_mm, feeders=fd)
+        if fd:
+            r["feeder_m"] = round(sum(L for L, _ in fd), 1)     # 규칙 21 — 관경이 다른 인입관 길이
         r["zone"] = str(z["zone"])
         r["pump"] = pump.get("model", "[미확정]")
         out.append(r)

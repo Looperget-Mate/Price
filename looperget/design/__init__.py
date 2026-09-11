@@ -64,6 +64,21 @@ def design(site: Dict, price_db: Optional[Dict] = None, tier: str = "소비자�
 
     main = mainline.analyze(site["routes"], site["sources"])
     warnings += main.pop("warnings")
+    # 🔵 [V106] 재질이 바뀌는 자리 — 그 자리 부속은 **대표 계통 품목**(규칙 7)이다. 엔진은 자리만 세운다.
+    main["transitions"] = mainline.transitions(site["routes"], site["sources"], main)
+    # 🔵 [V107] 접점마다 **어떻게 잇는지**(일자·엘보·T)와 그 자리 밸브(대표 2026-09-09).
+    main["junctions"] = mainline.junctions(site["routes"], site["sources"], main)
+    _elb = [j for j in main["junctions"] if j["kind"] == "elbow"]
+    if _elb:
+        warnings.append("꺾임이 45°를 넘는 자리 %d 곳 — %s. **호스면 규칙 3(T 양쪽)**, "
+                        "**나사·조임식 파이프면 엘보**입니다(규칙 2 단서 · 규칙 7). 부속은 [미확정]입니다."
+                        % (len(_elb), " · ".join("%s(%.0f°)" % ("·".join(j["routes"]), j["dev_deg"] or 0)
+                                                 for j in _elb)))
+    _tr = [t for t in main["transitions"] if t["kind"] == "material"]
+    if _tr:
+        warnings.append("재질이 바뀌는 자리 %d 곳 — %s. **연결 부속은 [미확정]** 입니다: "
+                        "계통 품목(`water_items`)으로 넣어 주세요(규칙 7)."
+                        % (len(_tr), " · ".join("%s→%s" % (t["from"], t["to"]) for t in _tr)))
 
     zones: Dict[str, Dict] = {}
     for r in site["routes"]:

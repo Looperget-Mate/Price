@@ -36,6 +36,14 @@ SCHEMA = "looperget.design.site/1"
 
 ROLES = ("feeder", "main")
 FEEDER_MATERIALS = ("hose50", "hose40", "pipe", "buried")
+MATERIALS = FEEDER_MATERIALS               # [V105] 주배관도 같은 재질 표를 쓴다(대표 2026-09-09)
+
+# 🔵 [V105] 관수 방식(대표 2026-09-09) — **노지 농업**만 본다. 입체적인 과수원·나무는 제외.
+#    「스프링클러 / 점적호스·테이프 / 분수호스 중 고르게 하고, **지금은 스프링클러만 활성화**」.
+#    🔴 없는 엔진을 있는 척하지 않는다 — 나머지 둘은 고를 수는 있으나 설계는 멈춘다(불변 원칙 1).
+SYSTEMS = ("sprinkler", "drip", "fountain")
+SYSTEM_LABEL = {"sprinkler": "스프링클러(노지)", "drip": "점적호스·점적테이프", "fountain": "분수호스"}
+SYSTEM_READY = ("sprinkler",)
 FEEDER_HOSE_NOMINAL = {"hose50": 50, "hose40": 40}       # 송수호스 재질 → 호칭(mm)
 ROLE_LABEL = {"feeder": "인입관", "main": "주배관"}
 MATERIAL_LABEL = {"hose50": "송수호스 50", "hose40": "송수호스 40", "pipe": "수도 파이프", "buried": "매설관(기설)"}
@@ -50,7 +58,9 @@ def route_role(r: Dict) -> str:
 
 
 def feeder_d_mm(r: Dict):
-    """인입관의 계산 내경(mm). 호스는 카탈로그 실물 내경, pipe·buried 는 대표가 적은 d_mm. 모르면 None."""
+    """관의 계산 내경(mm). 호스는 카탈로그 실물 내경, pipe·buried 는 대표가 적은 d_mm. 모르면 None.
+
+    [V105] 이름은 인입관에서 왔지만 **주배관에도 같은 규칙**을 쓴다(대표 2026-09-09)."""
     from . import pipes
     m = r.get("material") or "hose50"
     if m in FEEDER_HOSE_NOMINAL:
@@ -66,11 +76,24 @@ def feeder_d_mm(r: Dict):
     return d if math.isfinite(d) and d > 0 else None
 
 
+def system_of(site: Dict) -> str:
+    """관수 방식. 안 적었으면 **스프링클러**(지금까지의 모든 설계가 그것이다)."""
+    s = site.get("system")
+    return s if s in SYSTEMS else "sprinkler"
+
+
 def validate(site: Dict) -> Dict:
     """필수 항목·형식 검사. 문제가 있으면 ValueError — 미확정 입력으로는 설계를 진행하지 않는다(불변 원칙 1)."""
     errs: List[str] = []
     if site.get("schema") != SCHEMA:
         errs.append(f"schema != {SCHEMA}")
+    sysname = system_of(site)
+    site["system"] = sysname
+    if sysname not in SYSTEM_READY:
+        errs.append("관수 방식 '%s' 는 **아직 계산 엔진이 없습니다** — 지금은 %s 만 설계합니다. "
+                    "없는 값을 지어내지 않습니다(불변 원칙 1)."
+                    % (SYSTEM_LABEL.get(sysname, sysname),
+                       " · ".join(SYSTEM_LABEL[k] for k in SYSTEM_READY)))
     blocks = site.get("blocks") or []
     if not blocks:
         errs.append("blocks 비어 있음")
@@ -110,6 +133,21 @@ def validate(site: Dict) -> Dict:
                     r["d_mm"] = d
         elif r.get("zone") is None:
             errs.append(f"주배관 '{r.get('name')}': 구역(zone) 없음 — 인입관이면 role='feeder'(규칙 21)")
+        else:
+            # 🔵 [V105] **주배관도 재질·관경을 고른다**(대표 2026-09-09 「인입관과 주배관이 같을 수도,
+            #    다를 수도 있음」). 기본은 지금까지와 같은 송수호스 50 — 옛 데이터는 그대로 읽힌다.
+            #    수도 파이프·매설관이면 **관경을 모르면 멈춘다**(인입관과 같은 규칙 · 불변 원칙 1).
+            m = r.get("material") or "hose50"
+            if m not in MATERIALS:
+                errs.append(f"주배관 '{r.get('name')}': material '{m}' — {'/'.join(MATERIALS)} 중 하나")
+            r["material"] = m
+            if m in ("pipe", "buried"):
+                d = feeder_d_mm(r)
+                if d is None:
+                    errs.append(f"주배관 '{r.get('name')}': {MATERIAL_LABEL[m]} 관경(d_mm) [미확정] — "
+                                "유한한 양수 내경(mm)이 필요하다. 모르면 설계를 진행하지 않는다(불변 원칙 1)")
+                else:
+                    r["d_mm"] = d
     for b in blocks:                              # 작물은 선택 항목 — 모르면 비운다(대표 지시 2026-09-05)
         c = b.get("crop")
         if c is not None and (not isinstance(c, str) or not c.strip()):

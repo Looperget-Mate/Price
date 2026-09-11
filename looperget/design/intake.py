@@ -41,6 +41,15 @@ QUESTIONS: List[Dict] = [
      "why": "작도판 회신 경로. 설계에는 쓰이지 않는다."},
 
     # ── B. 대상지 ──
+    # 🔵 [V105] 대표 확정 2026-09-09 — 이 프로그램의 범위는 **노지 농업**이다.
+    #    시설하우스·입체적인 과수원·나무는 지금 범위 밖. 노지 안에서 방식을 고른다.
+    {"key": "system", "group": "대상지", "req": False,
+     "ask": "관수 방식을 고르세요 (노지 기준 · 지금은 **스프링클러**만 설계됩니다)",
+     "choices": ["스프링클러", "점적호스·점적테이프", "분수호스"],
+     "warn_if": {"점적호스·점적테이프": "🔴 **점적은 아직 계산 엔진이 없습니다** — 고르시면 설계가 멈춥니다. "
+                                    "없는 값을 지어내지 않습니다(불변 원칙 1).",
+                 "분수호스": "🔴 **분수호스는 아직 계산 엔진이 없습니다** — 고르시면 설계가 멈춥니다."},
+     "why": "site.system → 배치·수리 엔진 선택. 스프링클러 외에는 site.validate 가 멈춘다(규칙 24)."},
     {"key": "crop", "group": "대상지", "req": False,
      "ask": "무엇을 심으십니까? (작물 · 모르면 비워 둡니다)",
      "why": "site.blocks[].crop → 지역·작물별 축적(대표 지시 2026-09-05). 열 간격을 만들지는 않는다."},
@@ -185,8 +194,10 @@ def to_site(answers: Dict, drawn: Optional[Dict] = None, name: Optional[str] = N
         if not _blank(crop) and b.get("crop") is None:
             b["crop"] = str(crop).strip()          # 작물은 문진표가 유일한 출처다
         blocks.append(b)
+    _sysmap = {"스프링클러": "sprinkler", "점적호스·점적테이프": "drip", "분수호스": "fountain"}
     site = {
         "schema": _site.SCHEMA,
+        "system": _sysmap.get(str(answers.get("system") or "").strip(), "sprinkler"),
         "name": name or answers.get("address") or "[미확정]",
         "blocks": blocks,
         "routes": list(d.get("routes") or []),

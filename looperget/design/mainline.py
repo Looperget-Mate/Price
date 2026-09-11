@@ -68,9 +68,181 @@ def headers(routes: Sequence[Dict], near: float = HEADER_NEAR, feed: Optional[Di
     return out
 
 
+HOSE_MATERIALS = ("hose50", "hose40")     # 우리 송수호스 — 호스밴드로 문다
+
+
+def is_hose(r: Dict) -> bool:
+    """그 관이 **우리 송수호스**인가. 안 적었으면 송수호스 50(지금까지의 기본)."""
+    return (r.get("material") or "hose50") in HOSE_MATERIALS
+
+
+JOINT_KIND = {"straight": "일자", "elbow": "엘보", "tee": "T", "end": "말단", "source": "급수원"}
+
+
+def _arm_dir(pts: Sequence[Pt], which: int) -> Pt:
+    """관의 끝에서 **접점을 등지고 나가는** 방향(단위벡터). which = 0(첫 점) · -1(끝점)."""
+    a, b = (pts[0], pts[1]) if which == 0 else (pts[-1], pts[-2])
+    return G.unit(G.sub(b, a))
+
+
+def junctions(routes: Sequence[Dict], sources: Sequence[Dict],
+              analysis: Optional[Dict] = None, near: float = TEE_NEAR) -> List[Dict]:
+    """**관이 만나는 자리마다 어떻게 잇는지**를 읽는다(대표 2026-09-09).
+
+    대표 말 — 「**일자**로 연결할 수도 있고, **엘보**로 연결할 수도 있고, **티자**로 연결할 수도 있어.
+    티자의 경우, 좌우로 나뉘는 것이 **구역을 안 나누고도 가동이 가능하면 밸브가 필요없고**,
+    좌우 각각 **구역을 나눠서 관수를 해야 한다면 좌우에 밸브** 부속으로 나가면 되겠지.」
+
+    판정 —
+      · 모인 관 끝이 **1개** → 말단(규칙 1 마감세트) · 급수원이 같이 있으면 급수원 인터페이스
+      · **2개** → 꺾임각 ≤ 45° 면 **일자**(호스는 현장 굽힘 · 규칙 2), 넘으면 **엘보**
+        🔴 규칙 2 는 **호스** 꺾임에 대한 것이다. 나사·조임식으로 조립되는 **파이프** 자리의 엘보는
+           규칙 7(대표 계통도)이 우선한다 — 그래서 재질을 함께 낸다.
+        🔴 호스가 45° 를 넘으면 규칙 3 이 「T 양쪽」으로 풀라고 한다 — `rule3` 로 표시한다.
+      · **3개 이상** → **T**
+    밸브 — 그 자리에서 물을 받는 **주배관들의 서로 다른 구역 수**(규칙 21). 좌우가 같은 구역이면 1,
+           좌우를 따로 여닫아야 하면 2. 대표 말과 같은 규칙이다.
+
+    → [{"pt","kind","arms","ends","dev_deg","materials","mixed","zones","valves","routes","rule3","source"}]
+    """
+    from .site import route_role
+    an = analysis or analyze(routes, sources)
+    R = [dict(r, pts=[tuple(q) for q in r["pts"]]) for r in routes]
+    feed = {}
+    for i, rr in enumerate(an["routes"]):
+        if rr.get("feed_pt"):
+            feed[i] = tuple(rr["feed_pt"])
+        elif rr["from"] == "source":
+            feed[i] = tuple(R[i]["pts"][0])
+        elif rr["from"] in ("end", "mid"):
+            feed[i] = tuple(R[i]["pts"][0])
+
+    arms = []
+    for i, r in enumerate(R):
+        if len(r["pts"]) < 2:
+            continue
+        for which in (0, -1):
+            arms.append({"i": i, "which": which, "pt": r["pts"][which],
+                         "dir": _arm_dir(r["pts"], which), "through": False})
+    # 접점 묶기 — 가까운 관 끝끼리 한 자리로 본다
+    groups: List[List[Dict]] = []
+    for a in arms:
+        for g in groups:
+            if G.dist(a["pt"], g[0]["pt"]) <= near:
+                g.append(a)
+                break
+        else:
+            groups.append([a])
+
+    out: List[Dict] = []
+    for g in groups:
+        cx = sum(a["pt"][0] for a in g) / len(g)
+        cy = sum(a["pt"][1] for a in g) / len(g)
+        pt = (round(cx, 1), round(cy, 1))
+        legs = list(g)
+        # 그 자리를 **지나가는** 관(끝이 아니라 몸통으로)은 팔 2개를 더한다 — 세 갈래가 된다
+        for i, r in enumerate(R):
+            if any(a["i"] == i for a in g):
+                continue
+            sj, cj, _ = G.nearest_on_polyline(r["pts"], pt)
+            if G.dist(cj, pt) <= near and END_NEAR < sj < an["routes"][i]["len_m"] - END_NEAR:
+                legs.append({"i": i, "which": None, "pt": pt, "dir": None, "through": True})
+                legs.append({"i": i, "which": None, "pt": pt, "dir": None, "through": True})
+        src = next((x for x in sources if G.dist(pt, tuple(x["pt"])) <= SOURCE_NEAR), None)
+        ends = len(legs)
+        dev = None
+        rule3 = False
+        if ends == 2 and all(a["dir"] for a in legs):
+            u1, u2 = legs[0]["dir"], legs[1]["dir"]
+            dev = round(180.0 - G.angle_between_deg(u1, u2), 1)     # 일직선이면 0
+        mats = sorted({(R[a["i"]].get("material") or "hose50") for a in legs})
+        hose_only = all(m in HOSE_MATERIALS for m in mats)
+        if ends >= 3:
+            kind = "tee"
+        elif ends == 2:
+            if dev is not None and dev > ELBOW_DEG:
+                kind = "elbow"
+                rule3 = hose_only          # 호스가 45°를 넘으면 규칙 3 — T 양쪽으로 푼다
+            else:
+                kind = "straight"
+        else:
+            kind = "source" if src is not None else "end"
+        fed = [i for i in range(len(R)) if feed.get(i) and G.dist(feed[i], pt) <= near
+               and route_role(R[i]) == "main"]
+        zones = []
+        for i in fed:
+            z = R[i].get("zone")
+            if z not in zones:
+                zones.append(z)
+        out.append({"pt": [pt[0], pt[1]], "kind": kind, "ends": ends, "dev_deg": dev,
+                    "materials": mats, "mixed": len(mats) > 1, "hose_only": hose_only,
+                    "zones": zones, "valves": len(zones), "rule3": rule3,
+                    "source": (src or {}).get("name"),
+                    "routes": sorted({R[a["i"]].get("name") for a in legs})})
+    out.sort(key=lambda j: (j["pt"][0], j["pt"][1]))
+    return out
+
+
+def transitions(routes: Sequence[Dict], sources: Sequence[Dict], analysis: Optional[Dict] = None) -> List[Dict]:
+    """**재질이 바뀌는 자리**를 찾아 세운다(대표 2026-09-09).
+
+    대표 말 — 「펌프나 여과기에서 플라스틱 파이프로 구조화하고, 지면으로 내린 후, 주배관까지는 호스로
+    연결할 수도 있고. 펌프 상단에 여과기를 직결하고, 여과기 나가는 부분에서 호스로 이어갈 수도 있고.
+    **고려해야 할 사항들이 많아.**」
+
+    🔴 그 자리에 무엇이 들어가는지(카플러·나사식·조임식…)는 **부속 정본이 정한다** — 엔진은 짓지 않는다.
+      여기서는 **어디서 무엇이 무엇으로 바뀌는지**만 세워 대표가 채울 자리를 보여 준다(규칙 7 `water_items`).
+
+    → [{"pt", "from", "to", "from_material", "to_material", "kind", "hose_ends"}]
+      kind = "source"(급수원 인터페이스) · "material"(관↔관 재질 전환)
+    """
+    from .site import MATERIAL_LABEL, route_role
+    an = analysis or analyze(routes, sources)
+    R = list(routes)
+    out: List[Dict] = []
+    for i, rr in enumerate(an["routes"]):
+        r = R[i]
+        kind, ref = rr["from"], rr.get("from_ref")
+        pt = rr.get("feed_pt") or (list(r["pts"][0]) if r.get("pts") else None)
+        if kind == "source":
+            out.append({"pt": pt, "from": ref, "to": r.get("name"),
+                        "from_material": None, "to_material": r.get("material") or "hose50",
+                        "kind": "source", "hose_ends": 1 if is_hose(r) else 0,
+                        "note": "급수원 인터페이스 — 펌프·여과기·압력계·카플러는 계통 품목(규칙 7)으로 넣습니다"})
+            continue
+        if kind == "free" or ref is None:
+            continue
+        other = next((q for q in R if q.get("name") == ref), None)
+        if other is None:
+            continue
+        m_from = other.get("material") or "hose50"
+        m_to = r.get("material") or "hose50"
+        if m_from == m_to:
+            continue                       # 같은 재질끼리는 이음(일자연결)이고 이미 물량에 있다
+        out.append({"pt": pt, "from": ref, "to": r.get("name"),
+                    "from_material": m_from, "to_material": m_to, "kind": "material",
+                    "hose_ends": (1 if is_hose(other) else 0) + (1 if is_hose(r) else 0),
+                    "note": "%s → %s 로 바뀌는 자리 — 연결 부속 [미확정]"
+                            % (MATERIAL_LABEL.get(m_from, m_from), MATERIAL_LABEL.get(m_to, m_to))})
+    return out
+
+
 def header_valves(routes: Sequence[Dict], near: float = HEADER_NEAR) -> int:
     """구역 밸브 수 파생값 = Σ 분배점의 구역 수(규칙 21 · #79). 대표 입력이 있으면 bom 이 그것을 우선한다."""
     return sum(h["valves"] for h in headers(routes, near))
+
+
+def _new_tee(tee_pts, pt) -> bool:
+    """그 자리에 T 를 **처음** 놓는가. 한 접점은 T 하나다.
+
+    🔴 [V105] 같은 접점을 관 양쪽에서 각각 한 번씩 세던 결함 — 인입관은 「끝이 주배관 중간에」,
+      주배관은 「인입관 끝이 내 중간에」로 읽혀 **T 가 2개**로 나왔다(대표 자재표 2026-09-09 「T 2 + 여분 1」).
+      세 갈래가 만나는 자리는 물리적으로 **T 하나**다.
+    """
+    if any(G.dist(pt, t) <= TEE_NEAR for t, _ in tee_pts):
+        return False
+    tee_pts.append((pt, "분기 T"))
+    return True
 
 
 def _bends(pts: Sequence[Pt]) -> List[Tuple[Pt, float]]:
@@ -92,15 +264,18 @@ def analyze(routes: Sequence[Dict], sources: Sequence[Dict]) -> Dict:
     R = [dict(r, pts=[tuple(p) for p in r["pts"]]) for r in routes]
     for r in R:
         r["role"] = route_role(r)
-        r["material"] = (r.get("material") or "hose50") if r["role"] == "feeder" else None
+        r["material"] = r.get("material") or "hose50"     # [V105] 주배관 기본도 송수호스 50
         r["len"] = G.polyline_len(r["pts"])
         # 롤 이음은 송수호스에만 — 파이프·매설 인입관은 우리가 파는 자재가 아니다(규칙 7 계통도).
-        r["is_hose"] = r["role"] == "main" or r["material"] in FEEDER_HOSE_NOMINAL
+        # [V105] 주배관도 재질을 갖는다 — **우리 송수호스일 때만** 롤·이음을 센다.
+        r["is_hose"] = r["material"] in FEEDER_HOSE_NOMINAL
         r["joints"] = max(0, math.ceil(r["len"] / ROLL_M) - 1) if r["is_hose"] else 0
         r["bends"] = _bends(r["pts"])
         r["over45"] = [b for b in r["bends"] if b[1] > ELBOW_DEG]
     # 규칙 21 — 주배관과 **호스 인입관**만 송수호스 물량이다. 파이프·매설 인입관은 길이만 따로 적는다.
     main_m = sum(r["len"] for r in R if r["role"] == "main")
+    main_hose_m = sum(r["len"] for r in R if r["role"] == "main" and r["is_hose"])
+    main_other_m = sum(r["len"] for r in R if r["role"] == "main" and not r["is_hose"])
     feeder_m = sum(r["len"] for r in R if r["role"] == "feeder")
     feeder_hose_m: Dict[int, float] = {}
     feeder_other_m = 0.0
@@ -112,7 +287,7 @@ def analyze(routes: Sequence[Dict], sources: Sequence[Dict]) -> Dict:
             feeder_hose_m[n] = feeder_hose_m.get(n, 0.0) + r["len"]
         else:
             feeder_other_m += r["len"]
-    total = main_m + sum(feeder_hose_m.values())
+    total = main_hose_m + sum(feeder_hose_m.values())      # [V105] 파이프·매설 주배관은 자재가 아니다
     warnings: List[str] = []
     if not any(r["role"] == "main" for r in R):
         warnings.append("주배관(role=main)이 하나도 없다 — 전부 인입관이면 가지관을 낼 곳이 없다(규칙 21)")
@@ -181,8 +356,8 @@ def analyze(routes: Sequence[Dict], sources: Sequence[Dict]) -> Dict:
             end_junction.add(i)
             r["from"] = ("tail", hit[0])
             r["feed_pt"] = [round(hit[1][0], 1), round(hit[1][1], 1)]
-            tee_pts.append((hit[1], "분기 T"))
-            extra_tees += 1
+            if _new_tee(tee_pts, hit[1]):
+                extra_tees += 1
             continue
         # ① 다른 관의 **끝점**이 이 관의 중간에 닿는다 — 인입관이 주배관 중간에 T 로(대표 그림)
         hit = None
@@ -197,8 +372,8 @@ def analyze(routes: Sequence[Dict], sources: Sequence[Dict]) -> Dict:
             end_junction.add(hit[0])          # 붙은 쪽(인입관)의 끝은 말단이 아니다
             r["from"] = ("tap", hit[0])
             r["feed_pt"] = [round(hit[1][0], 1), round(hit[1][1], 1)]
-            tee_pts.append((hit[1], "분기 T"))
-            extra_tees += 1
+            if _new_tee(tee_pts, hit[1]):
+                extra_tees += 1
 
     # 그래도 남은 「닿지 않음」만 말한다 — **얼마나 떨어졌는지·무엇을 하면 되는지**와 함께
     # (대표 2026-09-08 「닿지 않았다는 게 뭐지?」).
@@ -245,6 +420,18 @@ def analyze(routes: Sequence[Dict], sources: Sequence[Dict]) -> Dict:
         if n:
             tee_pts.append((R[ej]["pts"][-1], f"경로 끝 T×{n}"))
     tees += sum(1 for r in R if r["from"][0] == "mid")
+
+    # 🔵 [V106] **파이프로 시작하면 호스밴드가 들어가지 않는다**(대표 2026-09-09).
+    #    `start_bands` 는 그 급수점에서 **호스를 무는 밴드 수**다 — 승인본 실측이 0·2·4 로 제각각인 것은
+    #    펌프·여과기·카플러가 몇 번 물리느냐에 달렸기 때문이다. 그래서 엔진이 값을 정하지 않고,
+    #    **나가는 관이 전부 호스가 아닌데 밴드를 세고 있으면** 그 사실만 말한다.
+    for si, idx in src_groups.items():
+        if int(sources[si].get("start_bands", 0) or 0) > 0 and not any(R[k]["is_hose"] for k in idx):
+            warnings.append("급수원 '%s' 에서 나가는 관이 %s 입니다 — 나사식·조임식 파이프 연결에는 "
+                            "**호스밴드가 들어가지 않습니다**. 「시작부 호스밴드」 %d 개를 확인해 주세요"
+                            % (sources[si].get("name") or "?",
+                               " · ".join(sorted({R[k]["material"] for k in idx})),
+                               int(sources[si].get("start_bands", 0) or 0)))
 
     # 규칙 3 — T가 이미 놓인 자리의 꺾임은 「T 양쪽」으로 풀린 것이다. 경고에서 뺀다.
     # T 자리 = 기록된 T(급수점·경로 끝·분기) + **다른 경로가 갈라져 나가거나 들어오는 마디**.
@@ -308,6 +495,7 @@ def analyze(routes: Sequence[Dict], sources: Sequence[Dict]) -> Dict:
         "total_m": round(total, 1),                      # 송수호스 길이 = 주배관 + 호스 인입관
         "rolls": math.ceil(total / ROLL_M),
         "main_m": round(main_m, 1), "feeder_m": round(feeder_m, 1),          # 규칙 21
+        "main_hose_m": round(main_hose_m, 1), "main_other_m": round(main_other_m, 1),   # [V105]
         "feeder_hose_m": {k: round(v, 1) for k, v in feeder_hose_m.items()},
         "feeder_other_m": round(feeder_other_m, 1),
         "headers": hdrs, "header_valves": sum(h["valves"] for h in hdrs),
@@ -315,12 +503,14 @@ def analyze(routes: Sequence[Dict], sources: Sequence[Dict]) -> Dict:
         "bends_at_tee": at_tee_n,
         "routes": [{"name": r["name"], "role": r["role"], "zone": r.get("zone"),
                     "material": r["material"],
-                    "d_mm": (feeder_d_mm(r) if r["role"] == "feeder" else None),   # 계산 내경(규칙 21)
+                    "d_mm": feeder_d_mm(r),                # 계산 내경(규칙 21 · V105 주배관도)
                     "len_m": round(r["len"], 1),
                     "joints": r["joints"], "from": r["from"][0], "from_ref": _from_ref(r),
                     "from_gap": r.get("from_gap"), "from_near": r.get("from_near"),
                     "feed_pt": r.get("feed_pt"),          # [V103] 물을 받는 자리(첫 점이 아닐 수 있다)
                     "bends": [[list(p), round(d, 1)] for p, d in r["bends"]]} for r in R],
+        "hose_bands_src": sum(int(sources[si].get("start_bands", 0) or 0)
+                              for si, idx in src_groups.items() if any(R[k]["is_hose"] for k in idx)),
         "tee_pts": [[list(p), tag] for p, tag in tee_pts],
         "end_pts": [list(p) for p in end_pts],
         "warnings": warnings,

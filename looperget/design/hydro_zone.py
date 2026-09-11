@@ -229,13 +229,23 @@ def _zone_inputs(design: Dict, main_id_mm: Optional[float] = None):
             common_m += r["len_m"]
         else:
             feeders.append((r["len_m"], float(d)))
+
+    def _own_pipe(r):
+        """[V105] 우리 송수호스가 아닌 주배관(수도 파이프·매설관)은 **제 관경**으로 손실을 본다.
+        분기 없는 도관으로 보므로 실제보다 손실을 **크게** 잡는다 — 안전측이다(경고로 말한다)."""
+        d = r.get("d_mm")
+        return (r.get("material") in ("pipe", "buried") and d
+                and (main_id_mm is None or abs(float(d) - float(main_id_mm)) >= 0.05))
     lats = {l["id"]: l for l in design["laterals"]}
     for z in design["zones"]:
         rows = [lats[i] for i in z["laterals"]]
         if not rows:
             continue
         crit = max(rows, key=lambda r: (r["n_heads"], r["len_m"]))
-        yield z, z["n_heads"], sum(routes[n]["len_m"] for n in z["routes"]) + common_m, crit["n_heads"], crit["len_m"], feeders
+        zr = [routes[n] for n in z["routes"] if n in routes]
+        zone_main = sum(r["len_m"] for r in zr if not _own_pipe(r))
+        own = feeders + [(r["len_m"], float(r["d_mm"])) for r in zr if _own_pipe(r)]
+        yield z, z["n_heads"], zone_main + common_m, crit["n_heads"], crit["len_m"], own
 
 
 def _pipe_mm_of(site: Dict) -> Tuple[float, float]:

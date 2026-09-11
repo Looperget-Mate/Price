@@ -34,7 +34,7 @@ from . import summary as _summary
 from . import render_xlsx
 # 🔴 [V104] `render_pptx` 는 **여기서 import 하지 않는다.** 그 모듈은 작도 도구(`tools/agri_overlay`)·
 #    디자인 정본(`_디자인정본/표준_pptx`)·**61 MB 마스터 지면**에 기댄다 — 셋 다 배포 묶음에 없다
-#    (배포 단위 = app.py + aquanaris_layout.py + looperget/ · 마스터는 GitHub 브라우저 한도 25 MB 초과).
+#    (배포 단위 = app.py + common/ + looperget/ · 마스터는 GitHub 브라우저 한도 25 MB 초과).
 #    맨 위에서 부르면 **배포 서버에서 publish 를 여는 순간** ModuleNotFoundError 로 죽는다
 #    (대표 실사용 2026-09-08 「No module named 'agri_overlay'」). 그래서 **쓸 때 부른다.**
 

@@ -64,18 +64,18 @@ def render_brand_header(subtitle="프로 매니저"):
         unsafe_allow_html=True)
 
 def render_brand_footer(product="Pro Manager"):
-    """[V27] 브랜드 푸터. [공용] product = 앱 이름(프로매니저 'Pro Manager' · 아쿠나리스 'Aquanaris Builder')."""
+    """[V27] 브랜드 푸터. [공용] product = 앱 이름(프로매니저 'Pro Manager' · 아쿠나리스 'Aqunaris Builder')."""
     st.markdown(
         f'<div class="lg-footer"><b>Looperget</b> {product} · ShinJinChemTech · © 2026 신진켐텍(주)</div>',
         unsafe_allow_html=True)
 
 
-APP_URL_KEYS = {"promanager": "PROMANAGER_URL", "aquanaris": "AQUANARIS_URL"}
+APP_URL_KEYS = {"promanager": "PROMANAGER_URL", "aqunaris": "AQUNARIS_URL"}
 
 
 def render_app_switch(current):
-    """[공용] 사이드바의 「다른 앱 열기」 단추. 주소 = secrets 의 PROMANAGER_URL · AQUANARIS_URL (없으면 안내만)."""
-    other, label = (("aquanaris", "🏪 아쿠나리스 빌더 열기") if current == "promanager"
+    """[공용] 사이드바의 「다른 앱 열기」 단추. 주소 = secrets 의 PROMANAGER_URL · AQUNARIS_URL (없으면 안내만)."""
+    other, label = (("aqunaris", "🏪 아쿠나리스 빌더 열기") if current == "promanager"
                     else ("promanager", "🟡 루퍼젯 프로매니저 열기"))
     try:
         url = str(st.secrets.get(APP_URL_KEYS[other], "") or "").strip()

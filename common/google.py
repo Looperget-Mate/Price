@@ -412,7 +412,7 @@ def refresh_services():
     """[분리 · 2026-09-11] 원본은 **매 실행(rerun)마다** `gc, drive_service = get_google_services()` 를 돌렸다
     (캐시 TTL 1800초가 지나면 다시 인증 — V15 §2-7). 모듈로 옮기면 import 때 한 번만 돈다 — 원래 동작을 지키려고
     입구 파일이 매 실행 이것을 부른다. star import 로 같은 객체를 받아 간 모듈(common.db · common.auth ·
-    aquanaris.sheets)의 전역도 함께 바꿔 준다. 반환 (gc, drive_service)."""
+    aqunaris.sheets)의 전역도 함께 바꿔 준다. 반환 (gc, drive_service)."""
     global gc, drive_service
     old_gc = gc
     new = get_google_services()

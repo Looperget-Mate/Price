@@ -18,7 +18,7 @@ from PIL import Image
 from fpdf import FPDF
 
 # [V108 · 2026-09-11] 브랜드 UI·구글 연동·DB·로그인 → common/ (🏪 아쿠나리스 빌더와 공용).
-#   🏪 아쿠나리스 모드는 별도 앱 aquanaris_app.py 로 분리 — 이 파일은 루퍼젯 프로매니저(견적·설계·제안서)만 담는다.
+#   🏪 아쿠나리스 모드는 별도 앱 aqunaris_app.py 로 분리 — 이 파일은 루퍼젯 프로매니저(견적·설계·제안서)만 담는다.
 
 # 구글 연동 라이브러리
 import gspread
@@ -219,7 +219,7 @@ def recalc_keep_margin(prod: dict, new_buy: int) -> dict:
         out[f] = snap_band_price(raw)
     return out
 # ══ [V108] 프로매니저 전용 모듈 짝 검증 — looperget/ 폴더가 없거나 구버전이면 크래시 대신 한국어로 안내하고 정지 ══
-#  🏪 아쿠나리스(시트 함수·배치 엔진·인쇄물)는 aquanaris_app.py · aquanaris/ 로 분리(2026-09-11).
+#  🏪 아쿠나리스(시트 함수·배치 엔진·인쇄물)는 aqunaris_app.py · aqunaris/ 로 분리(2026-09-11).
 try:
     import looperget as _lg
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
@@ -2327,7 +2327,7 @@ with st.sidebar:
     else:
         mode = st.radio("モード", ["見積作成", "管理者モード"], key="main_sidebar_mode")
 
-    render_app_switch("promanager")   # [V108] 🏪 아쿠나리스는 별도 앱 — 주소 = secrets AQUANARIS_URL
+    render_app_switch("promanager")   # [V108] 🏪 아쿠나리스는 별도 앱 — 주소 = secrets AQUNARIS_URL
     kr_quotes = st.session_state.db.get("kr_quotes", [])
     if kr_quotes:
         df_kr = pd.DataFrame(kr_quotes).iloc[::-1]
@@ -4848,7 +4848,7 @@ elif mode == "🗺️ 설계(P3)":
                         st.error("파일을 여는 중 오류 — " + str(_e))
                     if not _pub.get("pptx"):
                         # 🔴 [V104] 제안서 지면은 **마스터 지면(59 MB)** 과 작도 도구가 있어야 그린다.
-                        #    배포 묶음(app.py + aquanaris_layout.py + looperget/)에는 넣을 수 없다 —
+                        #    배포 묶음(app.py + common/ + looperget/)에는 넣을 수 없다 —
                         #    GitHub 브라우저 업로드 한도가 25 MB 다. 그러니 여기서는 **견적서까지**가 정직하다.
                         st.warning("📊 **제안서 PPTX 는 이 서버에서 만들 수 없습니다** — " + _pub["skip"]
                                    + "  \n견적서는 위에서 받으시고, 제안서는 **작업 PC**에서 아래 한 줄로 "

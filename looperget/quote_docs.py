@@ -2,7 +2,7 @@
 """루퍼젯 프로 매니저 — 견적서·구성표 출력 엔진 (PDF / Excel)
 
 [V72, 2026-08-05] app.py L3852-5048에서 **기계적 추출**. 본문 로직 무변경.
-⚠ 배포 단위 = app.py + aquanaris_layout.py + looperget/ 폴더 (셋은 항상 세트).
+⚠ 배포 단위 = app.py + common/ + looperget/ 폴더 (셋은 항상 세트 · 2026-09-11 분리).
 
 app.py가 bind()로 주입하는 것:
     FONT_REGULAR, FONT_BOLD    폰트 파일 경로 상수

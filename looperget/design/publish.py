@@ -22,12 +22,13 @@ job = `looperget.design.job/1`
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
 import sys
 from datetime import date as _date
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from . import design as _design
 from . import summary as _summary
@@ -92,6 +93,8 @@ def flip_y(site: Dict, design: Dict):
         for k in ("p0", "p1", "dir", "tap"):
             if l.get(k):
                 l[k] = _fy(l[k])
+        if l.get("a") is not None:            # [V109] 열 위치 a = p·perp(u). y 를 뒤집으면 부호가 뒤집힌다(면8 사고의 뿌리)
+            l["a"] = -float(l["a"])
         l["heads"] = _fpts(l.get("heads"))
         if l.get("path"):
             l["path"] = _fpts(l["path"])
@@ -161,7 +164,76 @@ def job_from_p3(site: Dict, design: Dict, *, frame: Dict, origin, png_path: str,
     m.setdefault("site_label", site.get("name") or "")
     m.setdefault("site_short", "관수 설계")
     m["map"] = map_contract(frame, origin, png_path, fsite)
-    return {"schema": SCHEMA_JOB, "site": fsite, "design": fdesign, "meta": m}
+    job = {"schema": SCHEMA_JOB, "site": fsite, "design": fdesign, "meta": m}
+    embed_map_png(job)                       # [V109] 서버 job 을 내려받아 작업 PC 에서 돌릴 수 있게 그림을 품는다
+    return job
+
+
+# ══════════════ [V109] 서버 job → 작업 PC ══════════════
+# 2026-09-14·15 유촌리·용산리: 서버 ④에서 받은 job 은 서버 경로(위성 png · out_dir · part_img_dir)를 품고 있어
+# 앱이 안내한 한 줄(`python -m looperget.design.publish job.json`)이 이 PC 에서 그대로 실패했다.
+# → job 에 위성 그림을 base64 로 넣고, 돌릴 때 경로를 이 PC 에 맞춘다. **값은 손대지 않는다.**
+DEFAULT_IMG_DIR = os.path.join(ROOT, "_설계", "배추밭스프링클러_20260824", "90_작업파일", "부속이미지")
+
+
+def embed_map_png(job: Dict) -> bool:
+    m = (job.get("meta") or {}).get("map") or {}
+    p = m.get("png")
+    if p and os.path.exists(p) and not m.get("png_b64"):
+        with open(p, "rb") as f:
+            m["png_b64"] = base64.b64encode(f.read()).decode("ascii")
+        return True
+    return False
+
+
+def _writable(d: str) -> bool:
+    try:
+        os.makedirs(d, exist_ok=True)
+        t = os.path.join(d, "_쓰기시험")
+        with open(t, "w") as f:
+            f.write("ok")
+        os.remove(t)
+        return True
+    except Exception:
+        return False
+
+
+def localize(job: Dict, job_path: Optional[str] = None) -> List[str]:
+    """다른 PC(서버)에서 만든 job 의 **경로**를 이 PC 에 맞춘다. → 손본 내역(없으면 [])."""
+    meta = job.setdefault("meta", {})
+    notes: List[str] = []
+    od = meta.get("out_dir")
+    if od and not _writable(od):
+        nm = os.path.basename(str(od).replace("\\", "/").rstrip("/")) or "P3_대상지"
+        meta["out_dir"] = os.path.join(ROOT, "_제안", nm)
+        notes.append("산출 폴더 %s → %s" % (od, meta["out_dir"]))
+    m = meta.get("map") or {}
+    png = m.get("png")
+    if m and (not png or not os.path.exists(png)):
+        base = meta.get("out_dir") or (os.path.dirname(os.path.abspath(job_path)) if job_path else None)
+        beside = os.path.join(os.path.dirname(os.path.abspath(job_path)), "_위성.png") if job_path else None
+        if m.get("png_b64"):
+            base = base or os.path.join(ROOT, "_제안")
+            os.makedirs(base, exist_ok=True)
+            target = os.path.join(base, "_위성.png")
+            with open(target, "wb") as f:
+                f.write(base64.b64decode(m["png_b64"]))
+            m["png"] = target
+            notes.append("위성 그림을 job 에서 꺼내 %s 에 씀" % target)
+        elif beside and os.path.exists(beside):
+            m["png"] = beside
+            notes.append("위성 그림 = job 옆 %s" % beside)
+        else:
+            raise FileNotFoundError(
+                "위성 그림이 없습니다 — job 의 png 경로(%s)가 이 PC 에 없고 job 안에 png_b64 도 없습니다. "
+                "V109 이후 서버 ④에서 내려받은 job 은 그림을 품고 있습니다 — 다시 내려받으세요." % png)
+    imgd = meta.get("part_img_dir")
+    if imgd and not os.path.isdir(imgd):
+        meta["part_img_dir"] = DEFAULT_IMG_DIR if os.path.isdir(DEFAULT_IMG_DIR) else None
+        notes.append("부속 사진 폴더 %s → %s" % (imgd, meta["part_img_dir"]))
+    elif not imgd and os.path.isdir(DEFAULT_IMG_DIR):
+        meta["part_img_dir"] = DEFAULT_IMG_DIR
+    return notes
 
 
 def pptx_ready() -> tuple:
@@ -181,9 +253,12 @@ def pptx_ready() -> tuple:
 
 
 def run(job: Dict, out_dir: Optional[str] = None, *, pdf: bool = False, png: bool = False,
-        xlsx: bool = True, pptx: bool = True, verbose: bool = True) -> Dict:
+        xlsx: bool = True, pptx: bool = True, verbose: bool = True,
+        job_path: Optional[str] = None, image_fetch=None) -> Dict:
+    """`image_fetch(code) -> data-URI|None` = 앱이 주는 사진 공급자(서버에는 서비스계정 파일이 없다 · V109)."""
     assert job.get("schema") == SCHEMA_JOB, "job schema != %s" % SCHEMA_JOB
     meta = job.setdefault("meta", {})
+    notes = localize(job, job_path)          # [V109] 서버 job 이면 경로를 이 PC 에 맞춘다(값 무변경)
     if "design" not in job or not job["design"]:
         job["design"] = _design(job["site"], _price_db(meta) or None)
     S = _summary.build(job)
@@ -191,12 +266,16 @@ def run(job: Dict, out_dir: Optional[str] = None, *, pdf: bool = False, png: boo
     out_dir = out_dir or meta.get("out_dir") or os.path.join(ROOT, "_제안", "P2_" + _slug(S["name"]))
     os.makedirs(out_dir, exist_ok=True)
     tag = "%s_%s" % (_slug(S["name"]), date.replace("-", ""))
-    res: Dict = {"out_dir": out_dir, "summary": S}
+    res: Dict = {"out_dir": out_dir, "summary": S, "localized": notes}
 
     with open(os.path.join(out_dir, "_job.json"), "w", encoding="utf-8") as f:
         json.dump(job, f, ensure_ascii=False, indent=1)
     with open(os.path.join(out_dir, "_summary.json"), "w", encoding="utf-8") as f:
         json.dump(S, f, ensure_ascii=False, indent=1)
+    from .supply_docs import html_document
+    res["supply_html"] = os.path.join(out_dir, "42_급수연결조건_%s.html" % tag)
+    with open(res["supply_html"], "w", encoding="utf-8") as f:
+        f.write(html_document(S))
 
     ok_pptx, why = pptx_ready() if pptx else (False, "제안서 생성을 끄고 실행했습니다")
     res["pptx"], res["pptx_skip"], res["render_log"], res["page_check"] = None, why, [], {}
@@ -227,10 +306,23 @@ def run(job: Dict, out_dir: Optional[str] = None, *, pdf: bool = False, png: boo
             remarks=remarks or ("1. 견적 유효기간: 견적일로부터 15일 이내\n"
                                 + ("2. 영세율(부가세 0 %) 적용 — 농업경영체 등록확인서(농업회사법인은 사업자등록증) 사본 제출"
                                    if q.get("vat_zero") else "2. 부가가치세 별도")),
-            svc=q.get("svc") or [], price_db=price_db, img_dir=meta.get("part_img_dir"), root=ROOT)
+            svc=q.get("svc") or [], price_db=price_db, img_dir=meta.get("part_img_dir"), root=ROOT,
+            fetch=image_fetch)
         res["xlsx"] = xr
+        # [V109] 시공업체용 두 단가 견적(대리점가1 | 소비자가 | 이익율) — 09-15 용산리에서 손으로 만들던 41_ 파일.
+        if q.get("tier2"):
+            res["xlsx2"] = render_xlsx.build(
+                S, os.path.join(out_dir, "41_견적서_시공업체용_%s.xlsx" % tag), date=date,
+                label=q.get("label", S["parcel"] or S["name"]) + " (시공업체용)",
+                buyer={"recipient": q.get("recipient", ""), "manager": q.get("manager", "박형석"),
+                       "serial": q.get("serial", "P2-%s" % tag)},
+                remarks=remarks or "1. 견적 유효기간: 견적일로부터 15일 이내\n2. 부가가치세 별도",
+                svc=q.get("svc") or [], price_db=price_db, img_dir=meta.get("part_img_dir"), root=ROOT,
+                fetch=image_fetch, tier2=q["tier2"])
 
     if verbose:
+        for n in notes:
+            print("  ↪ 경로 보정: " + n)
         if res["pptx"]:
             from pptx import Presentation
             n = len(Presentation(res["pptx"]).slides)
@@ -240,7 +332,10 @@ def run(job: Dict, out_dir: Optional[str] = None, *, pdf: bool = False, png: boo
         print("  %s · %s ㎡(%s평) · 헤드 %d · 가지관 %d열 %d m · 주배관 %d m · 커버 %.0f %% · 합계 %s원"
               % (S["name"], format(S["area_m2"], ","), format(S["area_py"], ","), S["n_heads"], S["n_lats"],
                  S["lat_total_m"], S["main_total_m"], S["cover"] * 100, format(S["total"], ",")))
-        for h in S["hydro"]:
+        from .supply_docs import zone_line
+        for row in S.get("supply", {}).get("zones", []):
+            print("  " + zone_line(row))
+        for h in ([] if S.get("supply") else S["hydro"]):
             print("  구역 %-10s %2d두 · %d L/분 · 말단 %.2f bar · 반경 %.1f m · v50 %.2f · %s"
                   % (h["zone"], h["heads"], h["Q"], h["p_end"], h["radius_end"], h["v50"], h["verdict"]))
         if S["warnings"]:
@@ -255,6 +350,11 @@ def run(job: Dict, out_dir: Optional[str] = None, *, pdf: bool = False, png: boo
             print("견적서 %s · %d품목 · 이미지 %d(로컬 %d·드라이브 %d) · 합계 %s원 (F%d)"
                   % (os.path.basename(xr["path"]), xr["n_items"], xr["n_img"], xr["img_local"], xr["img_drive"],
                      format(xr["total"], ","), xr["total_row"]))
+            if res.get("xlsx2"):
+                x2 = res["xlsx2"]
+                print("시공업체용 %s · %s 합계 %s원 / %s 합계 %s원"
+                      % (os.path.basename(x2["path"]), x2["tier2"], format(x2["total2"], ","),
+                         x2["tier"], format(x2["total"], ",")))
         if pdf:
             print("PDF " + res["pdf"])
         if png:
@@ -360,4 +460,5 @@ if __name__ == "__main__":
     out = None
     if "--out" in flags:
         out = pos[-1]
-    run(job, out, pdf="--pdf" in flags, png="--png" in flags, xlsx="--no-xlsx" not in flags)
+    run(job, out, pdf="--pdf" in flags, png="--png" in flags, xlsx="--no-xlsx" not in flags,
+        job_path=(None if "--demo" in flags else pos[0]))

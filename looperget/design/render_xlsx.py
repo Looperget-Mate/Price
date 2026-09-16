@@ -71,8 +71,9 @@ def fit_image(path: str):
 class ImageSource:
     """품목코드 → data-URI. 로컬 캐시(부속이미지/{code}.png) 우선, 없으면 Drive(서비스계정)."""
 
-    def __init__(self, img_dir: Optional[str], price_db: Dict, root: str):
+    def __init__(self, img_dir: Optional[str], price_db: Dict, root: str, fetch=None):
         self.img_dir, self.price_db, self.root = img_dir, price_db, root
+        self.fetch = fetch          # [V109] 앱이 주는 사진 공급자(code → data-URI). 서버엔 서비스계정 파일이 없다.
         self._cache: Dict[str, Optional[str]] = {}
         self._creds = None
         self.n_local = self.n_drive = 0
@@ -103,6 +104,13 @@ class ImageSource:
         if p:
             uri = "data:image/png;base64," + base64.b64encode(open(p, "rb").read()).decode()
             self.n_local += 1
+        elif self.fetch is not None:
+            try:
+                uri = self.fetch(code) or None
+            except Exception:
+                uri = None
+            if uri:
+                self.n_drive += 1
         else:
             # 세트 품목은 **구성 사진**을 쓴다 — Products 사진은 낱개 카플러 한 개라
             # 연결세트·마감세트가 거의 같아 보이고 세트에 무엇이 들었는지 안 보인다.
@@ -164,10 +172,17 @@ class _WB:
 
 def build(summary: Dict, out_path: str, *, date: str, label: str, buyer: Dict, remarks: str,
           svc: Optional[List[Dict]] = None, price_db: Optional[Dict] = None,
-          img_dir: Optional[str] = None, root: Optional[str] = None) -> Dict:
-    """→ {"path", "n_items", "n_img", "total", "total_row"}"""
+          img_dir: Optional[str] = None, root: Optional[str] = None,
+          fetch=None, tier2: Optional[str] = None) -> Dict:
+    """→ {"path", "n_items", "n_img", "total", "total_row"}
+
+    [V109] `tier2` 를 주면 **시공업체용 두 단가 양식**(엔진 profit 양식) — 왼쪽 = tier2(대리점가1 등) · 오른쪽 =
+    summary tier(소비자가) · 이익율. 단가는 price_db[code][tier2] 에서 읽고 없으면 0 + `missing2`.
+    """
     root = root or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    src = ImageSource(img_dir, price_db or {}, root)
+    src = ImageSource(img_dir, price_db or {}, root, fetch=fetch)
+    tier = summary.get("tier", "소비자가")
+    missing2: List[str] = []
     quote_docs.bind(get_drive_file_map_deep=lambda: {},
                     get_best_image_id=lambda code, db_img, fmap: code,
                     download_image_by_id=src.data_uri)
@@ -176,11 +191,19 @@ def build(summary: Dict, out_path: str, *, date: str, label: str, buyer: Dict, r
     saved = quote_docs.xlsxwriter
     quote_docs.xlsxwriter = types.SimpleNamespace(Workbook=lambda *a, **k: proxy)
     try:
-        items = [{"코드": r["code"], "품목": r["name"], "규격": r["spec"], "단위": r["unit"],
+        items = []
+        for r in summary["bom"]:
+            it = {"코드": r["code"], "품목": r["name"], "규격": r["spec"], "단위": r["unit"],
                   "수량": r["qty"], "price_1": r["price"] or 0, "image_data": r["code"]}
-                 for r in summary["bom"]]
+            if tier2:
+                p2 = (price_db or {}).get(r["code"], {}).get(tier2)
+                if p2 is None:
+                    missing2.append(r["code"])
+                it["price_1"], it["price_2"] = int(p2 or 0), r["price"] or 0
+            items.append(it)
         svc = svc or []
-        quote_docs.create_quote_excel(items, svc, label, date, "basic", [summary.get("tier", "소비자가")],
+        form = "profit" if tier2 else "basic"
+        quote_docs.create_quote_excel(items, svc, label, date, form, ([tier2, tier] if tier2 else [tier]),
                                       buyer, remarks)
         ws = proxy.last
         n = len(items)
@@ -189,25 +212,60 @@ def build(summary: Dict, out_path: str, *, date: str, label: str, buyer: Dict, r
         f_amt = F(align="right", font_size=14, num_format="#,##0", shrink=True)
         f_tot = F(bold=True, bg_color="#E6E6E6", align="right", font_size=16, num_format="#,##0", shrink=True)
         f_rmk = F(align="left", font_size=9, text_wrap=True)
+        f_qty = F(align="right", font_size=14, num_format="0.###")
+        # Legacy quote template coerces quantities to int. Restore physical metres here.
+        for i, row in enumerate(summary["bom"]):
+            ws.write_number(ROW0 + i, 3, float(row["qty"]), f_qty)
         ws.write(0, 0, "견 적 서    —    %s" % label,
                  real.add_format({"font_name": "맑은 고딕", "valign": "vcenter", "bold": True,
                                   "font_size": 20, "align": "center"}))
         ws.set_column(0, 0, IMG_COL_CHARS)
-        ws.set_column(6, 6, 34)
-        for i, r in enumerate(summary["bom"]):
-            ws.set_row(ROW0 + i, ROW_H_ITEM)
-            er = ROW0 + i + 1
-            ws.write_formula(ROW0 + i, 5, "=D%d*E%d" % (er, er), f_amt, r["amount"] or 0)
-            ws.write(ROW0 + i, 6, r["note"], f_rmk)
         total = summary["total"] + sum(int(s["금액"]) for s in svc)
-        ws.write_formula(total_row, 5, "=SUM(F$%d:INDEX(F:F,ROW()-1))" % (ROW0 + 1), f_tot, total)
+        total2 = None
+        if not tier2:
+            ws.set_column(6, 6, 34)
+            for i, r in enumerate(summary["bom"]):
+                ws.set_row(ROW0 + i, ROW_H_ITEM)
+                er = ROW0 + i + 1
+                ws.write_formula(ROW0 + i, 5, "=D%d*E%d" % (er, er), f_amt, r["amount"] or 0)
+                if r["price"] is None:
+                    ws.write(ROW0 + i, 4, "미확정", f_rmk)
+                    ws.write(ROW0 + i, 5, "미확정", f_rmk)
+                ws.write(ROW0 + i, 6, r["note"], f_rmk)
+            ws.write_formula(total_row, 5, "=SUM(F$%d:INDEX(F:F,ROW()-1))" % (ROW0 + 1), f_tot, total)
+        else:
+            # profit 양식: D 수량 · E 단가1(tier2) · F 금액1 · G 단가2(tier) · H 금액2 · I 이익율. 비고 열은 없다.
+            f_pct = F(align="center", font_size=14, num_format="0.0%", shrink=True)
+            total2 = 0
+            for i, it in enumerate(items):
+                ws.set_row(ROW0 + i, ROW_H_ITEM)
+                er = ROW0 + i + 1
+                a1, a2 = round(int(it["price_1"]) * float(it["수량"])), round(int(it["price_2"]) * float(it["수량"]))
+                total2 += a1
+                ws.write_formula(ROW0 + i, 5, "=D%d*E%d" % (er, er), f_amt, a1)
+                ws.write_formula(ROW0 + i, 7, "=D%d*G%d" % (er, er), f_amt, a2)
+                ws.write_formula(ROW0 + i, 8, "=IF(H%d>0,(H%d-F%d)/H%d,0)" % (er, er, er, er), f_pct,
+                                 ((a2 - a1) / a2) if a2 else 0)
+                if it["코드"] in missing2:
+                    ws.write(ROW0 + i, 4, "미확정", f_rmk)
+                    ws.write(ROW0 + i, 5, "미확정", f_rmk)
+                    ws.write(ROW0 + i, 8, "미확정", f_rmk)
+                if summary["bom"][i]["price"] is None:
+                    ws.write(ROW0 + i, 6, "미확정", f_rmk)
+                    ws.write(ROW0 + i, 7, "미확정", f_rmk)
+                    ws.write(ROW0 + i, 8, "미확정", f_rmk)
+            ws.write_formula(total_row, 7, "=SUM(H$%d:INDEX(H:H,ROW()-1))" % (ROW0 + 1), f_tot, total)
+        if summary.get("missing") or missing2:
+            ws.write(0, 0, "견 적 서 — %s (가격 확정 품목 소계 · 미확정 별도)" % label,
+                     real.add_format({"font_name": "맑은 고딕", "bold": True, "font_size": 16}))
         lines = sum(max(1, -(-len(t) // 56)) for t in remarks.split("\n"))
         ws.set_row(total_row + 3, max(20 * lines + 12, 44))
     finally:
         quote_docs.xlsxwriter = saved
         real.close()
     return {"path": out_path, "n_items": len(items), "n_img": ws.n_img, "total": total,
-            "total_row": total_row + 1, "img_local": src.n_local, "img_drive": src.n_drive}
+            "total_row": total_row + 1, "img_local": src.n_local, "img_drive": src.n_drive,
+            "tier": tier, "tier2": tier2, "total2": total2, "missing2": missing2}
 
 
 __all__ = ["build", "ImageSource", "autocrop", "fit_image"]

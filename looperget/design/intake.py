@@ -210,6 +210,13 @@ def to_site(answers: Dict, drawn: Optional[Dict] = None, name: Optional[str] = N
         site["pump"] = {"model": str(answers["pump"]).strip()}
     if d.get("main_mm"):                            # 주배관 호칭(#49) — 기본은 bom 이 50 을 쓴다
         site["main_mm"] = int(d["main_mm"])
+    if d.get("head_kit"):                           # [V109] 헤드 구성(design.heads.KITS) — 기본은 01998 세트
+        site["head_kit"] = d["head_kit"]
+    # V110: structured inputs survive site/job round trips, without inventing defaults.
+    import copy
+    for key in ("chains", "supply", "row_kits", "tool_items", "p_end", "connection_compatibility"):
+        if key in d:
+            site[key] = copy.deepcopy(d[key])
     c = check(answers, waived)
     site["intake"] = {"schema": SCHEMA, "answers": dict(answers), "check": c,
                       "waived": c["waived"], "warn": c["warn"]}

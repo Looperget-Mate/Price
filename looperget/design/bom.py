@@ -25,6 +25,7 @@ import math
 from typing import Dict, List, Sequence
 
 from . import pipes
+from . import heads
 from .mainline import ROLL_M
 
 NO_SPARE = {"20002", "01909", "00527", "01870"}      # 펌프·여과기·압력계 — 여분 없음
@@ -35,10 +36,10 @@ ROLL_SLACK = 0.12    # 규칙 19 — 롤 절단 계획의 남는 길이가 롤�
                      # 이 두 번만 발동하고 둘 다 정답과 일치(오발동 0). 대표 확정 2026-09-03.
 
 
-def _spare(code: str, qty: int) -> int:
+def _spare(code: str, qty: int, rate: float = None) -> int:
     if code in NO_SPARE or qty < 2:
         return qty
-    return math.ceil(qty * SPARE_RATE.get(code, 1.05) - 1e-9)
+    return math.ceil(qty * (rate or SPARE_RATE.get(code, 1.05)) - 1e-9)
 
 
 def _up10(n: float) -> int:
@@ -101,13 +102,25 @@ def build(n_heads: int, lat_lengths: Sequence[float], main: Dict, site: Dict) ->
     extra50 = 1 if (rolls50 and slack50 <= ROLL_SLACK * ROLL_M) else 0
     rows: List[Dict] = []
 
-    def put(code, base, note, spare=True):
-        qty = _spare(code, base) if spare else base
+    def put(code, base, note, spare=True, rate=None):
+        qty = _spare(code, base, rate) if spare else base
         if qty > base:
             note = f"{note} + 여분 {qty - base}"
         rows.append({"code": code, "qty": qty, "base": base, "note": note})
 
-    put("01998", n_heads, f"헤드 {n_heads}두")
+    # 🔵 [V109] 헤드 구성 = `site["head_kit"]`(heads.KITS · 기본 01998 한 품목). 두당 개수 × 두수, 헤드 여분 3 %.
+    #    2026-09-15 용산리 변경(B안)에서 이동식 구성을 water_items 로 손으로 넣어야 했던 자리다.
+    _groups = site.get("_head_groups") or [{"kit": heads.resolve(site), "heads": n_heads}]
+    _head_parts = {}
+    for _group in _groups:
+        _kit, _count = _group["kit"], _group["heads"]
+        for _hc, _per in _kit["recipe"].items():
+            _entry = _head_parts.setdefault(_hc, {"base": 0, "notes": []})
+            _entry["base"] += _count * _per
+            _entry["notes"].append(f"헤드 {_count}두" + (f" × 두당 {_per}" if _per != 1 else "")
+                                 + (f" — {_kit['short']}" if _kit["key"] != heads.DEFAULT else ""))
+    for _hc, _entry in _head_parts.items():
+        put(_hc, _entry["base"], " · ".join(_entry["notes"]), rate=SPARE_RATE["01998"])
     put("02044", rolls25 + extra25, f"25 mm 가지관 {lat_total:.0f} m → 100 m 롤 절단 계획 {rolls25}"
         + (f" + 여분 1(남는 길이 {slack25:.0f} m)" if extra25 else ""), spare=False)
     put("01999", joints25, "25 mm 롤 잇는 자리(절단 계획)", spare=False)

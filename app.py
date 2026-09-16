@@ -17,6 +17,9 @@ import xlsxwriter
 from PIL import Image
 from fpdf import FPDF
 
+# [V109 · 2026-09-15] 긴급 발행 3건(유촌리·용산리)에서 드러난 결함 수술 — 제안서 면8 원점(PowerPoint 못 엶) ·
+#   면10 치수 실측 · 서버 job 을 작업 PC 에서 그대로 실행(위성 그림 내장·경로 보정) · 서버 견적서 사진 ·
+#   헤드 구성(01998 고정 → 선택)·열당 두수 · 시공업체용 두 단가 견적(대리점가1). 엔진 = looperget/design PKG_VER 101.
 # [V108 · 2026-09-11] 브랜드 UI·구글 연동·DB·로그인 → common/ (🏪 아쿠나리스 빌더와 공용).
 #   🏪 아쿠나리스 모드는 별도 앱 aqunaris_app.py 로 분리 — 이 파일은 루퍼젯 프로매니저(견적·설계·제안서)만 담는다.
 
@@ -44,7 +47,7 @@ try:
 except Exception:
     _CM_VER = 0
 if _CM_VER < 1:
-    st.error("🚨 **`common/` 폴더가 없거나 구버전입니다** — app.py(V108)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **`common/` 폴더가 없거나 구버전입니다** — app.py(V110)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`common/` 폴더를 통째로** 올린 뒤 재배포하세요.")
     st.stop()
 
@@ -225,8 +228,8 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 100:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V108)와 짝이 맞지 않습니다.\n\n"
+if _LG_VER < 102:
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V110)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/`·`common/` 폴더를 통째로** "
              "`app.py`와 함께 올린 뒤 재배포하세요.")
     st.stop()
@@ -3192,6 +3195,8 @@ elif mode == "🗺️ 설계(P3)":
     from looperget.design import preview as _p3v, mapedit as _p3edit
     from looperget.design import publish as _p3pub    # [V105] ④ 발행부가 화면 밖에서도 쓴다
     from looperget.design import sets as _p3set       # [V107] 세트 대조·신설 후보
+    from looperget.design import heads as _p3heads    # [V109] 헤드 구성(01998 세트 · 이동식 …)
+    from looperget.design import editor_ui as _p3ui  # [V110] 연결 사슬·급수원 입력
     #  🔴 `publish` 는 제안서 지면 모듈을 **지연 임포트**한다(V104) — 배포 서버에서도 여기서 죽지 않는다.
 
     def _p3_crop():
@@ -3993,7 +3998,8 @@ elif mode == "🗺️ 설계(P3)":
                                           math.atan2(_b["u"][1], _b["u"][0]))),
                                       "헤드 간격(m)": float((_b.get("policy") or {}).get("S", 14.0)),
                                       "열 간격(m)": float((_b.get("policy") or {}).get("lat_gap", 14.0)),
-                                      "첫 여백(m)": float((_b.get("policy") or {}).get("std", 7.0))}
+                                      "첫 여백(m)": float((_b.get("policy") or {}).get("std", 7.0)),
+                                      "열당 두수": int((_b.get("policy") or {}).get("heads_per_row") or 0)}
                                      for _i, _b in enumerate(_pins["blocks"])])
                 _bed = st.data_editor(
                     _bdf, width="stretch", hide_index=True, num_rows="dynamic",
@@ -4010,7 +4016,11 @@ elif mode == "🗺️ 설계(P3)":
                             help="줄과 줄 사이 거리. 427B 권장 14 · 승인 배추밭 10."),
                         "첫 여백(m)": st.column_config.NumberColumn(
                             min_value=2.0, max_value=12.0, step=0.5,
-                            help="주배관에서 첫 헤드까지. 427B 권장 7 · 승인 배추밭 5.")})
+                            help="주배관에서 첫 헤드까지. 427B 권장 7 · 승인 배추밭 5."),
+                        "열당 두수": st.column_config.NumberColumn(
+                            min_value=0, max_value=20, step=1,
+                            help="[V109] 0 = 자동. 숫자를 적으면 열마다 그 두수만 남깁니다(첫·끝 헤드는 그대로, "
+                                 "사이를 고르게). 이동식 헤드처럼 몇 개만 두고 옮겨 쓸 때 — 용산리 3개/열.")})
                 _byid = {_b.get("id"): _b for _b in _pins["blocks"]}
                 _new, _chg = [], False
                 for _, _r in _bed.iterrows():
@@ -4058,6 +4068,14 @@ elif mode == "🗺️ 설계(P3)":
                         if _key == "lat_gap" and _val != _pol.get(_key):
                             _pol.pop("manual_rows", None)
                         _pol[_key] = _val
+                    # [V109] 열당 두수 — 0 = 자동. 바꾸면 헤드 자리가 통째로 바뀌므로 뺀 자리는 푼다.
+                    _hpr = 0 if pd.isna(_r["열당 두수"]) else int(_r["열당 두수"])
+                    if (_hpr or None) != _pol.get("heads_per_row"):
+                        _pol.pop("drop_heads", None)
+                        if _hpr:
+                            _pol["heads_per_row"] = _hpr
+                        else:
+                            _pol.pop("heads_per_row", None)
                     _pol["maxm"] = max(float(_pol.get("maxm") or 0), float(_pol["std"]) + 1.0)
                     # 🔴 첫 여백은 **규칙으로 고정**한다(대표 확답 「7 m 를 띄어야 한다」).
                     #    안 고정하면 배치기가 floor~maxm 을 훑어 두수가 많은 쪽을 골라 버린다.
@@ -4120,6 +4138,27 @@ elif mode == "🗺️ 설계(P3)":
                 st.caption("합계 **%s m² (%s 평)** · %d구역"
                                % (format(round(_tot), ","), format(round(_tot / 3.3058), ","),
                                   len(_pins["blocks"])))
+
+            # ── 🎯 [V109] 헤드 구성 — 한 두에 무엇이 들어가는가(design.heads.KITS). 지금까지 01998 로 **고정**돼
+            #    용산리 변경(09-15)에서 이동식 구성을 water_items 로 손으로 넣어야 했다. 값은 엔진이 센다(두수 × 두당 개수).
+            _hk_keys = list(_p3heads.KITS.keys())
+            _hk_cur = str(_pins.get("head_kit") or _p3heads.DEFAULT)
+            _hk = st.selectbox("🎯 헤드 구성 (한 두에 들어가는 품목)", _hk_keys,
+                               index=_hk_keys.index(_hk_cur) if _hk_cur in _hk_keys else 0,
+                               format_func=lambda k: _p3heads.KITS[k]["label"], key="p3_head_kit",
+                               help="자재 목록의 헤드 품목이 바뀝니다(두수 × 두당 개수 + 헤드 여분 3 %). "
+                                    "이동식은 열마다 몇 개만 두고 옮겨 쓰는 구성 — 위 밭 표의 「열당 두수」와 함께 씁니다.")
+            if _hk != _hk_cur:
+                _pins["head_kit"] = _hk
+                st.session_state.p3_pins = _pins
+                st.session_state.pop("p3_result", None)
+                st.rerun()
+
+            _p3ui.render_supply(_pins, st.session_state.get("p3_preview") or {})
+            _p3ui.render_connections(_pins, st.session_state.db.get("products", []),
+                                     (st.session_state.get("p3_answers") or {}).get("address") or "현장")
+            _p3ui.render_row_kits(_pins, st.session_state.get("p3_preview") or {})
+            _p3ui.render_tools(_pins)
 
             # ── 🚰 [V106] 급수 계통 품목(규칙 7) — 지금까지 **화면에 입구가 없었다**.
             #    대표 2026-09-09 「펌프나 여과기에서 플라스틱 파이프로 구조화하고 지면으로 내린 후 호스로…
@@ -4366,7 +4405,7 @@ elif mode == "🗺️ 설계(P3)":
                     _m3.metric("전부 한 번에", "%s L/분" % format(_pv["q_all_ref"], ","),
                                help="설계점 %.1f bar 기준. 보증 1.5 bar 로는 %s L/분."
                                     % (_pv["p_ref_bar"], format(_pv["q_all_min"], ",")))
-                    _zb = _pv.get("zones_min") or _pv.get("zones_by_pressure")
+                    _zb = None if _pins.get("supply") else (_pv.get("zones_min") or _pv.get("zones_by_pressure"))
                     _m4.metric("권고 구역", ("%d 구역" % _zb) if _zb else "—",
                                help="유량을 알면 유량 기준, 모르면 **관이 감당하는 한계**로 냅니다. "
                                     "확정은 ④의 구역별 말단압입니다.")
@@ -4386,11 +4425,13 @@ elif mode == "🗺️ 설계(P3)":
                               "고랑(도)": _x.get("u_deg")} for _x in _pv["blocks"]]),
                             width="stretch", hide_index=True)
                     for _n in _pv.get("notes", []):
+                        if _pins.get("supply") and any(_term in _n for _term in ("한 번", "상한", "구역", "불가능", "쓸 수 있는 물", "유량을 몰라도")):
+                            continue  # V110 급수원 비교는 전용 패널에 표시
                         (st.error if _n.startswith("🔴") else
                          st.info if _n.startswith("🔵") else st.caption)(_n)
                     _zdrawn = sorted({_r.get("zone") for _r in _pins["routes"]
                                       if _r.get("zone") is not None})
-                    if _zdrawn:
+                    if _zdrawn and not _pins.get("supply"):
                         _per = math.ceil(_pv["n_heads"] / len(_zdrawn))
                         _cap = _pv.get("heads_cap_pressure") or 0
                         _msg = ("지금 **%d구역**으로 그리셨습니다 — 구역당 평균 **%d두**."
@@ -4478,6 +4519,10 @@ elif mode == "🗺️ 설계(P3)":
                     _dw["routes"] = [{_k: _v for _k, _v in _x.items() if _k != "id"}
                                      for _x in _pins["routes"]]
                 _dw["water_items"] = list(_pins.get("water_items") or [])   # [V106] 규칙 7
+                _dw["head_kit"] = str(_pins.get("head_kit") or _p3heads.DEFAULT)   # [V109] 헤드 구성
+                for _new_field in ("chains", "supply", "row_kits", "tool_items"):
+                    if _new_field in _pins:
+                        _dw[_new_field] = json.loads(json.dumps(_pins[_new_field]))
                 if _pins.get("valves"):
                     # zones None = 엔진이 분배점에서 센다(규칙 21 · #79). 대표가 적은 값은 그대로.
                     _zv = _pins["valves"].get("zones")
@@ -4498,10 +4543,29 @@ elif mode == "🗺️ 설계(P3)":
                 _up = st.file_uploader("작도 결과 JSON", type=["json"], key="p3_drawn_up")
                 if _up is not None:
                     try:
-                        _j = json.loads(_up.getvalue().decode("utf-8"))
-                        _dw = dict(st.session_state.get("p3_drawn") or {})
-                        _dw.update(_j)
-                        st.session_state.p3_drawn = _dw
+                        _raw_drawn = _up.getvalue().decode("utf-8-sig")
+                        if st.session_state.get("p3_drawn_loaded") != _raw_drawn:
+                            _j = json.loads(_raw_drawn)
+                            if not isinstance(_j, dict):
+                                raise ValueError("작도 결과는 JSON 객체여야 합니다")
+                            for _field, _type in (("chains", list), ("supply", dict), ("row_kits", dict), ("tool_items", list)):
+                                if _field in _j and not isinstance(_j[_field], _type):
+                                    raise ValueError(_field + " 입력 형식이 올바르지 않습니다")
+                            if "chains" in _j:
+                                from looperget.design.connections import validate_chains as _check_chains
+                                _check_chains(_j["chains"])
+                            _dw = dict(st.session_state.get("p3_drawn") or {})
+                            _dw.update(_j)
+                            st.session_state.p3_drawn = _dw
+                            for _new_field in ("chains", "supply", "row_kits", "tool_items"):
+                                if _new_field in _j:
+                                    _pins[_new_field] = _j[_new_field]
+                            st.session_state.p3_pins = _pins
+                            st.session_state.p3_drawn_loaded = _raw_drawn
+                            st.session_state.p3_supply_reload = True
+                            st.session_state.p3_connection_epoch = st.session_state.get("p3_connection_epoch", 0) + 1
+                            _p3ui.invalidate()
+                            st.rerun()
                         st.success("올렸습니다.")
                     except Exception as _e:
                         st.error("JSON 읽기 실패: " + str(_e))
@@ -4633,6 +4697,7 @@ elif mode == "🗺️ 설계(P3)":
                     st.error("🔴 **배경까지 막혔습니다.** 배포 환경의 바깥 연결 문제입니다 — 이 표를 알려 주세요.")
 
     # ── ④ 설계·견적 ───────────────────────────────────────────────────
+    _p3ui.invalidate_changed_inputs()
     with _p3_steps[3]:
         _ans = st.session_state.get("p3_answers", {}) or {}
         _dw = st.session_state.get("p3_drawn")
@@ -4644,6 +4709,7 @@ elif mode == "🗺️ 설계(P3)":
             # 새 입력이 실패했을 때 이전 설계가 이번 결과처럼 남지 않게 한다.
             st.session_state.pop("p3_result", None)
             st.session_state.pop("p3_site", None)
+            st.session_state.pop("p3_pub", None)
             _site = None
             try:
                 _site = _p3i.validate(_ans, _dw, name=_ans.get("address"),
@@ -4667,6 +4733,7 @@ elif mode == "🗺️ 설계(P3)":
         _res = st.session_state.get("p3_result")
         if _res:
             _site = st.session_state.get("p3_site") or {}
+            _p3ui.render_supply_result(_res)
             _m1, _m2, _m3, _m4 = st.columns(4)
             _m1.metric("헤드", "%d 두" % _res["n_heads"])
             _m2.metric("가지관 열", "%d 열" % _res["n_laterals"])
@@ -4760,6 +4827,10 @@ elif mode == "🗺️ 설계(P3)":
                 _q_mgr = _q2.text_input("담당자", value="박형석", key="p3_q_mgr")
                 _q_vat = _q3.checkbox("영세율", value=False, key="p3_q_vat",
                                       help="농업경영체 등록확인서 제출 건에만 켭니다(건별 판단).")
+                _q_t2 = st.checkbox("🏗️ 시공업체용 두 단가 견적(대리점가1 | 소비자가 | 이익율)도 만들기",
+                                    value=False, key="p3_q_tier2",
+                                    help="[V109] 41_견적서_시공업체용_*.xlsx — 대리점가1은 Products 시트 그대로. "
+                                         "09-15 용산리에서 손으로 만들던 파일입니다.")
                 _pptx_ok, _pptx_why = _p3pub.pptx_ready()
                 st.caption("표지·수량·금액은 **위 설계 그대로** 들어갑니다. 대표 작도가 필요한 지면"
                            "(물 공급 계통·매니폴드)은 **비어 있는 채로** 나옵니다 — 그 자리를 채우고 문안을 "
@@ -4798,7 +4869,29 @@ elif mode == "🗺️ 설계(P3)":
                                 if _cd:
                                     _pdb4[_cd] = {"name": _pr.get("name", ""), "spec": _pr.get("spec", ""),
                                                   "unit": _pr.get("unit", "EA"),
-                                                  "소비자가": int(_pr.get("price_cons", 0) or 0)}
+                                                  "소비자가": int(_pr.get("price_cons", 0) or 0),
+                                                  # [V109] 두 단가 견적 · 사진 ID — 서버 견적서 사진 0 결함(09-14)
+                                                  "대리점가1": int(_pr.get("price_agy1", 0) or 0) or None,
+                                                  "대리점가2": int(_pr.get("price_agy2", 0) or 0) or None,
+                                                  "img": (str(_pr.get("image") or "") or None)}
+                            # [V109] 사진 — 세트 품목(01998 등)은 Sets 시트 「이미지파일명」의 구성 사진, 낱개는 Products image.
+                            #    render_xlsx 는 서비스계정 파일(.secrets)로 Drive 를 읽는데 서버엔 그 파일이 없다 →
+                            #    앱의 Drive 함수(common.google · 캐시)를 **공급자**로 넘긴다(V15 §2-7·9 그대로).
+                            try:
+                                _fmap4 = get_drive_file_map_deep() or {}
+                            except Exception:
+                                _fmap4 = {}
+                            for _cat4 in (st.session_state.db.get("sets") or {}).values():
+                                for _sd4 in (_cat4 or {}).values():
+                                    _ic4 = str(_sd4.get("item_code") or "").strip()
+                                    _im4 = os.path.splitext(str(_sd4.get("image") or ""))[0]
+                                    if _ic4 in _pdb4 and _im4 and _im4 in _fmap4:
+                                        _pdb4[_ic4]["img_set"] = _fmap4[_im4]
+
+                            def _fetch4(code, _p=_pdb4, _fm=_fmap4):
+                                _i = _p.get(code, {})
+                                _fid = _i.get("img_set") or get_best_image_id(code, _i.get("img"), _fm)
+                                return download_image_by_id(_fid) if _fid else None
                             # 부속 사진 — 승인 제안서가 쓰는 폴더를 그대로 쓴다(있으면).
                             _imgd = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                                  "_설계", "배추밭스프링클러_20260824", "90_작업파일", "부속이미지")
@@ -4809,11 +4902,16 @@ elif mode == "🗺️ 설계(P3)":
                                       "site_short": (_ans.get("crop") or "관수 설계"),
                                       "quote": {"label": str(_site.get("name") or ""),
                                                 "recipient": _q_to, "manager": _q_mgr or "박형석",
-                                                "vat_zero": bool(_q_vat)}})
-                            _out4 = _p3pub.run(_job4, verbose=False)
+                                                "vat_zero": bool(_q_vat),
+                                                "tier2": ("대리점가1" if _q_t2 else None)}})
+                            _out4 = _p3pub.run(_job4, verbose=False, image_fetch=_fetch4)
                             st.session_state.p3_pub = {
                                 "pptx": _out4.get("pptx"), "xlsx": _out4["xlsx"]["path"],
+                                "xlsx2": (_out4.get("xlsx2") or {}).get("path"),
+                                "n_img": _out4["xlsx"]["n_img"],
+                                "log": list(_out4.get("render_log") or []),
                                 "skip": _out4.get("pptx_skip") or "",
+                                "supply_html": _out4.get("supply_html"),
                                 "job": os.path.join(_dir4, "_job.json"),
                                 "dir": _dir4, "basemap": _src4,
                                 "n_items": _out4["xlsx"]["n_items"], "total": _out4["xlsx"]["total"],
@@ -4822,11 +4920,25 @@ elif mode == "🗺️ 설계(P3)":
                             st.error("제안서·견적서 생성 실패 — " + str(_e))
                 _pub = st.session_state.get("p3_pub")
                 if _pub:
-                    st.success("만들었습니다 — %s · 배경 %s · 견적 **%d품목 · %s원**. 폴더 `%s`"
+                    st.success("만들었습니다 — %s · 배경 %s · 견적 **%d품목 · %s원** · 사진 %d/%d. 폴더 `%s`"
                                % ("제안서 + 견적서" if _pub.get("pptx") else "**견적서**",
                                   "브이월드 위성" if _pub["basemap"] == "vworld" else "Esri 위성",
-                                  _pub["n_items"], format(_pub["total"], ","), _pub["dir"]))
-                    _d1, _d2 = st.columns(2)
+                                  _pub["n_items"], format(_pub["total"], ","),
+                                  _pub.get("n_img", 0), _pub["n_items"], _pub["dir"]))
+                    if _pub.get("log"):
+                        st.caption("렌더 메모 — " + " · ".join(sorted(set(_pub["log"]))))
+                    _d1, _d2, _d3 = st.columns(3)
+                    if _pub.get("supply_html") and os.path.exists(_pub["supply_html"]):
+                        with open(_pub["supply_html"], "rb") as _f:
+                            st.download_button("💧 급수·연결 조건 HTML", _f.read(),
+                                               file_name=os.path.basename(_pub["supply_html"]),
+                                               mime="text/html", key="p3_dl_supply")
+                    if _pub.get("xlsx2") and os.path.exists(_pub["xlsx2"]):
+                        with open(_pub["xlsx2"], "rb") as _f:
+                            _d3.download_button("🏗️ 시공업체용 견적 XLSX", _f.read(),
+                                                file_name=os.path.basename(_pub["xlsx2"]),
+                                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                                key="p3_dl_xlsx2")
                     try:
                         with open(_pub["xlsx"], "rb") as _f:
                             _d1.download_button("📗 견적서 XLSX 내려받기", _f.read(),
@@ -4852,8 +4964,9 @@ elif mode == "🗺️ 설계(P3)":
                         #    GitHub 브라우저 업로드 한도가 25 MB 다. 그러니 여기서는 **견적서까지**가 정직하다.
                         st.warning("📊 **제안서 PPTX 는 이 서버에서 만들 수 없습니다** — " + _pub["skip"]
                                    + "  \n견적서는 위에서 받으시고, 제안서는 **작업 PC**에서 아래 한 줄로 "
-                                     "만드십시오. 위 「🧾 설계 job JSON」을 내려받아 프로젝트 폴더에 두고 —")
-                        st.code("python -m looperget.design.publish job_대상지.json", language="bash")
+                                     "만드십시오. 위 「🧾 설계 job JSON」을 내려받아 **아무 폴더**에 두고 — "
+                                     "(V109: job 이 위성 그림을 품고 있고 서버 경로는 그 PC 에 맞게 고쳐집니다)")
+                        st.code("python -m looperget.design.publish job_대상지.json --pdf", language="bash")
                     if _pub["pages"]:
                         st.caption("§9 기계 점검이 지적한 지면 — %s 면. 대개 **대표 작도가 없어 비어 있는 지면**입니다."
                                    % ", ".join(str(_x) for _x in _pub["pages"]))

@@ -98,6 +98,10 @@ class RowPolicy:
     #    규칙 11 말단 보충이 끝을 좁히면 「6번과 7번 사이만 좁다」가 된다(대표 2026-09-08).
     #    두수는 바뀌지 않는다 — **자리만 고르게** 한다.
     even_spacing: bool = False
+    # 🔵 [V109] **열당 두수 지정** — 이동식 헤드처럼 열마다 몇 개만 두고 농가가 옮겨 쓸 때(대표 2026-09-15 용산리).
+    #    자동 배치가 더 놓았으면 첫·마지막 헤드는 그대로 두고 **사이를 고르게** 줄인다.
+    #    모자라면 그대로 둔다 — 없는 자리를 짓지 않는다. None = 자동.
+    heads_per_row: Optional[int] = None
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -434,6 +438,38 @@ class Block:
                 r.heads = hs
         return self
 
+    def count(self) -> "Block":
+        """열당 두수를 `heads_per_row` 로 맞춘다 — 첫·마지막은 그대로, 사이를 고르게(even 과 같은 규칙).
+        한 두만 남기면 마지막 헤드가 바뀌므로 호스 끝(`p1`·`len`)을 다시 잡는다(drop 과 같은 규칙)."""
+        k = self.P.heads_per_row
+        if not k or int(k) < 1:
+            return self
+        k = int(k)
+        for r in self.rows:
+            n = len(r.heads)
+            if n <= k:
+                continue
+            if k == 1:
+                r.heads = [r.heads[0]]
+                last = G.dist(r.p0, r.heads[-1])
+                if self.P.mode == "along_row":
+                    hose = last + self.P.tail
+                    r.p1 = (r.p0[0] + r.dir[0] * hose, r.p0[1] + r.dir[1] * hose)
+                    r.len = round(hose, 1)
+                else:
+                    r.p1, r.len = self._hose_end(r.p0, r.dir, last)
+                continue
+            a, b = r.heads[0], r.heads[-1]
+            L = G.dist(a, b)
+            if L <= 0:
+                r.heads = [a]
+                continue
+            u = ((b[0] - a[0]) / L, (b[1] - a[1]) / L)
+            gap = L / (k - 1)
+            r.heads = [a] + [(round(a[0] + u[0] * gap * i, 1), round(a[1] + u[1] * gap * i, 1))
+                             for i in range(1, k - 1)] + [b]
+        return self
+
     def solve(self) -> "Block":
         P = self.P
         if P.manual_rows is not None:
@@ -446,7 +482,7 @@ class Block:
                 if row is None:
                     raise ValueError("옮긴 가지관에 헤드를 놓을 수 없습니다. 밭 안쪽으로 옮겨 주세요.")
                 self.rows.append(row)
-            return self.drop().add().even()
+            return self.drop().add().even().count()
         cs = [P.anchor_fixed] if P.anchor_fixed is not None else _frange(*P.anchor_sweep)
         best = None
         for c in cs:
@@ -468,7 +504,7 @@ class Block:
         _, self.c1, self.c2, self.rows = best
         if P.refine and P.mode == "edge2d":
             self.refine()
-        return self.drop().add().even()
+        return self.drop().add().even().count()
 
     def refine(self, rounds: int = 2) -> "Block":
         """평행이 기본. 두수가 모자란 열부터 ±swing 각도를 훑어 더 들어가면 바꾼다(이웃 이격 min_sep)."""

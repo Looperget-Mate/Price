@@ -461,8 +461,8 @@ class Renderer:
         est = lambda texts: 0.20 + sum(-(-len(t) // 52) for t in texts) * 0.34     # 문단 높이 어림(in)
         water_texts = [self.water.get("start_line", "급수원(관정·물탱크·펌프)은 고객 보유 — 본 제안은 펌프 토출측 여과기부터 구성합니다")]
         water_texts += list(tx.get("topo", [])) or ["—"]
-        water_texts.append("헤드 간격 10 m · 총 %d두 · %d구역(%s두 · 한 구역 최대 25두 이내)"
-                           % (S["n_heads"], len(S["zones"]), " · ".join(str(z["n_heads"]) for z in S["zones"])))
+        water_texts.append("헤드 간격 %s m · 총 %d두 · %d구역(%s두 · 한 구역 최대 25두 이내)"
+                           % (S["head_gap"], S["n_heads"], len(S["zones"]), " · ".join(str(z["n_heads"]) for z in S["zones"])))
         filt_texts = tx.get("filter_note") or ["스프링클러 설치 시, 반드시 여과기를 설치해야 합니다",
                                               "여과기 미설치·미청소로 인한 피해에 대해 당사에게 책임을 물을 수 없음"]
         y_water, y_filt = 1.30, 1.30 + est(water_texts) + 0.22
@@ -482,7 +482,9 @@ class Renderer:
         lines = [(ov.DIM, "※ 이격 기준(반경 10 m) — 첫 스프링클러까지 기준 5 m · 최대 6 m · 하한 4 m (반경 12 m면 기준 7 m · 최대 8 m)"),
                  (DS.C.INK500, "   두둑과 나란히 가지관을 눕혀 밭 커버율 %.0f %% · 헤드–경계 %.1f m 이상 — 열 끝은 간격을 좁혀 헤드를 하나 더 넣어 끝까지 물이 갑니다"
                   % (S["cover"] * 100, S["edge_min_m"]))]
-        if S["hydro"]:
+        if S.get("supply"):
+            lines.append((DS.C.INK500, "※ 급수원 정보와 무관하게 구역별 필요 유량·압력을 계산했습니다. 부록 ‘급수·연결 조건’을 확인하세요."))
+        elif S["hydro"]:
             worst = min(S["hydro"], key=lambda r: r["p_end"])
             pump = worst.get("pump", "[미확정]")
             if "need_hp" in worst:
@@ -658,7 +660,7 @@ class Renderer:
         self._dims(s, fr, heads=False)
         _LL = sorted(l["len_m"] for l in self.lats)
         _LN = sorted(l["n_heads"] for l in self.lats)
-        lat_cap = ["두둑(재배 열)과 평행 · 열 간격 10 m (직각)",
+        lat_cap = ["두둑(재배 열)과 평행 · 열 간격 %s m (직각)" % S["lat_gap"],
                    "열 길이 %.0f~%.0f m · 열별 %d~%d두 — 긴 열부터 100 m 롤을 잘라 이어 씁니다"
                    % (_LL[0], _LL[-1], _LN[0], _LN[-1]),
                    "열마다 밸브 1개 — 부분 관수·수리 시 개별 차단 · 분기 세트 %s" % S["sets"]["branch25"],
@@ -679,12 +681,15 @@ class Renderer:
         self.draw_lats(s, fr)
         self.draw_heads(s, fr, 0.05)
         self._dims(s, fr, heads=True)
-        caption(s, CAP_X, CAP_Y, CAP_W, "스프링클러 %d두 · 01998 세트" % S["n_heads"], [
-            "헤드 간격 10 m · 첫 헤드 %.1f~%.1f m (기준 5)" % (S["off_min"], S["off_max"]),
+        # [V109] 간격·헤드 구성은 summary(정책·head_kit)에서 — 「10 m」·「01998」 고정 문구를 없앴다.
+        _kit = S["head_kit"]
+        caption(s, CAP_X, CAP_Y, CAP_W, "스프링클러 %d두 · %s" % (S["n_heads"], _kit["short"]), [
+            "헤드 간격 %s m · 첫 헤드 %.1f~%.1f m (기준 5)" % (S["head_gap"], S["off_min"], S["off_max"]),
             "경계 이격 %.1f m 이상 · 밭 커버율 %.0f %%" % (S["edge_min_m"], S["cover"] * 100),
-            "%s — H20+뽁뽁이+지주대+427B" % S["sets"]["head"],
-            "지관 15 mm 타공 · 케이블타이 140 mm 헤드당 2개 — 북주기·철거 때 호스가 당겨져도 루퍼젯이 버팁니다",
-            "흰 치수선 = 가운데 대표 열 한 줄 — 첫 헤드까지 여백, 그 뒤로 10 m 간격 (다른 열도 같은 방식입니다)",
+            "%s — %s" % (S["sets"]["head"], _kit["label"].split(" — ", 1)[-1]),
+            ("지관 15 mm 타공 · 케이블타이 140 mm 헤드당 2개 — 북주기·철거 때 호스가 당겨져도 루퍼젯이 버팁니다"
+             if _kit["key"] == "01998" else _kit["hose_note"]),
+            "흰 치수선 = 가운데 대표 열 한 줄 — 첫 헤드까지 여백, 그 뒤로 헤드 사이 실측 간격 (다른 열도 같은 방식입니다)",
         ])
 
         # 12 헤드 성능표 — 고정면 + 본 설계 반경 캡션
@@ -694,7 +699,8 @@ class Renderer:
                 sh._element.getparent().remove(sh._element)
         caption(s, 9.9, 6.30, 3.3, "본 설계 살수 반경",
                 ["바깥 10 m (다이얼·처마 조절) · 안쪽 7 m"]
-                + (["말단 압력 %s bar — 다이얼을 조여 반경 10 m로 씁니다" % " · ".join("%.2f" % h["p_end"] for h in S["hydro"])] if S["hydro"] else []),
+                + (["필요 공급조건은 급수 부록 참조 · 실제 말단압은 현장 확인"] if S.get("supply") else
+                   (["말단 압력 %s bar — 다이얼을 조여 반경 10 m로 씁니다" % " · ".join("%.2f" % h["p_end"] for h in S["hydro"])] if S["hydro"] else [])),
                 title_size=13, size=10.5, title_color=GRN)
 
         # 14~ 구역 살수 예시 ×Z (마스터 8면 중 쓰는 만큼) + 전체
@@ -718,10 +724,11 @@ class Renderer:
             h = hyd.get(z["zone"])
             spray_page(P["구역"][k], "%s 살수 예시 (%d두)" % (z["zone"], z["n_heads"]), set(z["lat_ids"]),
                        "%s · %d두" % (z["zone"], z["n_heads"]), [
-                           "동시 가동 %d두 — 최대 25두 이내" % z["n_heads"],
+                           "계획 가동 %d두 — 공급조건은 구역별 요구표 참조" % z["n_heads"],
                            z["how"] or "이 구역 밸브만 개방",
                            "가지관 %d열" % len(z["lat_ids"]),
-                       ] + (["유량 %d L/분 · 시작 %.2f → 말단 %.2f bar (반경 %.1f m)" % (h["Q"], h["p_start"], h["p_end"], h["radius_end"])] if h else []),
+                       ] + (["필요 공급조건은 부록에 표시 — 실제 가동 여부는 급수원 확인 후 결정"] if S.get("supply") else
+                            (["유량 %d L/분 · 시작 %.2f → 말단 %.2f bar (반경 %.1f m)" % (h["Q"], h["p_start"], h["p_end"], h["radius_end"])] if h else [])),
                        only=z["zone"])
         for k in range(len(zs), 8):
             delete_slide(prs, P["구역"][k])
@@ -730,7 +737,7 @@ class Renderer:
         spray_page(P["전체"], "전체 살수 예시 (%d두)" % S["n_heads"], set(l["id"] for l in self.lats),
                    "전체 %d두 살수 범위" % S["n_heads"], [
                        "%d구역 %s가동" % (len(S["zones"]), "순차 " if len(S["zones"]) > 1 else "동시 "),
-                       "두둑과 평행 · 10 m 간격 — 전면 중첩 살수",
+                       "두둑과 평행 · %s m 간격 — 전면 중첩 살수" % S["head_gap"],
                        "밭 커버율 약 %.0f %%" % (S["cover"] * 100),
                    ] + self._runtime_lines())
 
@@ -790,8 +797,53 @@ class Renderer:
         label(s, 5.3, 6.84, "%s · 여분(세트 3 %%·자재 5 %%·롤 여유 12 %%) 포함 · 배송비·설치 인건비 별도 — 견적서(엑셀) 별도" % S["tier"],
               size=10, color=DS.C.INK500, w=7.6, align=PP_ALIGN.RIGHT)
 
+        # 🔴 [V109] 안전망 — 지면 밖으로 멀리 나간 도형은 지우고 기록한다. PowerPoint 는 좌표가 ±2^31 EMU 를 넘는
+        #    파일을 **열지 않는다**(09-15 실사고). 원인은 위(_lat_dims)에서 고쳤지만, 다른 작도가 같은 사고를 내도
+        #    파일만은 열리게 한다. 지운 것은 render_log 에 남아 §9 점검과 함께 보인다.
+        self._supply_appendix(prs)
+        self._prune_offpage(prs)
         prs.save(self.out)
         return self.out
+
+    def _supply_appendix(self, prs):
+        """Paged requirement/connection appendix generated from the same summary as HTML."""
+        from .supply_docs import lines
+        if not self.S.get("supply"):
+            return
+        import textwrap
+        content = list(lines(self.S))
+        for chain in self.S.get("chains") or []:
+            path = " → ".join(str(link.get("custom_name") or link.get("code") or link.get("id"))
+                              for link in chain.get("links") or [])
+            content.append("연결 %s · %s: %s" % (chain.get("part"), chain.get("connection_id"), path))
+        for group in self.S.get("head_groups") or []:
+            content.append("열 %s · %s두: %s" % (", ".join(map(str, group["rows"])), group["heads"], group["kit"]["label"]))
+        content += ["공구 제외 %s: %s" % (t["code"], t["reason"]) for t in self.S.get("excluded_tools") or []]
+        content += list(self.S.get("warnings") or [])
+        wrapped = [part for line in content for part in textwrap.wrap(line, width=66) or [""]]
+        for offset in range(0, len(wrapped), 15):
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            label(slide, .6, .45, "급수·연결 조건 — %d" % (offset // 15 + 1), size=24, w=12, bold=True)
+            for i, line in enumerate(wrapped[offset:offset + 15]):
+                label(slide, .7, 1.15 + i * .34, line, size=13, w=11.9)
+            label(slide, .7, 6.75, "설계 초안 · 필요한 운전 유량과 압력을 동시에 확보해야 합니다.", size=11, w=11.9)
+
+    def _prune_offpage(self, prs, margin_in: float = 3.0):
+        W, H, lim = int(prs.slide_width), int(prs.slide_height), int(Inches(margin_in))
+        for i, s in enumerate(prs.slides, 1):
+            bad = []
+            for sh in list(s.shapes):
+                try:
+                    l, t, w, h = int(sh.left or 0), int(sh.top or 0), int(sh.width or 0), int(sh.height or 0)
+                except Exception:
+                    continue
+                if (l + w < -lim or t + h < -lim or l > W + lim or t > H + lim
+                        or max(abs(l), abs(t), abs(l + w), abs(t + h)) > 2 ** 31 - 1):
+                    bad.append(sh)
+            for sh in bad:
+                sh._element.getparent().remove(sh._element)
+            if bad:
+                self.log.append("면%d: 지면 밖 도형 %d개 삭제(좌표 이상) — 치수·경계 작도를 확인하세요" % (i, len(bad)))
 
     def _steps_on_p4(self, slide, steps):
         """면19 표가 길어 자리가 없을 때 「다음 단계」를 면4(상호 확인사항)로 내린다.
@@ -825,6 +877,8 @@ class Renderer:
         대표 확인 2026-09-04: **작물별 관수 기준 정본은 없다 — 농가·지역마다 방식이 다르다.**
         그래서 「배추는 몇 mm」로 쓰지 않고, 살수강도(mm/h)를 내고 10 mm를 예시로 환산해 보여 준다.
         고객이 자기 기준(mm)을 대면 그 자리에서 시간을 다시 낼 수 있게 강도를 함께 적는 것이 요점이다."""
+        if self.S.get("supply"):
+            return ["관수 시간은 급수원 확인 후 실제 토출량과 농가의 목표 관수량으로 정합니다."]
         H = self.S["hydro"]
         if not H:
             return []
@@ -854,8 +908,10 @@ class Renderer:
         hs = [tuple(h) for h in mid["heads"]]
 
         if heads:                                   # 면13 — 대표 열 한 줄에 끝까지
+            # [V109] 헤드 사이 간격은 **실측**한다 — 「10」 고정은 균등 정렬·열당 두수 지정에서 틀린 값이었다.
             dim_chain(s, fr, [tuple(mid["p0"])] + hs,
-                      ["첫 %s" % n1(mid["off"])] + ["10"] * (len(hs) - 1), off_m=3.2, side=-1)
+                      ["첫 %s" % n1(mid["off"])] + [n1(G.dist(hs[i], hs[i + 1])) for i in range(len(hs) - 1)],
+                      off_m=3.2, side=-1)
             return
         self._lat_dims(s, fr, lats)
 
@@ -865,19 +921,24 @@ class Renderer:
         블록마다 축이 다르므로(a = p·n, n = perp(u)) 블록별로 자기 축 위에 놓는다."""
         n1 = lambda v: ("%.1f" % v).rstrip("0").rstrip(".")
         for blk in self.site.get("blocks", []):
-            rows = sorted([l for l in lats if l.get("block") == blk.get("name")], key=lambda r: r["a"])
+            rows = [l for l in lats if l.get("block") == blk.get("name")]
             poly = [tuple(q) for q in (blk.get("polygon") or [])]
             if not rows or len(poly) < 3:
                 continue
             u = G.unit(tuple(blk["u"]))
             nv = G.perp(u)
+            # 🔴 [V109] 열 위치는 **p0 로 다시 잰다.** job 의 `a` 는 배치기 좌표계(북쪽 +y)의 값이라 지면(아래쪽 +y)으로
+            #    뒤집힌 p0·u 와 부호가 반대다. 그 값을 폴리곤 경계와 섞으면 치수·경계 표시가 수백 km 밖(±21억 EMU 초과)에
+            #    찍혀 **PowerPoint 가 파일을 열지 못했다**(유촌리·용산리 2026-09-15). P2 는 원점이 밭 곁이라 드러나지 않았다.
+            ra = {id(r): G.dot(tuple(r["p0"]), nv) for r in rows}
+            rows.sort(key=lambda r: ra[id(r)])
             av = [G.dot(q, nv) for q in poly]
             a_lo, a_hi = min(av), max(av)
             # 치수선을 놓을 열 방향 위치 = 열 길이의 3/4 지점(말단 쪽) — 주배관·분기 표기에서 멀어진다
             t = sum(G.dot(r["p0"], u) + 0.75 * (G.dot(r["p1"], u) - G.dot(r["p0"], u))
                     for r in rows) / len(rows)
             xy = lambda a: (a * nv[0] + t * u[0], a * nv[1] + t * u[1])
-            aa = [a_lo] + [r["a"] for r in rows] + [a_hi]
+            aa = [a_lo] + [ra[id(r)] for r in rows] + [a_hi]
             pts = [xy(a) for a in aa]
             # 경계 이격은 라벨이 길다 — 열 간격과 **반대쪽**에 놓아 서로 덮지 않게 한다
             for i in range(len(aa) - 1):

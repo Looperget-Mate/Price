@@ -24,6 +24,11 @@ SCHEMA_OUT = "looperget.design.answer/1"
 
 def design(site: Dict, price_db: Optional[Dict] = None, tier: str = "소비자가") -> Dict:
     site = _site.validate(site)
+    from . import heads as _heads
+    from . import connection_bom as _cb
+    _extra, _connection_check = [], None
+    if site.get("chains"):
+        site, _extra, _connection_check = _cb.prepare(site)
     # 규칙 21 F1 — 열(가지관)은 **주배관(role=main)에만** 붙는다. 인입관은 물을 옮기기만 한다.
     main_idx = [i for i, r in enumerate(site["routes"]) if _site.route_role(r) == "main"]
     route_pts = [[tuple(p) for p in site["routes"][i]["pts"]] for i in main_idx]
@@ -96,6 +101,7 @@ def design(site: Dict, price_db: Optional[Dict] = None, tier: str = "소비자�
         z["n_heads"] += l["n_heads"]
 
     n_heads = len(heads)
+    _head_groups = _heads.row_groups(site, laterals) if site.get("row_kits") else []
 
     # 🔴 주배관 관경 — `site["main_mm"]` 이 없으면 **엔진이 스스로 고른다**(대표 지시 2026-09-07).
     #    여유 하한은 두지 않는다: 말단 1.5 bar 를 지키는 가장 가는 관을 고르고, 얇으면 경고가 붙는다.
@@ -105,13 +111,23 @@ def design(site: Dict, price_db: Optional[Dict] = None, tier: str = "소비자�
         {"mainline": main, "zones": list(zones.values()), "laterals": laterals}, site)
     warnings += _pick["warn"]
     site_mm = dict(site, main_mm=_pick["main_mm"])
+    if _head_groups:
+        site_mm["_head_groups"] = _head_groups
 
-    bom = _bom.build(n_heads, [l["len_m"] for l in laterals], main, site_mm)
-    money = _quote.price(bom, price_db, tier) if price_db else None
+    bom_main = _cb.main_for_bom(main, site_mm) if site.get("chains") else main
+    bom = _bom.build(n_heads, [l["len_m"] for l in laterals], bom_main, site_mm)
+    _excluded = []
+    if _extra or "tool_items" in site:
+        tools = _cb.required_tools(bom + _extra, site.get("tool_items") or []) if "tool_items" in site else []
+        bom, _excluded = _cb.merge(bom, _extra, tools)
+    if _connection_check:
+        warnings += _connection_check["issues"]
+    warnings += ["공구 제외: %s — %s" % (t["code"], t["reason"]) for t in _excluded]
+    money = _quote.price(bom, price_db or {}, tier) if price_db or _extra else None
     if money and money["missing"]:
         warnings.append("단가 없음: " + ", ".join(money["missing"]))
 
-    return {
+    answer = {
         "schema": SCHEMA_OUT, "engine": f"looperget.design {VERSION}", "name": site.get("name"),
         "laterals": laterals, "heads": heads, "n_heads": n_heads, "n_laterals": len(laterals),
         "mainline": main, "zones": list(zones.values()), "bom": bom, "money": money,
@@ -119,6 +135,20 @@ def design(site: Dict, price_db: Optional[Dict] = None, tier: str = "소비자�
         "main_mm_picks": _pick["picks"],
         "warnings": warnings,
     }
+    from . import supply as _supply
+    answer["supply"] = _supply.assess_supply(site.get("supply") or {}, _supply.design_demands(answer, site_mm))
+    if _connection_check:
+        answer["connections"] = _connection_check
+        if _connection_check.get("hydraulic_missing") or _connection_check.get("status") != "확인됨":
+            answer["supply"]["sufficient_information"] = False
+            answer["supply"]["mode"] = "demand_only"
+            answer["supply"].setdefault("notes", []).append("연결 미확정/불일치 또는 사슬 관 일부 미계산 — 아래 요구조건은 계산된 배관만 기준")
+            for zone in answer["supply"]["zones"]:
+                zone["status"] = "미확정"
+    if _head_groups:
+        answer["head_groups"] = _head_groups
+    answer["excluded_tools"] = _excluded
+    return answer
 
 
 __all__ = ["design", "VERSION", "RowPolicy", "rows_from_polygon", "geom", "layout", "branch", "mainline"]

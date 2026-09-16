@@ -23,6 +23,7 @@ import json
 from typing import Dict, List, Optional, Sequence
 
 from . import pipes
+from . import heads as _heads
 from .summary import SETS
 
 SCHEMA = "looperget.design.sets/1"
@@ -78,7 +79,7 @@ def used(design: Dict, site: Dict) -> List[Dict]:
     n_lat = int(design.get("n_laterals") or 0)
     rows = [
         {"key": "head", "label": "스프링클러 헤드", "n": int(design.get("n_heads") or 0),
-         "recipe": {"01998": 1}, "shape": SHAPE["head"], "mm": None, "set_key": "head",
+         "recipe": dict(_heads.resolve(site)["recipe"]), "shape": SHAPE["head"], "mm": None, "set_key": "head",
          "where": "헤드마다"},
         {"key": "tee%d" % mm, "label": "주배관 T 분기 (나가는 쪽 2갈래)", "n": int(main.get("tees") or 0),
          "recipe": {"01201": 1, F["wf42"]: 2, "00278": 4}, "shape": SHAPE["tee"], "mm": mm, "set_key": "tee50",

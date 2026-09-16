@@ -18,7 +18,9 @@ import math
 from typing import Dict, List, Sequence, Tuple
 
 from . import geom as G
+from . import heads as _heads
 from . import hydro_zone as HZ
+from . import layout as _layout
 from . import pipes
 
 PY = 3.3058                      # ㎡ → 평
@@ -141,11 +143,29 @@ def build(job: Dict) -> Dict:
     bom = []
     for r in money["rows"]:
         bom.append({"code": r["code"], "name": r.get("name", ""), "spec": r.get("spec", ""),
-                    "unit": r.get("unit", ""), "qty": int(r["qty"]), "price": r.get("price"),
+                    "unit": r.get("unit", ""), "qty": r["qty"], "price": r.get("price"),
                     "amount": r.get("amount"), "note": r.get("note", ""),
                     "cat": r.get("cat", ""), "subcat": r.get("subcat", "")})
     bom = sort_bom(bom)
     off = [l["off"] for l in lats]
+    # 🔵 [V109] 지면 문구가 「10 m」·「01998 세트」로 **고정**돼 있었다(용산리 변경 B안 2026-09-15 — 열 간격 12.5·이동식 헤드).
+    #    간격은 블록 정책(S·lat_gap)에서, 헤드 구성은 site["head_kit"] 에서 읽는다. 값은 여기서 만들지 않는다.
+    _pd = _layout.RowPolicy()
+    _pols = [(b.get("policy") or {}) for b in site.get("blocks") or []]
+
+    def _rng(key, dflt):
+        vs = sorted({float(p.get(key, dflt)) for p in _pols} or {float(dflt)})
+        f = lambda v: ("%.1f" % v).rstrip("0").rstrip(".")
+        return f(vs[0]) if len(vs) == 1 else "%s~%s" % (f(vs[0]), f(vs[-1]))
+    kit = _heads.resolve(site)
+    from . import supply
+    supply_report = design.get("supply") or supply.assess_supply(site.get("supply") or {}, supply.design_demands(design, site))
+    groups = design.get("head_groups") or []
+    if len(groups) == 1:
+        kit = groups[0]["kit"]
+    if len(groups) > 1:
+        kit = dict(kit, key="mixed", short="열별 연결 구성", label="열별 연결 구성 — 상세표 참조", set="열별 세트 상세 참조",
+                   hose_note="열별 연결 구성표를 확인하세요. 같은 살수기종을 사용합니다.")
     return {
         "name": meta.get("name") or design.get("name"),
         "parcel": meta.get("parcel", ""), "site_label": meta.get("site_label", ""),
@@ -164,6 +184,9 @@ def build(job: Dict) -> Dict:
         "dev_max": max((l.get("dev_deg") or 0 for l in lats), default=0),
         "zones": zones,
         "hydro": HZ.zones_report(design, site),
+        "hydro_basis": "기존 승인본 재현/운전점 참고. 신규 공급조건 권장은 supply 필드 기준",
+        "supply": supply_report, "chains": site.get("chains") or [],
+        "head_groups": groups, "excluded_tools": design.get("excluded_tools") or [],
         "joints": joint_points(site, design),
         "ends": [list(p) for p in design["mainline"]["end_pts"]],
         "tees": [[list(p), tag] for p, tag in design["mainline"]["tee_pts"]],
@@ -173,7 +196,8 @@ def build(job: Dict) -> Dict:
         "bom": bom, "total": money.get("total", 0), "tier": money.get("tier", "소비자가"),
         "won_per_py": round(money.get("total", 0) / (area / PY)) if area else None,
         "missing": money.get("missing", []),
-        "sets": dict(SETS), "warnings": list(design.get("warnings", [])),
+        "sets": dict(SETS, head=kit["set"]), "warnings": list(design.get("warnings", [])),
+        "head_gap": _rng("S", _pd.S), "lat_gap": _rng("lat_gap", _pd.lat_gap), "head_kit": kit,
     }
 
 

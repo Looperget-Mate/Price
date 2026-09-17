@@ -47,7 +47,7 @@ try:
 except Exception:
     _CM_VER = 0
 if _CM_VER < 1:
-    st.error("🚨 **`common/` 폴더가 없거나 구버전입니다** — app.py(V110)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **`common/` 폴더가 없거나 구버전입니다** — app.py(V111)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`common/` 폴더를 통째로** 올린 뒤 재배포하세요.")
     st.stop()
 
@@ -228,8 +228,8 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 102:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V110)와 짝이 맞지 않습니다.\n\n"
+if _LG_VER < 103:
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V111)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/`·`common/` 폴더를 통째로** "
              "`app.py`와 함께 올린 뒤 재배포하세요.")
     st.stop()

@@ -244,7 +244,15 @@ def draw_bridge(draw, handle_features, role="main", drafts=None, head_features=N
     from branca.element import MacroElement, Template
     bridge = MacroElement()
     bridge.draw = draw
-    payload = json.dumps({"handles": handle_features, "role": role, "drafts": drafts or [],
+    # 🔴 [V111] 그려 둔 도형(drafts)은 **컴포넌트 키(해시)에 안 보이게** 싣는다.
+    #    streamlit-folium 은 지도 스크립트 전체의 해시를 위젯 키로 쓰고(`generate_js_hash`), 키가 바뀌면 지도를
+    #    통째로 다시 만든다. 도형 JSON 을 그대로 넣으면 도형이 하나 늘 때마다 키가 바뀌는데, 그 재생성은 도형이
+    #    저장된 **다음** 재실행 — 곧 **다음 그리기의 첫 클릭** — 에서 일어나 그리던 밭·인입관이 날아갔다
+    #    (대표 실사용 2026-09-16 「밭을 그리면 잠시 후 깜빡거리고 이전 상태 · 다시 그리면 된다」 · playwright 재현).
+    #    해시는 `_[a-z0-9]+` 토막을 지우고 계산하므로, 도형을 `_` + hex 로 넣으면 해시에 안 잡힌다. 살아 있는
+    #    지도는 스크립트를 다시 돌리지 않으니 도형은 이미 화면에 있고, 다른 이유로 다시 만들어질 때만 여기서 복원한다.
+    drafts_hex = "_" + json.dumps(drafts or [], ensure_ascii=False).encode("utf-8").hex()
+    payload = json.dumps({"handles": handle_features, "role": role, "drafts_hex": drafts_hex,
                           "heads": head_features or [], "mode": mode, "rev": rev},
                          ensure_ascii=False).replace("<", "\\u003c")
     bridge._template = Template(r"""
@@ -252,6 +260,9 @@ def draw_bridge(draw, handle_features, role="main", drafts=None, head_features=N
 (function(){
  const map = {{this._parent.get_name()}}, group = drawnItems_{{this.draw.get_name()}};
  const data = __PAYLOAD__;
+ (function(){ const h = (data.drafts_hex || "_5b5d").slice(1); const b = new Uint8Array(h.length >> 1);
+   for (let i = 0; i < b.length; i++) { b[i] = parseInt(h.substr(i * 2, 2), 16); }
+   try { data.drafts = JSON.parse(new TextDecoder('utf-8').decode(b)); } catch (e) { data.drafts = []; } })();
  data.drafts.forEach(function(f){
    L.geoJSON(f, {style: function(x){return {color: x.geometry.type==='Polygon'?'#ffd600':
      ((x.properties||{}).role==='feeder'?'#ffa040':'#ff4b4b'), weight:4};}})

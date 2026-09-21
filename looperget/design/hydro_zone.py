@@ -33,8 +33,23 @@ def head_profile(model: Optional[str] = None) -> Dict:
 
 
 def nozzle_k(model: Optional[str] = None) -> float:
+    """노즐 K (q = K·√P). 프로필에 산출점(`nozzle_lpm`/`nozzle_bar`)이 있으면 그 한 점 —
+    427B 는 이 길이라 값이 바뀌지 않는다(승인본 재현 관문). 없으면 제조사 성능표 `curve` 전 점의 최소제곱."""
     p = head_profile(model)
-    return H.nozzle_k(p["nozzle_lpm"], p["nozzle_bar"])
+    if p.get("nozzle_lpm") and p.get("nozzle_bar"):
+        return H.nozzle_k(p["nozzle_lpm"], p["nozzle_bar"])
+    pts = [(float(b), float(q) / 60.0) for b, q, _d in (p.get("curve") or []) if b > 0 and q > 0]
+    if not pts:
+        raise ValueError("헤드 프로필에 유량 근거(nozzle_lpm 또는 curve)가 없다 — 등록 전에는 설계하지 않는다")
+    return sum(q * math.sqrt(b) for b, q in pts) / sum(b for b, _q in pts)
+
+
+def head_flow_lpm(p_bar: float, model: Optional[str] = None) -> float:
+    """그 압력에서 헤드 한 개의 유량(L/분). 유량조절기 헤드(`regulated_lph`)는 압력과 무관한 정유량이다."""
+    p = head_profile(model)
+    if p.get("regulated_lph"):
+        return float(p["regulated_lph"]) / 60.0
+    return H.nozzle_flow_lpm(nozzle_k(model), p_bar)
 
 
 NOZZLE_K = nozzle_k()                     # 427B 4.0 mm (프로필 파생 · 규칙 20)
@@ -71,8 +86,22 @@ PUMP_CURVES = {
 def radius_m(p_end_bar: float, model: Optional[str] = None) -> float:
     """말단압 → 살수 반경 (프로필의 대표 실증 보간: 427B는 1.5 bar = 10 m · 2.5 bar = 12 m)."""
     p = head_profile(model)
-    r0_bar, r0_m = p["r_ref"]
-    return r0_m + p["r_slope"] * (p_end_bar - r0_bar)
+    # [V113] 제조사 성능표의 반경(지름÷2) — 표 밖은 **끝값 고정**(값을 짓지 않는다 · 원칙 1)
+    tbl = sorted((float(b), float(d) / 2.0) for b, _q, d in (p.get("curve") or []) if d)
+    if p.get("r_ref"):
+        # 대표 실증이 표보다 우선한다. 다만 제조사 최대 반경은 넘지 않는다 —
+        # 427B 는 3 bar 위에서 지름 26 m(반경 13 m)로 멈추는데 직선 보간은 4 bar 에 15 m 를 냈다(2026-09-22 대조).
+        r0_bar, r0_m = p["r_ref"]
+        r = r0_m + p["r_slope"] * (p_end_bar - r0_bar)
+        return min(r, max(x[1] for x in tbl)) if tbl else r
+    if not tbl:
+        raise ValueError("헤드 프로필에 반경 근거(r_ref 또는 curve)가 없다 — 등록 전에는 설계하지 않는다")
+    if p_end_bar <= tbl[0][0]:
+        return tbl[0][1]
+    for (ba, ra), (bb, rb) in zip(tbl, tbl[1:]):
+        if p_end_bar <= bb:
+            return ra + (rb - ra) * (p_end_bar - ba) / (bb - ba)
+    return tbl[-1][1]
 
 
 def spacing_defaults(model: Optional[str] = None, p_end: Optional[float] = None) -> Dict:
@@ -131,17 +160,16 @@ def sys_head(n_heads: int, main_m: float, lat_n: int, lat_m: float, p_end: float
     `pipe_mm` = (주배관 내경, 가지관 내경). 기본은 실물 내경 `MAIN_MM/LAT_MM`.
     **승인 정답지를 재현할 때만** `REPRO_MM`(호칭 50/25)을 넘긴다."""
     main_mm, lat_mm = pipe_mm or (MAIN_MM, LAT_MM)
-    k = nozzle_k(model)
     p_avg = p_end
     for _ in range(200):
-        q1 = H.nozzle_flow_lpm(k, p_avg)
+        q1 = head_flow_lpm(p_avg, model)
         hf_lat = H.lateral_loss_m(lat_n * q1, lat_mm, lat_m, lat_n)
         p_in_lat = p_end + H.head_m_to_bar(hf_lat)
         new = (p_in_lat + p_end) / 2
         if abs(new - p_avg) < 1e-7:
             break
         p_avg = new
-    q1 = H.nozzle_flow_lpm(k, p_avg)
+    q1 = head_flow_lpm(p_avg, model)
     Q = n_heads * q1
     n_branch = max(2, int(math.ceil(n_heads / max(1, lat_n))))
     hf_main = H.lateral_loss_m(Q, main_mm, main_m, n_branch)
@@ -354,6 +382,6 @@ def zones_report(design: Dict, site: Dict) -> List[Dict]:
 
 
 __all__ = ["zone_point", "zone_demand", "zones_report", "resolve_main_mm", "sys_head", "pump_head", "radius_m",
-           "spacing_defaults", "head_profile", "nozzle_k", "cap_heads_15bar",
+           "spacing_defaults", "head_profile", "nozzle_k", "head_flow_lpm", "cap_heads_15bar",
            "PUMP_CURVES", "P_END_TARGET", "DEFAULT_HEAD", "V50_LIMIT",
            "MAIN_MM", "LAT_MM", "REPRO_MM"]

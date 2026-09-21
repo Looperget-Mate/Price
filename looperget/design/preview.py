@@ -275,8 +275,8 @@ def block_preview(blocks: Sequence[Dict], flow_lpm: Optional[float] = None,
     lat_avg = lat_total / max(1, n_rows)
     # 🔴 구역 수를 정하는 값은 **노즐 유량**이다 — `zone_demand` 는 「이 두수를 한 계통에 동시에」를
     #    푸는 함수라 두수가 많으면 입구압이 수십 bar 로 튄다. 그건 유량이 아니라 **불가 신호**다.
-    q_min = H.nozzle_flow_lpm(HZ.NOZZLE_K, HZ.P_END_TARGET)          # 보증 말단압 1.5 bar
-    q_ref = H.nozzle_flow_lpm(HZ.NOZZLE_K, prof["p_end"])            # 설계점(427B 2.5 bar)
+    q_min = HZ.head_flow_lpm(HZ.P_END_TARGET, model)           # 보증 말단압 1.5 bar
+    q_ref = HZ.head_flow_lpm(prof["p_end"], model)             # 설계점(427B 2.5 bar)
     out["q_head_min"] = round(q_min, 1)
     out["q_head_ref"] = round(q_ref, 1)
     out["q_all_min"] = round(n_heads * q_min)

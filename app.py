@@ -17,6 +17,8 @@ import xlsxwriter
 from PIL import Image
 from fpdf import FPDF
 
+# [V113 · 2026-09-22] 사양 정본(결정 #93) — 헤드 프로필에 제조사 성능표(반경 상한 · 다른 기종 도입 대비) ·
+#   관종별 내경표(HDPE 구KS · 농수관 · 연질관) · 점적 줄 사양(design/lines.py) · 🗺️ 설계 견적에 배송비 수기 입력. PKG_VER 105.
 # [V109 · 2026-09-15] 긴급 발행 3건(유촌리·용산리)에서 드러난 결함 수술 — 제안서 면8 원점(PowerPoint 못 엶) ·
 #   면10 치수 실측 · 서버 job 을 작업 PC 에서 그대로 실행(위성 그림 내장·경로 보정) · 서버 견적서 사진 ·
 #   헤드 구성(01998 고정 → 선택)·열당 두수 · 시공업체용 두 단가 견적(대리점가1). 엔진 = looperget/design PKG_VER 101.
@@ -47,7 +49,7 @@ try:
 except Exception:
     _CM_VER = 0
 if _CM_VER < 1:
-    st.error("🚨 **`common/` 폴더가 없거나 구버전입니다** — app.py(V111)와 짝이 맞지 않습니다.\n\n"
+    st.error("🚨 **`common/` 폴더가 없거나 구버전입니다** — app.py(V113)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`common/` 폴더를 통째로** 올린 뒤 재배포하세요.")
     st.stop()
 
@@ -228,8 +230,8 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 103:
-    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V111)와 짝이 맞지 않습니다.\n\n"
+if _LG_VER < 105:
+    st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V113)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/`·`common/` 폴더를 통째로** "
              "`app.py`와 함께 올린 뒤 재배포하세요.")
     st.stop()
@@ -3554,9 +3556,13 @@ elif mode == "🗺️ 설계(P3)":
 
             _shw = st.checkbox("💦 예상 살수 보기 (헤드 자리와 반경)", value=True, key="p3_show_heads",
                                help="계산된 스프링클러 자리와 살수 반경을 지도에 겹쳐 봅니다.")
-            _draw_role_label = st.radio("새로 그릴 관", ["주배관 (가지관이 붙는 관)", "인입관 (급수원→분배점)"],
+            # 🧭 [V112] 「고랑 방향」은 관이 아니라 **임시 선**이다 — 전에는 ╱ 로 그린 모든 선(인입관·주배관 포함)을
+            #    고랑 선으로 세어 「그린 선 2개로 방향 잡기」가 관 방향으로 가지관을 돌렸다(대표 2026-09-17).
+            _draw_role_label = st.radio("새로 그릴 것", ["주배관 (가지관이 붙는 관)", "인입관 (급수원→분배점)",
+                                                     "🧭 고랑 방향 (임시 선 · 관 아님)"],
                                        horizontal=True, key="p3_draw_role")
-            _draw_role = "feeder" if _draw_role_label.startswith("인입관") else "main"
+            _draw_role = ("feeder" if _draw_role_label.startswith("인입관")
+                          else "furrow" if _draw_role_label.startswith("🧭") else "main")
             _edit_rows = st.checkbox("↔ 가지관 위치 조정", value=True, key="p3_edit_rows")
             st.caption("가지관 가운데 **초록 ↔ 손잡이**를 잡고 옆으로 옮기세요. 놓으면 바로 반영됩니다. "
                        "**노란 점선**은 가지관 시작→첫 헤드 거리입니다. 주배관과 교차하지 않는 열은 밭 경계 기준입니다.")
@@ -3668,6 +3674,41 @@ elif mode == "🗺️ 설계(P3)":
                                                             _p3s.MATERIAL_LABEL.get(_rt.get("material") or "hose50"))
                                           if _isf else "주배관 %s · 구역 %s" % (_rt.get("name") or "", _rt.get("zone")))
                                  ).add_to(_M)
+            # 🔗 [V112] 연결 상태를 **지도에** — 이어진 관은 물 받는 자리에 초록 점, 끊긴 관은 첫 점에 빨간 점 + 거리.
+            #    전에는 목록에 넣은 뒤 표 아래 글로만 나와 「연결이 된 건지 알 수 없다」(대표 2026-09-17).
+            #    판정은 ④와 같은 함수(`mainline.analyze`)다 — 여기서 초록이면 ④에서도 초록이다.
+            _an_map = None
+            if _pins.get("routes") and _pins.get("sources"):
+                try:
+                    _an_map = _p3ml.analyze(_pins["routes"], _pins["sources"])
+                except Exception:
+                    _an_map = None
+            if _an_map:
+                _how_map = {"source": "급수원 「%s」에서", "end": "「%s」 끝에서", "mid": "「%s」 중간(T)에서",
+                            "tap": "「%s」 — 이 관 중간에 T 로", "tail": "「%s」 — 이 관 끝에서"}
+                for _rr, _rt in zip(_an_map["routes"], _pins["routes"]):
+                    _pts_r = _rt.get("pts") or []
+                    if not _pts_r:
+                        continue
+                    _fp = _rr.get("feed_pt") or _pts_r[0]
+                    _lo, _la = _p3m.from_local_m([_fp], _org)[0]
+                    _lab_r = "%s %s" % (_p3s.ROLE_LABEL.get(_rr["role"], _rr["role"]), _rr["name"])
+                    if _rr["from"] == "free":
+                        _gap_txt = ("%.1f m" % _rr["from_gap"]) if _rr.get("from_gap") is not None else "?"
+                        _fo.CircleMarker([_la, _lo], radius=10, color="#E02828", weight=3, fill=True,
+                                         fill_color="#FFFFFF", fill_opacity=1,
+                                         tooltip="🔴 %s — 끊김 (가장 가까운 %s 에서 %s)"
+                                                 % (_lab_r, _rr.get("from_near") or "것", _gap_txt)).add_to(_M)
+                        _fo.Marker([_la, _lo], icon=_fo.DivIcon(
+                            icon_size=(140, 22), icon_anchor=(-12, 11),
+                            html='<div style="background:#E02828;color:#fff;font-weight:700;font-size:12px;'
+                                 'padding:2px 7px;border-radius:5px;white-space:nowrap;display:inline-block">'
+                                 '끊김 %s</div>' % _gap_txt)).add_to(_M)
+                    else:
+                        _fo.CircleMarker([_la, _lo], radius=7, color="#1F5F35", weight=2, fill=True,
+                                         fill_color="#2E8A4C", fill_opacity=1,
+                                         tooltip="✅ %s ← %s 물을 받음"
+                                                 % (_lab_r, _how_map[_rr["from"]] % (_rr.get("from_ref") or ""))).add_to(_M)
             for _h in _p3_headers(_pins):
                 _lo, _la = _p3m.from_local_m([_h["pt"]], _org)[0]
                 _fo.CircleMarker([_la, _lo], radius=7, color="#0C3B81", weight=2, fill=True,
@@ -3765,7 +3806,8 @@ elif mode == "🗺️ 설계(P3)":
             _lc._template = _BrancaTemplate(P3_DRAW_LOCALE_JS.replace("주배관", "관"))
             _M.add_child(_lc)
             _draw = _FoDraw(export=False, position="topleft",
-                    draw_options={"polyline": {"shapeOptions": {"color": "#ffa040" if _draw_role == "feeder" else "#ff4b4b", "weight": 5}},
+                    draw_options={"polyline": {"shapeOptions": {"color": {"feeder": "#ffa040", "furrow": "#2E8A4C"}.get(_draw_role, "#ff4b4b"),
+                                                                "weight": 5, "dashArray": {"feeder": "12,8", "furrow": "4,6"}.get(_draw_role)}},
                                   "polygon": {"shapeOptions": {"color": "#ffd600", "weight": 4}},
                                   "marker": True,          # 급수원 — 도구를 켜야만 찍힌다(#66)
                                   "rectangle": False, "circle": False, "circlemarker": False},
@@ -3859,12 +3901,16 @@ elif mode == "🗺️ 설계(P3)":
                 st.rerun()
             _gt = lambda f: ((f or {}).get("geometry") or {}).get("type")
             _polys = [_f for _f in _dws if _gt(_f) == "Polygon"]
-            _lines = [_f for _f in _dws if _gt(_f) == "LineString"]
+            _role_of = lambda f: ((f or {}).get("properties") or {}).get("role")
+            _furrows = [_f for _f in _dws if _gt(_f) == "LineString" and _role_of(_f) == "furrow"]   # [V112]
+            _lines = [_f for _f in _dws if _gt(_f) == "LineString" and _role_of(_f) != "furrow"]
             _points = [_f for _f in _dws if _gt(_f) == "Point"]
 
-            st.caption("지금 지도에 **그려 놓은 것** — 💧급수원 %d · 🟨밭 %d · 📐관 %d. "
-                       "아래 단추를 눌러야 목록으로 들어갑니다."
-                       % (len(_points), len(_polys), len(_lines)))
+            st.caption("지금 지도에 **그려 놓은 것** — 💧급수원 %d · 🟨밭 %d · 📐관 %d%s. "
+                       "아래 단추를 눌러야 목록으로 들어갑니다. **연결 여부는 넣은 뒤** 지도에 "
+                       "🟢 초록 점(이어짐) · 🔴 빨간 점 + 거리(끊김)로 표시됩니다."
+                       % (len(_points), len(_polys), len(_lines),
+                          (" · 🧭고랑 선 %d" % len(_furrows)) if _furrows else ""))
             _ca, _cb = st.columns([2, 1])
             if _ca.button("✅ 그린 것을 목록에 넣기 (급수원 %d · 밭 %d · 관 %d)"
                           % (len(_points), len(_polys), len(_lines)),
@@ -4100,17 +4146,18 @@ elif mode == "🗺️ 설계(P3)":
                 _tot = sum(_b["area_m2"] for _b in _pins["blocks"])
                 # 🧭 [V94] 고랑 방향을 **지도에서** 잡는다 — 각도를 숫자로 넣는 건 감이 안 온다.
                 #    ╱(선)으로 고랑을 하나 그어 두고 이 단추를 누르면 그 선의 방향이 들어간다.
-                st.caption("🧭 **가지관(고랑) 방향을 지도에서 잡으려면** — 왼쪽 **╱(선)** 으로 "
-                           "고랑을 따라 선을 하나 긋고 아래 단추를 누르세요. "
+                st.caption("🧭 **가지관(고랑) 방향을 지도에서 잡으려면** — 위 「새로 그릴 것」에서 **🧭 고랑 방향**을 고르고 "
+                           "왼쪽 **╱(선)** 으로 고랑을 따라 초록 점선을 하나 긋고 아래 단추를 누르세요. "
                            "**어느 쪽으로 그으셔도 됩니다** — 급수원에서 밭 안쪽으로 향하게 알아서 돌려 놓습니다. "
-                           "그 뒤 그 선은 **🗑 로 지우고** 주배관을 그리시면 됩니다.\n\n"
+                           "누르면 그 선은 **자동으로 지워집니다**. 인입관·주배관은 세지 않습니다.\n\n"
                            "🔵 **가지관은 필요하면 엔진이 둥글게 꺾습니다** — 주배관과 직각에서 "
                            "**20° 이상** 벗어나면 분기부를 곡선으로 잇습니다(설계 규칙 14). "
                            "그 곡선은 위 지도에 **연한 초록 실선**으로 나옵니다.")
-                if st.button("🧭 그린 선 %d개로 가지관 방향 잡기" % len(_lines),
-                             key="p3_furrow", disabled=not _lines):
+                if st.button("🧭 고랑 선 %d개로 가지관 방향 잡기" % len(_furrows),
+                             key="p3_furrow", disabled=not _furrows,
+                             help="🧭 고랑 방향으로 그린 초록 점선만 셉니다. 관(인입관·주배관)은 세지 않습니다."):
                     _fur = []
-                    for _f in _lines:
+                    for _f in _furrows:
                         _pp = _p3m.to_local_m(_f["geometry"]["coordinates"], _org)
                         if len(_pp) >= 2:
                             _dx = _pp[-1][0] - _pp[0][0]
@@ -4133,6 +4180,8 @@ elif mode == "🗺️ 설계(P3)":
                             _b["u"] = _p3_orient(_uu, _b, _pins)
                             (_b.get("policy") or {}).pop("manual_rows", None)
                             (_b.get("policy") or {}).pop("drop_heads", None)
+                        # [V112] 쓴 고랑 선은 지운다 — 관으로 오인될 자리를 남기지 않는다
+                        st.session_state.p3_map_drafts = [_f for _f in _dws if _f not in _furrows]
                         st.session_state.p3_pins = _pins
                         st.rerun()
                 st.caption("합계 **%s m² (%s 평)** · %d구역"
@@ -4263,6 +4312,11 @@ elif mode == "🗺️ 설계(P3)":
                             "관경(mm · 파이프·매설)", min_value=0, max_value=300, step=1,
                             help="수도 파이프·매설관의 **내경**. 송수호스는 비워 둡니다(호칭은 엔진이 고릅니다)."),
                     })
+                # 📏 [V113 · 결정 #93] 수도 파이프·매설관의 관경(내경)을 적을 때 찾아보는 표 — 값의 정본은 pipes.PIPE_DIMS.
+                with st.expander("📏 관종별 내경표 — HDPE 수도관 · 농수관 · 연질관 (관경 칸에 적을 값)"):
+                    st.caption("제조사(서원양행)는 실내경을 싣지 않습니다 — **외경 − 2 × 두께**로 계산한 값 중 작은 쪽(손실을 크게 보는 안전 쪽)입니다. "
+                               "HDPE 수도관은 **구KS 계열**(호칭 50 = 외경 60)입니다. 농수관은 제조사 표가 없어 같은 SDR11 치수를 씁니다(대표 확답 2026-09-22).")
+                    st.dataframe(pd.DataFrame(_p3p.dims_table()), width="stretch", hide_index=True)
                 _byid = {_r.get("id"): _r for _r in _pins["routes"]}
                 _new = []
                 for _, _r in _red.iterrows():
@@ -4831,6 +4885,10 @@ elif mode == "🗺️ 설계(P3)":
                                     value=False, key="p3_q_tier2",
                                     help="[V109] 41_견적서_시공업체용_*.xlsx — 대리점가1은 Products 시트 그대로. "
                                          "09-15 용산리에서 손으로 만들던 파일입니다.")
+                # 🚚 [V113 · 결정 #93] 배송비는 **사람이 보고 적는다**(규칙은 추후). 0 이면 견적서에 넣지 않는다.
+                _q_ship = st.number_input("🚚 배송비(원 · 수기 입력 · 0 = 견적서에 넣지 않음)", min_value=0, value=0,
+                                          step=1000, key="p3_q_ship",
+                                          help="택배·화물 운임을 보고 직접 적습니다. 적으면 견적서 「비용」 줄과 합계에 들어갑니다.")
                 _pptx_ok, _pptx_why = _p3pub.pptx_ready()
                 st.caption("표지·수량·금액은 **위 설계 그대로** 들어갑니다. 대표 작도가 필요한 지면"
                            "(물 공급 계통·매니폴드)은 **비어 있는 채로** 나옵니다 — 그 자리를 채우고 문안을 "
@@ -4903,7 +4961,9 @@ elif mode == "🗺️ 설계(P3)":
                                       "quote": {"label": str(_site.get("name") or ""),
                                                 "recipient": _q_to, "manager": _q_mgr or "박형석",
                                                 "vat_zero": bool(_q_vat),
-                                                "tier2": ("대리점가1" if _q_t2 else None)}})
+                                                "tier2": ("대리점가1" if _q_t2 else None),
+                                                "svc": ([{"항목": "배송비", "금액": int(_q_ship)}]
+                                                        if _q_ship else [])}})
                             _out4 = _p3pub.run(_job4, verbose=False, image_fetch=_fetch4)
                             st.session_state.p3_pub = {
                                 "pptx": _out4.get("pptx"), "xlsx": _out4["xlsx"]["path"],

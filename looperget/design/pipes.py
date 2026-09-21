@@ -30,7 +30,7 @@ looperget.design.pipes — 취급 관(송수호스) 정본과 관경 선정 (§5
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from .. import hydro as H
 
@@ -86,6 +86,65 @@ def main_fittings(nominal_mm: int) -> Dict[str, str]:
             "주배관 호칭 %s mm 의 부속 대응이 없다 — 취급은 40·50 뿐이다. "
             "25 mm 를 주배관으로 쓴 승인 사례가 없어 값을 지어내지 않는다(불변 원칙 1)." % nominal_mm)
     return dict(MAIN_FITTINGS[n])
+
+# ── [V113 · 결정 #93] 송수호스가 아닌 관종의 **치수 정본** ──────────────────────────────
+# `PIPES`(우리 송수호스 품목 · 코드·단가·부속 연동)와 **섞지 않는다** — 호칭 50 이 겹쳐 `by_nominal` 이 흔들린다.
+# 이 표는 「수도 파이프·매설관」의 **관경(d_mm)을 적을 때 찾아보는 내경표**다. 품목코드·단가는 여기 두지 않는다
+# (코드 정본 = Looperget_DB).
+#   · 제조사는 **실내경을 싣지 않는다.** 내경 = 외경 − 2 × 두께를 최소끼리·최대끼리 계산해
+#     **작은 쪽**을 쓴다 — 손실을 크게 보는 안전 쪽.
+#   · HDPE 수도관은 「SDR11」이라 부르지만 구KS 는 외경÷두께가 8.6~11 이다. **SDR 공식으로 역산하지 말고 표를 쓴다.**
+#   · 서원양행은 신KS(호칭 = 외경 · 50 → 내경 40.8)도 판다. **우리 취급은 구KS**(대표 확답 2026-09-22).
+# 행 = (호칭, 외경 최소, 외경 최대, 두께 최소, 두께 최대)
+_SW = "서원양행 "
+PIPE_DIMS: Dict[str, Dict] = {
+    "hdpe": {
+        "label": "HDPE 수도관 (구KS · SDR11 · 상용압 10 kg/cm²)",
+        "source": _SW + "수도용 PE관 카탈로그 p.5 · 관수자재(농업용) 카탈로그 p.38 — 대표 확답 2026-09-22 「구계열」",
+        "rows": [(16, 21.5, 22.0, 2.5, 3.0), (20, 27.0, 27.6, 3.0, 3.5), (25, 34.0, 34.7, 3.5, 4.1),
+                 (30, 42.0, 42.8, 4.0, 4.7), (40, 48.0, 48.9, 4.5, 5.2), (50, 60.0, 61.1, 5.5, 6.3),
+                 (65, 76.0, 77.3, 6.6, 7.5), (75, 89.0, 90.5, 8.1, 9.2)]},
+    "ldpe_recycled": {
+        "label": "재생 LDPE 농수관 (SDR11)",
+        "source": "대표 확답 2026-09-22 「서원양행 SDR11」 — 제조사 농수관 표는 미확보라 HDPE 수도관(구KS) 치수를 쓴다 · "
+                  "실물 실측으로 교체할 것",
+        "same_as": "hdpe"},
+    "ldpe_soft": {
+        "label": "신재 LDPE 연질관 (흑색 · 백색)",
+        "source": _SW + "관수자재(농업용) 카탈로그 p.38 「연질관」 = 직영몰 상세 — 대표 승인 2026-09-22(p.39 요약표와 다르다 · 기록만)",
+        "rows": [(13, 15.2, 16.0, 1.2, 1.4), (16, 20.0, 20.3, 1.4, 1.6), (20, 27.0, 27.6, 1.7, 2.1),
+                 (25, 34.0, 34.7, 2.1, 2.4), (30, 42.0, 42.8, 2.8, 3.2)],
+        "note": "호칭 16 은 미늘식 연결 기준(외경 20.0~20.3). 조임식 16 은 외경 21.5~22.0 → 내경 18.7"},
+}
+PIPE_DIMS_EVIDENCE = "10_프로매니저/작업/20260922_사양정본/근거/서원양행/"
+
+
+def _dims_rows(kind: str) -> List[Tuple]:
+    k = PIPE_DIMS[kind]
+    return PIPE_DIMS[k["same_as"]]["rows"] if k.get("same_as") else k["rows"]
+
+
+def inner_mm(kind: str, nominal_mm: float) -> float:
+    """관종 + 호칭 → 계산 내경(mm · 안전 쪽). 표에 없으면 멈춘다 — 값을 짓지 않는다(불변 원칙 1)."""
+    if kind not in PIPE_DIMS:
+        raise ValueError("관종 '%s' 의 치수표가 없다 — %s 중 하나" % (kind, "/".join(PIPE_DIMS)))
+    n = int(round(float(nominal_mm)))
+    for nom, od_lo, od_hi, t_lo, t_hi in _dims_rows(kind):
+        if nom == n:
+            return round(min(od_lo - 2 * t_lo, od_hi - 2 * t_hi), 1)
+    raise ValueError("%s 호칭 %s mm 는 치수표에 없다 — 제조사 표 확인 전에는 쓰지 않는다"
+                     % (PIPE_DIMS[kind]["label"], nominal_mm))
+
+
+def dims_table() -> List[Dict]:
+    """화면·지면용 — 관종별 호칭 → 외경·두께·계산 내경 한 표."""
+    out = []
+    for kind, k in PIPE_DIMS.items():
+        for nom, od_lo, od_hi, t_lo, t_hi in _dims_rows(kind):
+            out.append({"관종": k["label"], "호칭": nom, "외경(mm)": "%.1f~%.1f" % (od_lo, od_hi),
+                        "두께(mm)": "%.1f~%.1f" % (t_lo, t_hi), "내경(mm · 계산)": inner_mm(kind, nom)})
+    return out
+
 
 # 유속 권장 상한. **탈락선이 아니라 경고선**이다 — hydro.select_diameter docstring 참조.
 V_WARN = 2.0

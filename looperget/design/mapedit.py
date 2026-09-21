@@ -264,8 +264,9 @@ def draw_bridge(draw, handle_features, role="main", drafts=None, head_features=N
    for (let i = 0; i < b.length; i++) { b[i] = parseInt(h.substr(i * 2, 2), 16); }
    try { data.drafts = JSON.parse(new TextDecoder('utf-8').decode(b)); } catch (e) { data.drafts = []; } })();
  data.drafts.forEach(function(f){
-   L.geoJSON(f, {style: function(x){return {color: x.geometry.type==='Polygon'?'#ffd600':
-     ((x.properties||{}).role==='feeder'?'#ffa040':'#ff4b4b'), weight:4};}})
+   L.geoJSON(f, {style: function(x){var r=(x.properties||{}).role;return {color: x.geometry.type==='Polygon'?'#ffd600':
+     (r==='feeder'?'#ffa040':(r==='furrow'?'#2E8A4C':'#ff4b4b')), weight:4,
+     dashArray:(r==='feeder'?'12,8':(r==='furrow'?'4,6':null))};}})
     .eachLayer(function(layer){group.addLayer(layer);});
  });
  map.on('draw:created', function(e){
@@ -273,9 +274,9 @@ def draw_bridge(draw, handle_features, role="main", drafts=None, head_features=N
    const p = e.layer.feature.properties;
    p.draw_id = p.draw_id || String(Date.now())+'-'+String(Math.random()).slice(2);
    if(e.layerType==='polyline'){
-     p.role=data.role;
-     e.layer.setStyle({color:data.role==='feeder'?'#ffa040':'#ff4b4b',
-                       dashArray:data.role==='feeder'?'12,8':null});
+     p.role=data.role;                       // [V112] 'furrow' = 🧭 고랑 방향 임시 선(관이 아니다)
+     e.layer.setStyle({color:data.role==='feeder'?'#ffa040':(data.role==='furrow'?'#2E8A4C':'#ff4b4b'),
+                       dashArray:data.role==='feeder'?'12,8':(data.role==='furrow'?'4,6':null)});
    }
  });
  let p3drawing=false;

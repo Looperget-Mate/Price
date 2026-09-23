@@ -1,0 +1,6 @@
+{
+ "about": "경량 마스터 대조 정보(V117 3단계(b)) — render_pptx.master_status 가 원본 SHA 와 비교한다. 출처 = 작업/20260923_V117/p3a_경량마스터/slim_report.json",
+ "src_sha256": "623bf4e41fe344f46a736bd5283c2623d84beaaa5707b861af264b04dbb31b0a",
+ "out_sha256": "f09beb54f24f7a4c781853f36cf401ae4ac1b4b7a94dbab6e5b782aa68515b27",
+ "tool": "tools/make_slim_master.py"
+}

@@ -155,9 +155,25 @@ def site_05():
                               ("01920", 1, "a 압력계 부착 루퍼젯 H20 — 15 mm 펀치 타공"),
                               ("01870", 1, "a 압력계 20 mm 연결세트 — 입구 공급압 확인")),
         "valves_01403": {"start": 1, "zones": 0},
+        # [V116] 승인본은 두 공급관을 **따로** 깔았다(대표 승인 견적 · T·결합 품목 없음). 좌표로는 가를 수 없어 의도를 적는다.
+        # [V117 · K-03] 의도는 **도장**(접점 좌표·관 모양 지문)과 함께 적는다 — 아래 _stamp_05 가 승인 도면 모양에 묶는다.
+        "link_intent": {"줄2 파이프2 (하단) 갈래1↔줄2 파이프2 (하단) 갈래2": "separate"},
     }
 
 
+def _stamp_05(fn):
+    """[V117 · K-03] 05 의 옛 의도(이름 쌍만)를 도장 있는 의도로 — 승인 도면의 관 모양에 묶는다(모양이 바뀌면 무효)."""
+    def wrap():
+        ans, site = fn()
+        from .summary import intent_entry, link_key
+        g1, g2 = "줄2 파이프2 (하단) 갈래1", "줄2 파이프2 (하단) 갈래2"
+        site["link_intent"] = {link_key(g1, g2): intent_entry(site, g1, g2, "separate")}
+        return ans, site
+    wrap.__name__, wrap.__doc__ = fn.__name__, fn.__doc__
+    return wrap
+
+
+site_05 = _stamp_05(site_05)
 SITES = {"01": site_01, "02": site_02, "03": site_03, "04": site_04, "05": site_05}
 
 

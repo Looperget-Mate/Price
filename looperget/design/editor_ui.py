@@ -17,13 +17,36 @@ def invalidate():
         st.session_state.pop(key, None)
 
 
+SITE_FIELDS = ("chains", "supply", "row_kits", "tool_items", "link_intent", "photos", "connection_examples",
+               "contact")   # [V117 · 2-C] 연락처·회신 기한(매번 수동 · 빈칸 허용)
+
+
+def sync_site_fields(pins, drawn):
+    """[V117 · K-02] 현장마다 다른 입력(사슬·급수 성능·열별 세트·공구·접점 의도·사진·연결 예시)은 **목록(pins)이 정본**이다.
+    drawn 은 그대로 따라 쓴다 — 목록에 없으면 drawn 에서도 뺀다. 예전엔 「있으면 복사」만 해서 「🗑 목록 전부 비우기」·
+    새 현장 뒤에도 옛 현장의 접점 의도·사진이 drawn → site(엔진 입력)에 남았다(재검토 K-02)."""
+    if not isinstance(drawn, dict):
+        return drawn
+    for field in SITE_FIELDS:
+        if field in (pins or {}):
+            drawn[field] = copy.deepcopy(pins[field])
+        else:
+            drawn.pop(field, None)
+    return drawn
+
+
+def clear_site_fields(drawn):
+    """[V117 · K-02] 「🗑 목록 전부 비우기」 — drawn 의 현장별 입력도 함께 비운다."""
+    if isinstance(drawn, dict):
+        for field in SITE_FIELDS:
+            drawn.pop(field, None)
+    return drawn
+
+
 def invalidate_changed_inputs():
     pins = st.session_state.get("p3_pins") or {}
     drawn = st.session_state.get("p3_drawn")
-    if isinstance(drawn, dict):
-        for field in ("chains", "supply", "row_kits", "tool_items"):
-            if field in pins:
-                drawn[field] = copy.deepcopy(pins[field])
+    sync_site_fields(pins, drawn)
     keys = ("p3_answers", "p3_waived", "p3_pins", "p3_drawn")
     sig = hashlib.sha256(json.dumps({k: st.session_state.get(k) for k in keys},
                                    ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
@@ -360,3 +383,162 @@ def render_supply_result(result):
     for zone in report.get("zones", []):
         for note in zone.get("notes", []):
             st.caption(f"구역 {zone.get('zone', '')}: {note}")
+
+
+def link_intent_update(links, table_rows, geo_site):
+    """[V117 · K-03·K-08] 화면 표 → 저장할 site.link_intent (순수 함수 · 시험 대상).
+
+    · 의도마다 **도장**(접점 좌표·관 모양 지문 — summary.intent_entry)을 함께 적는다. 관을 다시 그리면 도장이 달라져
+      그 의도는 쓰이지 않는다(관문 차단 + 재확인).
+    · 쌍은 목록(pair)으로 적는다 — 관 이름에 「↔」가 있어도 쪼개지지 않는다.
+    · 지금 접점 목록에 없는 옛 키는 버린다(현재 링크에 없는 의도 정리).
+    geo_site = 접점 목록을 만든 그 site(발행에 쓴 모양) — 도장은 그 모양에서 찍는다."""
+    from .summary import LINK_INTENTS, intent_entry, link_key
+    back = {v: k for k, v in LINK_INTENTS.items()}
+    pairs = {link_key(x[0], x[1]): (x[0], x[1]) for x in links or []}
+    new = {}
+    for r in table_rows or []:
+        k, v = r.get("접점"), back.get(r.get("의도"))
+        if k in pairs and v:
+            new[k] = intent_entry(geo_site, pairs[k][0], pairs[k][1], v)
+    return new
+
+
+def render_link_intent(pins, links, site=None):
+    """[V116] 엔진이 연결로 계산하지 않은 관 접점마다 대표가 의도를 적는다(site.link_intent).
+
+    좌표만으로는 「같은 길로 따로 깐 관」과 「실제로 잇는 자리」를 가를 수 없다. 값은 관문만 바꾼다 —
+    잇는 자리의 T·수리는 여전히 엔진이 계산하지 못하므로 「잇는 자리」는 차단으로 남는다(선을 끊어 다시 그리기).
+    [V117] 도장(접점 좌표·관 모양)과 함께 저장 — site = 접점 목록을 만든 발행 site(없으면 목록 pins).
+    """
+    from .summary import LINK_INTENTS, link_key, intent_status
+    if not links:
+        return
+    geo = site or pins
+    opts = ["미확인"] + list(LINK_INTENTS.values())
+    with st.expander("🔗 관 접점 확인 — %d곳 (따로 깐 관인지, 잇는 자리인지)" % len(links), expanded=True):
+        st.caption("엔진은 이 자리를 연결로 계산하지 않았습니다. 「따로 깐 관」이면 그대로 진행하고, "
+                   "「잇는 자리」면 T·부속·수리가 빠져 있어 발송할 수 없습니다 — 그 자리에서 관을 끊어 다시 그려 주세요. "
+                   "서로 다른 급수원의 관이 닿은 자리는 「따로 깐 관」을 고르기 전까지 차단됩니다. "
+                   "고른 의도는 지금 관 모양에 묶입니다 — 관을 다시 그리면 다시 골라야 합니다.")
+        rows = []
+        cur_site = dict(geo, link_intent=pins.get("link_intent") or {})
+        for x in links:
+            k = link_key(x[0], x[1])
+            it, stt = intent_status(cur_site, x[0], x[1])
+            rows.append({"접점": k, "두 급수원": "예" if len(x) > 2 and x[2] else "",
+                         "의도": LINK_INTENTS.get(it, "미확인") if stt == "ok" else "미확인",
+                         "상태": {"stale": "관 모양 바뀜 — 다시 고르기", "legacy": "옛 형식 — 다시 고르기"}.get(stt, "")})
+        frame = st.data_editor(pd.DataFrame(rows), hide_index=True, disabled=["접점", "두 급수원", "상태"],
+                               column_config={"의도": st.column_config.SelectboxColumn(options=opts, required=True)},
+                               key="p3_link_intent_editor")
+        if st.button("접점 의도 적용", key="p3_link_intent_apply"):
+            pins["link_intent"] = link_intent_update(links, _records(frame), geo)
+            _save(pins)
+
+
+def photo_dir_info():
+    """[V117 · K-11] 현장 사진 저장 폴더와 그 성격 → {"dir", "persistent", "why"}.
+
+    폴더 = publish.ROOT(프로젝트 폴더) 아래 `_제안/_현장사진` — 예전엔 dirname 을 4번 올라가 프로젝트 **밖**
+    (…/AI/Agent/_제안)을 잡았다. 배포 서버(Streamlit Cloud `/mount/src/…`)는 쓰기가 되더라도 재시작하면 사라진다 —
+    쓰기가 막히면 임시 폴더다. 둘 다 persistent=False 로 화면에 알린다."""
+    import os
+    import tempfile
+    from .publish import ROOT
+    d = os.path.join(ROOT, "_제안", "_현장사진")
+    server = ROOT.replace("\\", "/").startswith("/mount/")
+    try:
+        os.makedirs(d, exist_ok=True)
+        probe = os.path.join(d, "_쓰기시험")
+        with open(probe, "w") as f:
+            f.write("ok")
+        os.remove(probe)
+        return {"dir": d, "persistent": not server,
+                "why": "배포 서버 폴더 — 앱이 다시 시작되면 사진이 사라집니다" if server else ""}
+    except Exception:
+        d = os.path.join(tempfile.gettempdir(), "looperget_현장사진")
+        os.makedirs(d, exist_ok=True)
+        return {"dir": d, "persistent": False, "why": "저장소 폴더에 쓸 수 없어 임시 폴더에 둡니다 — 앱이 다시 시작되면 사라집니다"}
+
+
+def photo_dir():
+    """현장 사진 저장 폴더 — 로컬은 `_제안/_현장사진`(재열기 가능), 쓰기 막힌 서버는 임시 폴더."""
+    return photo_dir_info()["dir"]
+
+
+def render_photos(pins, site):
+    """[V116] 당사 현장답사 사진 — 올리기 · 설명 · 지도 자리. 파일명만 적는 칸은 두지 않는다(실제 사진만)."""
+    import os
+    from . import photos as PH
+    info = photo_dir_info()
+    d = info["dir"]
+    items = list(pins.get("photos") or [])
+    with st.expander("📷 현장 사진 (당사 현장답사) — %d장" % len(items), expanded=bool(items)):
+        st.caption("올린 사진이 제안서 「현장 사진」 면(대상지 개요 다음)에 그대로 들어갑니다. 한 면에 두 장. "
+                   "지도 자리를 고르면 대상지 지도에 같은 번호가 찍힙니다. 빠진 사진을 다른 사진으로 채우지 않습니다.")
+        if not info["persistent"]:                      # [V117 · K-11] 휘발 폴더면 그 사실을 화면에
+            st.warning("📷 %s. 제안서를 만들면 사진 축소본이 job(_job.json)에 함께 실립니다 — job 을 내려받아 두세요. "
+                       "(저장 폴더: `%s`)" % (info["why"], d))
+        ups = st.file_uploader("사진 올리기 (JPG·PNG · 여러 장)", type=["jpg", "jpeg", "png"],
+                               accept_multiple_files=True, key="p3_photo_up_%d" % st.session_state.get("p3_photo_epoch", 0))
+        if ups and st.button("올린 사진 추가", key="p3_photo_add"):
+            have = {x.get("file") for x in items}
+            for u in ups:
+                fn = PH.store(u.getvalue(), u.name, d)
+                if fn not in have:
+                    items.append({"file": fn, "caption": os.path.splitext(u.name)[0], "at": ""})
+                    have.add(fn)
+            pins["photos"] = items
+            st.session_state.p3_photo_epoch = st.session_state.get("p3_photo_epoch", 0) + 1
+            _save(pins)
+        if not items:
+            return
+        opts = PH.anchors(site or {})
+        rows = [{"번호": i + 1, "있음": "✅" if os.path.isfile(os.path.join(d, x.get("file", ""))) else "❌ 파일 없음",
+                 "설명": x.get("caption", ""), "지도 자리": opts.get(x.get("at", ""), opts[""]), "빼기": False}
+                for i, x in enumerate(items)]
+        frame = st.data_editor(pd.DataFrame(rows), hide_index=True, disabled=["번호", "있음"],
+                               column_config={"지도 자리": st.column_config.SelectboxColumn(options=list(opts.values()), required=True)},
+                               key="p3_photo_editor")
+        cols = st.columns(min(4, len(items)))
+        for i, x in enumerate(items[:8]):
+            p = os.path.join(d, x.get("file", ""))
+            if os.path.isfile(p):
+                cols[i % len(cols)].image(p, caption="%d. %s" % (i + 1, x.get("caption", "")), use_container_width=True)
+        if any(r["있음"] != "✅" for r in rows):
+            st.warning("파일이 없는 사진이 있습니다 — 다시 올리거나 「빼기」로 지워 주세요. 제안서에는 빠진 채로 확인 항목에 남습니다.")
+        if st.button("사진 설명·자리 적용", key="p3_photo_apply"):
+            back = {v: k for k, v in opts.items()}
+            new = []
+            for x, r in zip(items, _records(frame)):
+                if not r.get("빼기"):
+                    new.append({"file": x["file"], "caption": str(r.get("설명") or "").strip(),
+                                "at": back.get(r.get("지도 자리"), "")})
+            pins["photos"] = new
+            _save(pins)
+
+
+def contact_update(values):
+    """[V117 · 2-C] 화면 칸 → 저장할 contact(순수 · 시험 대상). 빈칸은 빈 글자로 둔다(지어내지 않는다). 전부 비면 None."""
+    from .customer import CONTACT_FIELDS
+    out = {k: str((values or {}).get(k) or "").strip() for k, _lab in CONTACT_FIELDS}
+    return out if any(out.values()) else None
+
+
+def render_contact(pins):
+    """[V117 · 2-C] 제안서 연락처·회신 기한 — 선택 입력(매번 수동 · 빈칸 허용 · 결정 #98 ②).
+    고객 전달본 현장 요약 면에 한 줄로 들어간다(비면 손으로 적을 밑줄). 저장하면 작도 결과·site JSON 에 함께 남는다."""
+    from .customer import CONTACT_FIELDS
+    cur = dict(pins.get("contact") or {})
+    with st.expander("📞 연락처·회신 기한 (선택 · 고객 전달본에 한 줄)", expanded=bool(cur)):
+        cols = st.columns(len(CONTACT_FIELDS))
+        vals = {k: cols[i].text_input(lab, value=str(cur.get(k) or ""), key="p3_ct_" + k)
+                for i, (k, lab) in enumerate(CONTACT_FIELDS)}
+        if st.button("연락처 저장", key="p3_ct_save"):
+            new = contact_update(vals)
+            if new:
+                pins["contact"] = new
+            else:
+                pins.pop("contact", None)
+            _save(pins)

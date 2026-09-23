@@ -49,7 +49,11 @@ def _recipe_of(db_entry: Dict) -> Dict[str, int]:
 
 
 def index(sets_db: Optional[Dict]) -> Dict[str, List[Dict]]:
-    """Sets 시트 → {레시피 서명: [{name, cat}]}. 같은 조합이면 같은 서명이다."""
+    """Sets 시트 → {레시피 서명: [{name, cat, gov}]}. 같은 조합이면 같은 서명이다.
+
+    gov = 시트 「관급등록여부」 Y(조달용으로 만든 세트). 🔴 **조달 등록 완료가 아니다** — 등록 상태·물품식별번호는
+    `관급_등록정보` 시트가 정본이고 이 앱은 그 시트를 읽지 않는다(2026-06 등록 진행 중 · 번호 일부 미확인).
+    """
     idx: Dict[str, List[Dict]] = {}
     for cat, group in (sets_db or {}).items():
         if not isinstance(group, dict):
@@ -59,8 +63,59 @@ def index(sets_db: Optional[Dict]) -> Dict[str, List[Dict]]:
                 continue
             rcp = _recipe_of(info)
             if rcp:
-                idx.setdefault(signature(rcp), []).append({"name": name, "cat": cat})
+                idx.setdefault(signature(rcp), []).append(
+                    {"name": name, "cat": cat, "gov": str(info.get("gov_registered") or "").strip().upper() == "Y"})
     return idx
+
+
+def is_gov(site: Optional[Dict]) -> bool:
+    """관급(공공조달) 현장인가 — [V117 · 3차 검토 D4] 대상 종류 한 곳(segments.segment_of) 기준.
+    site.segment 가 있으면 그것(농업 + 옛 channel 관급 → 농업) · 없으면 옛 job 규칙(channel 관급 → 관급). 모르면 일반."""
+    from .segments import segment_of
+    return segment_of(site) == "관급"
+
+
+def rank(hits: List[Dict], site: Optional[Dict]) -> List[Dict]:
+    """같은 조합의 시트 세트들 — 관급이면 조달용 세트(gov)를 앞에. 일반이면 시트 순서 그대로."""
+    return sorted(hits, key=lambda h: 0 if h.get("gov") else 1) if is_gov(site) else list(hits)
+
+
+GOV_STATUS = "조달용 세트(시트 관급등록여부 Y) — 조달 등록 상태·물품식별번호는 관급_등록정보 시트에서 확인"
+
+
+def gov_pick(site: Optional[Dict], sets_db: Optional[Dict], kit: Optional[Dict] = None) -> Dict:
+    """관급 현장의 헤드 세트 — 지금 헤드 구성과 **같은 조합**의 조달용 세트를 고른다. 없으면 사유와 대안.
+
+    → {"channel", "picked": name|None, "why", "near": [같은 살수기종의 조달용 세트 이름]}.
+    🔴 모델명·구성·가격을 만들지 않는다 — 시트에 있는 이름만 돌려준다. 조합이 다르면 고르지 않는다.
+    [V117 · K-04] kit = BOM 이 실제로 쓰는 헤드 구성(summary.head_kit_used). 없으면 site.head_kit(예전 동작).
+    """
+    kit = kit or _heads.resolve(site)
+    out = {"channel": "관급" if is_gov(site) else "일반", "picked": None, "why": "", "near": [], "kit": kit.get("key")}
+    if not is_gov(site):
+        return out
+    if kit.get("key") in ("mixed", "unknown"):
+        out["why"] = ("열별 헤드 구성이 섞여 있어 세트 하나로 고르지 않았습니다 — 열별 연결 구성표 참조"
+                      if kit.get("key") == "mixed" else "헤드 구성 [미확정] — 조달용 세트를 대조하지 못했습니다")
+        return out
+    if not sets_db:
+        out["why"] = "Sets 시트 미연결 — 조달용 세트를 대조하지 못했습니다"
+        return out
+    hits = [h for h in index(sets_db).get(signature(dict(kit["recipe"])), []) if h["gov"]]
+    if hits:
+        out.update(picked=hits[0]["name"], why=GOV_STATUS)
+        return out
+    model = str(kit.get("label") or "")
+    for cat, group in sets_db.items():
+        for name, info in (group or {}).items() if isinstance(group, dict) else ():
+            hm = str((info or {}).get("head_model") or "").split()
+            if (isinstance(info, dict) and str(info.get("gov_registered") or "").upper() == "Y"
+                    and hm and hm[-1] in model):
+                out["near"].append(name)
+    out["why"] = ("지금 헤드 구성(%s)과 같은 조합의 조달용 세트가 시트에 없습니다%s"
+                  % (kit.get("short") or kit.get("label"),
+                     " — 같은 살수기종의 조달용 세트: " + " · ".join(out["near"]) if out["near"] else ""))
+    return out
 
 
 def signature(recipe: Dict[str, int]) -> str:
@@ -68,8 +123,10 @@ def signature(recipe: Dict[str, int]) -> str:
     return "+".join("%s×%d" % (c, q) for c, q in sorted(recipe.items()))
 
 
-def used(design: Dict, site: Dict) -> List[Dict]:
-    """이 설계가 쓰는 **연결부 묶음**과 개소. 조합은 `bom.py` 규칙 그대로다(새로 만들지 않는다)."""
+def used(design: Dict, site: Dict, kit: Optional[Dict] = None) -> List[Dict]:
+    """이 설계가 쓰는 **연결부 묶음**과 개소. 조합은 `bom.py` 규칙 그대로다(새로 만들지 않는다).
+    kit = BOM 이 쓰는 헤드 구성(V117 · K-04). 없으면 site.head_kit. 이름 정본(summary.SETS["head"])은 01998 조합일 때만."""
+    hk = kit or _heads.resolve(site)
     main = design.get("mainline") or {}
     mm = int(site.get("main_mm") or pipes.APPROVED_MAIN_MM)
     F = pipes.main_fittings(mm)
@@ -77,24 +134,28 @@ def used(design: Dict, site: Dict) -> List[Dict]:
     zone_v = int(main.get("header_valves") or 0) if v.get("zones") is None else int(v.get("zones") or 0)
     start_v = int(v.get("start", 1) or 0)
     n_lat = int(design.get("n_laterals") or 0)
+    # 🔴 [V114 · F01] summary.SETS 의 주배관 세트 이름은 **50 mm 조합의 이름**이다. 40 mm 에 그 이름을 붙이면
+    #    다른 물건을 같은 이름으로 부르게 된다 — 50 이 아니면 이름 정본을 쓰지 않고 시트 대조·신설 후보로 보낸다.
+    _k = lambda key: key if mm == pipes.APPROVED_MAIN_MM else None
     rows = [
         {"key": "head", "label": "스프링클러 헤드", "n": int(design.get("n_heads") or 0),
-         "recipe": dict(_heads.resolve(site)["recipe"]), "shape": SHAPE["head"], "mm": None, "set_key": "head",
+         "recipe": dict(hk["recipe"]), "shape": SHAPE["head"], "mm": None,
+         "set_key": "head" if dict(hk["recipe"]) == dict(_heads.KITS["01998"]["recipe"]) else None,
          "where": "헤드마다"},
         {"key": "tee%d" % mm, "label": "주배관 T 분기 (나가는 쪽 2갈래)", "n": int(main.get("tees") or 0),
-         "recipe": {"01201": 1, F["wf42"]: 2, "00278": 4}, "shape": SHAPE["tee"], "mm": mm, "set_key": "tee50",
+         "recipe": {"01201": 1, F["wf42"]: 2, "00278": 4}, "shape": SHAPE["tee"], "mm": mm, "set_key": _k("tee50"),
          "where": "관이 세 갈래로 만나는 자리"},
         {"key": "join%d" % mm, "label": "주배관 일자 연결 (롤 이음)", "n": int(main.get("joints") or 0),
-         "recipe": {"00825": 1, F["wf42"]: 1, "00278": 4}, "shape": SHAPE["straight"], "mm": mm, "set_key": "join50",
+         "recipe": {F["wf41"]: 1, F["wf42"]: 1, "00278": 4}, "shape": SHAPE["straight"], "mm": mm, "set_key": _k("join50"),
          "where": "50 m 롤이 끝나 잇는 자리"},
         {"key": "end%d" % mm, "label": "주배관 말단 마감", "n": int(main.get("ends") or 0),
-         "recipe": {F["e_valve"]: 1, "00278": 2}, "shape": SHAPE["end"], "mm": mm, "set_key": "end50",
+         "recipe": {F["e_valve"]: 1, "00278": 2}, "shape": SHAPE["end"], "mm": mm, "set_key": _k("end50"),
          "where": "관이 끝나는 자리(규칙 1)"},
         {"key": "zonev%d" % mm, "label": "구역 밸브", "n": zone_v,
-         "recipe": {F["e_valve"]: 1, "00278": 2}, "shape": SHAPE["end"], "mm": mm, "set_key": "end50",
+         "recipe": {F["e_valve"]: 1, "00278": 2}, "shape": SHAPE["end"], "mm": mm, "set_key": _k("end50"),
          "where": "분배점마다 구역 수(규칙 21)"},
         {"key": "start%d" % mm, "label": "시작부 밸브", "n": start_v,
-         "recipe": {F["e_valve"]: 1, "00278": 2}, "shape": SHAPE["end"], "mm": mm, "set_key": "end50",
+         "recipe": {F["e_valve"]: 1, "00278": 2}, "shape": SHAPE["end"], "mm": mm, "set_key": _k("end50"),
          "where": "급수점 바로 뒤"},
         {"key": "branch25", "label": "가지관 분기 (타공 + 지관밸브)", "n": n_lat,
          "recipe": {"01924": 1, "01786": 1}, "shape": SHAPE["branch"], "mm": 25, "set_key": "branch25",
@@ -131,7 +192,8 @@ def propose(design: Dict, site: Dict, sets_db: Optional[Dict] = None) -> Dict:
             item.update(name=known, cat="세트 정본", status="이름 정본에 있음(summary.SETS)")
             hit.append(item)
         elif found:
-            item.update(name=found[0]["name"], cat=found[0]["cat"], status="Sets 시트에 있음")
+            f0 = rank(found, site)[0]
+            item.update(name=f0["name"], cat=f0["cat"], status="Sets 시트에 있음" + (" · 조달용" if f0.get("gov") else ""))
             hit.append(item)
         else:
             # 같은 조합은 **한 세트**다 — 말단·구역밸브·시작부처럼 쓰임새가 달라도 물건은 같다.
@@ -173,5 +235,5 @@ def to_sheet_rows(result: Dict) -> List[Dict]:
     return out
 
 
-__all__ = ["SCHEMA", "PROPOSE_MARK", "SETS", "index", "signature", "used",
+__all__ = ["SCHEMA", "PROPOSE_MARK", "SETS", "GOV_STATUS", "index", "is_gov", "rank", "gov_pick", "signature", "used",
            "provisional_name", "propose", "to_sheet_rows"]

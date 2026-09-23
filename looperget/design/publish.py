@@ -2,7 +2,7 @@
 """
 looperget.design.publish — P2 원버튼: job(design.json) → 제안서 pptx(+pdf/png) + 견적 xlsx.
 
-    python -m looperget.design.publish <job.json> [--out DIR] [--pdf] [--png] [--no-xlsx]
+    python -m looperget.design.publish <job.json> [--out DIR] [--pdf] [--png] [--no-xlsx] [--reprice]
     python -m looperget.design.publish --demo 05 [--pdf] [--png]     # 승인 정답지 05로 job을 조립해 실행
 
 job = `looperget.design.job/1`
@@ -89,6 +89,9 @@ def flip_y(site: Dict, design: Dict):
         r["pts"] = _fpts(r.get("pts"))
     for x in site.get("sources") or []:
         x["pt"] = _fy(x["pt"])
+    for v in (site.get("link_intent") or {}).values():   # [V117 · K-03] 접점 도장의 좌표(지문 fp 는 y 부호 무관)
+        if isinstance(v, dict) and v.get("at"):
+            v["at"] = _fpts(v["at"])
     for l in design.get("laterals") or []:
         for k in ("p0", "p1", "dir", "tap"):
             if l.get(k):
@@ -164,6 +167,12 @@ def job_from_p3(site: Dict, design: Dict, *, frame: Dict, origin, png_path: str,
     m.setdefault("site_label", site.get("name") or "")
     m.setdefault("site_short", "관수 설계")
     m["map"] = map_contract(frame, origin, png_path, fsite)
+    if site.get("contact") and not m.get("contact"):   # [V117 · 2-C] 연락처·회신 기한 — 저장된 site → 발행 meta
+        m["contact"] = dict(site["contact"])
+    if site.get("photos"):                   # [V116] 현장 사진 — 실제 파일만 · 자리는 뒤집힌 site 좌표로
+        from . import photos as _ph
+        m["photos"], m["photo_missing"] = _ph.resolve(site["photos"], m.get("photo_dir"), fsite)
+        _ph.embed(m["photos"])               # [V117 · K-01] 축소본을 job 에 싣는다 — 서버 job 을 작업 PC 에서 발행해도 사진이 있다
     job = {"schema": SCHEMA_JOB, "site": fsite, "design": fdesign, "meta": m}
     embed_map_png(job)                       # [V109] 서버 job 을 내려받아 작업 PC 에서 돌릴 수 있게 그림을 품는다
     return job
@@ -244,29 +253,210 @@ def pptx_ready() -> tuple:
     try:
         from . import render_pptx as _rp
     except Exception as e:
-        return False, ("제안서 지면 도구가 이 환경에 없습니다(%s). 작도 도구·디자인 정본이 있는 "
-                       "**작업 PC**에서만 지면을 그립니다." % e)
+        return False, ("제안서 지면 도구가 이 환경에 없습니다(%s). 배포 묶음에 `tools/agri_overlay.py`·"
+                       "`_디자인정본/표준_pptx.py` 가 있어야 서버에서도 지면을 그립니다 — 견적서(XLSX)는 그대로 나옵니다." % e)
     if not os.path.exists(_rp.MASTER):
-        return False, ("마스터 지면 파일이 없습니다 — %s. 61 MB 라 배포 묶음에 넣지 않았습니다."
-                       % os.path.basename(_rp.MASTER))
+        # [V117 · 3단계(b)] 원본(61 MB · 작업 PC)이 없으면 경량 사본(16.5 MB · 배포 묶음)을 쓴다 — 둘 다 없을 때만 끈다.
+        return False, ("마스터 지면 파일이 없습니다 — 원본(%s)도 경량본(%s)도 없습니다. 배포 묶음에 경량본을 넣으세요"
+                       "(tools/prepare_github_upload.py)." % (os.path.basename(_rp.MASTER_FULL), os.path.basename(_rp.MASTER_SLIM)))
     return True, ""
+
+
+def master_status() -> Dict:
+    """[V117 · 3단계(b)] 지금 쓰는 마스터(원본/경량본)와 경고(경량본이 옛 원본에서 나왔으면) — 도구가 없으면 kind=없음."""
+    try:
+        from . import render_pptx as _rp
+    except Exception:
+        return {"path": None, "kind": "없음", "warn": ""}
+    return _rp.master_status()
+
+
+def reprice(job: Dict, price_db: Optional[Dict] = None, tier: str = "소비자가") -> Dict:
+    """[V114 · F08] 저장된 job 의 물량(design.bom)에 단가를 **명시적으로** 다시 붙인다 → 새 money.
+
+    물량은 바꾸지 않는다. 예전 money 가 있으면 `money_prev` 로 남겨 무엇이 바뀌었는지 볼 수 있게 한다 —
+    옛 가격이 조용히 바뀌거나, 단가가 없는데 0원으로 보이는 일을 막는다. run() 은 이 함수를 스스로 부르지 않는다."""
+    from . import quote as _quote
+    meta = job.setdefault("meta", {})
+    pdb = price_db if price_db is not None else _price_db(meta)
+    if not pdb:
+        raise ValueError("단가 DB 가 없습니다 — meta.price_db(경로 또는 dict)를 주세요")
+    d = job["design"]
+    if d.get("money"):
+        d["money_prev"] = d["money"]
+    d["money"] = _quote.price(d["bom"], pdb, tier)
+    d["money"]["priced_on"] = _date.today().isoformat()
+    return d["money"]
+
+
+def consistency(pptx_path: Optional[str], S: Dict, xr: Optional[Dict], xr2: Optional[Dict] = None,
+                customer: bool = False) -> Dict:
+    """[V114 · F06] 생성물 대조 — 지면 합계 · 견적서 합계 · 구역 면 수 · 관경별 부속 코드 · 표지 관문 표시.
+
+    기계 검사다(6축 채점 아님). 어긋나면 run() 이 관문을 **차단**으로 올린다.
+    [V115 · C03] 시공업체용 두 단가 견적(xr2)도 같은 합계 칸(소비자가 열)을 대조한다.
+    [V117 · 2단계] customer=True(고객 전달본) — 표지 관문 도장이 **없어야** 한다(내부본은 있어야 한다)."""
+    issues, checked = [], []
+    C = S.get("cost") or {}
+    grand = C.get("grand") if C.get("priced") else None
+    for nm, x in (("견적서", xr), ("시공업체용 견적서", xr2)):
+        if x is None:
+            continue
+        if grand is not None:
+            checked.append("%s 합계" % nm)
+            if x.get("total_text") is not None:        # [V115 · C02] 지면은 숫자인데 견적서 칸은 글자
+                issues.append("%s 합계 칸이 「%s」 ≠ 지면 합계 %s" % (nm, x["total_text"], format(grand, ",")))
+            elif int(x["total"]) != int(grand):
+                issues.append("%s 합계 %s ≠ 지면 합계 %s" % (nm, format(x["total"], ","), format(grand, ",")))
+        else:
+            checked.append("%s 합계(미확정)" % nm)       # [R03] 무단가면 견적서 합계 칸도 「미확정」이어야 한다
+            if x.get("total_text") != "미확정":
+                issues.append("단가 미확정인데 %s 합계 칸이 %s" % (nm, x.get("total")))
+    if pptx_path:
+        from pptx import Presentation
+        prs = Presentation(pptx_path)
+        texts = []
+        for sl in prs.slides:
+            buf = []
+            for sh in sl.shapes:
+                if sh.has_text_frame:
+                    buf.append(sh.text_frame.text)
+                if getattr(sh, "has_table", False) and sh.has_table:
+                    buf += [c.text for r in sh.table.rows for c in r.cells]
+            texts.append("\n".join(buf))
+        allt = "\n".join(texts).replace(" ", "")
+        checked.append("지면 합계")
+        want = format(grand, ",") if grand is not None else "미확정"
+        if ("합계:" + want) not in allt:                # [R10] 「₩ … 원」 겹침 제거 후 형식 = 「합계: 1,698,500 원」
+            issues.append("지면 합계 칸에 %s 이 없습니다" % want)
+        nz = len(S["zones"]) if len(S["zones"]) > 1 else 0
+        got = sum(1 for t in texts if "살수 예시 (" in t and "전체 살수" not in t)
+        checked.append("구역 면 수")
+        if got != nz:
+            issues.append("구역 살수 면 %d장 ≠ 구역 %d개" % (got, nz))
+        mm = int(S.get("main_mm") or 50)
+        if mm != 50:
+            checked.append("관경별 부속 코드")
+            for code in ("02051", "01403", "00825", "00827", "5050"):
+                if any(code in t for t in texts if "연결부 상세" in t or "연결부 요약" in t):
+                    issues.append("%d mm 설계의 연결부 면에 50 mm 부속·세트 「%s」" % (mm, code))
+        if customer:
+            checked.append("표지 관문 표시 없음(고객본)")
+            if S["gate"]["level"] != "ok" and S["gate"]["label"] in texts[0]:   # [D8] 도장 라벨만 남아도(「● 」 없이) 잡는다
+                issues.append("고객 전달본 표지에 관문 표시(%s)가 남았습니다" % S["gate"]["label"])
+        else:
+            checked.append("표지 관문 표시")
+            if S["gate"]["level"] != "ok" and S["gate"]["label"] not in texts[0]:
+                issues.append("표지에 관문 표시(%s)가 없습니다" % S["gate"]["label"])
+    return {"ok": not issues, "issues": issues, "checked": checked}
+
+
+def _customer_set(job: Dict, S: Dict, res: Dict, out_dir: str, tag: str, date: str, image_fetch=None) -> Dict:
+    """[V117 · 2단계] 고객 전달본 한 벌 — PPTX(내부본 손질) · 40(요약 사본 손질로 다시 굽기) · 41(태그만) + 기계 검사.
+
+    수량·단가·합계는 내부본과 **같은 summary** 에서 온다 — 손질은 이름·규격·비고·특약 글자만(두 벌 합계 동일)."""
+    from . import customer as CU
+    from . import segments as SG
+    meta = job.get("meta") or {}
+    q = meta.get("quote") or {}
+    prof = SG.profile(job.get("site") or {})
+    pdb = _price_db(meta)
+    names = CU.name_map(pdb, S.get("bom") or [])
+    sets = CU.set_map(S, meta.get("sets_db"))
+    R = CU.load_rules()
+    out: Dict = {"segment": prof["key"], "pptx": None, "xlsx": None, "xlsx2": None, "report": None}
+    remarks = q.get("remarks")
+    if isinstance(remarks, list):
+        remarks = "\n".join(remarks)
+    remarks = remarks or ("1. 견적 유효기간: 견적일로부터 15일 이내\n"
+                          + ("2. 영세율(부가세 0 %) 적용 — 농업경영체 등록확인서(농업회사법인은 사업자등록증) 사본 제출"
+                             if q.get("vat_zero") else "2. 부가가치세 별도"))
+    S_c, rem_c, cx = CU.xlsx_summary(S, remarks, R=R, names=names, sets=sets)
+    moved = list(cx.moved)
+    if res.get("pptx"):
+        out["pptx"] = os.path.join(out_dir, "30_제안서_%s.pptx" % tag)
+        out["report"] = CU.pptx(res["pptx"], out["pptx"], S, meta, R=R, extra_moved=moved, names=names, sets=sets)
+    head = prof.get("head")
+    label = q.get("label", S["parcel"] or S["name"])
+    buyer = {"recipient": q.get("recipient", ""), "manager": CU.contact_manager(CU.contact_of(meta), q.get("manager", "박형석")),
+             "serial": q.get("serial", "P2-%s" % tag)}
+    if res.get("xlsx"):
+        out["xlsx"] = render_xlsx.build(
+            S_c, os.path.join(out_dir, "40_견적서_%s.xlsx" % tag), date=date, label=label, buyer=buyer, remarks=rem_c,
+            svc=q.get("svc") or [], price_db=pdb, img_dir=meta.get("part_img_dir"), root=ROOT, fetch=image_fetch,
+            head_labels=head, site_name=S["name"], hide_code=not prof.get("quote_code", True))
+    if res.get("xlsx2"):
+        S_t, rem_t, _cx2 = CU.xlsx_summary(S, (q.get("remarks") and remarks) or "1. 견적 유효기간: 견적일로부터 15일 이내\n2. 부가가치세 별도",
+                                           mode="tags", R=R, names=names, sets=sets)
+        out["xlsx2"] = render_xlsx.build(
+            S_t, os.path.join(out_dir, "41_견적서_시공업체용_%s.xlsx" % tag), date=date, label=label + " (시공업체용)",
+            buyer=buyer, remarks=rem_t, svc=q.get("svc") or [], price_db=pdb, img_dir=meta.get("part_img_dir"), root=ROOT,
+            fetch=image_fetch, tier2=q["tier2"], head_labels=head, site_name=S["name"])
+    out["consistency"] = consistency(out["pptx"], S, out["xlsx"], out["xlsx2"], customer=True)
+    # 기계 검사 — 고객본 PPTX·40 전 글자에 태그·규칙 번호·품목 코드·세트 코드·금지어 0건(40 품목 코드 칸은 프로필이 보이게 둔 것만 예외)
+    codes = set(names) | {str(b.get("code")) for b in S.get("bom") or []}
+    items = (CU.pptx_items(out["pptx"]) if out["pptx"] else []) + (CU.xlsx_items(out["xlsx"]["path"], keep_code_col=prof.get("quote_code", True)) if out["xlsx"] else [])
+    out["scan"] = CU.scan_text(items, codes, R)
+    tags41 = []
+    if out["xlsx2"]:
+        tags41 = [h for h in CU.scan_text(CU.xlsx_items(out["xlsx2"]["path"]), codes, R) if h["kind"] == "태그"]
+    out["scan"] += tags41
+    tot = [x["total"] for x in (res.get("xlsx"), out["xlsx"]) if x]
+    out["totals_equal"] = len(set(tot)) <= 1
+    if not out["totals_equal"]:
+        out["consistency"]["ok"] = False
+        out["consistency"]["issues"].append("두 벌 합계 다름 %s" % tot)
+    out["needs_copy"] = [r["id"] for r in R.get("rules") or [] if r.get("needs_copy") and not r.get("value")]
+    return out
+
+
+INTERNAL_SUFFIX = "_내부검토"        # [V117 · 2단계] 내부 검토본 파일명 접미 — 고객 전달본이 기존 파일명을 쓴다
+BLOCKED_SUFFIX = "_차단"             # [V117 · 3차 검토 D1] 최종 관문 차단이면 고객본 파일명 끝에 붙여 내보내지 않는다
+
+
+def _withhold_customer(out_dir: str, tag: str) -> List[str]:
+    """[D1] 고객 전달본 이름(기존 파일명)의 파일을 `…_차단` 으로 옮긴다 — 이번 실행분이든 지난 실행이 남긴 것이든.
+    최종 관문이 차단(고객본 검사 실패 포함)이거나 내부본 대조가 어긋나면 고객본이라는 이름의 파일을 남기지 않는다."""
+    moved = []
+    for nm in ("30_제안서_%s.pptx" % tag, "30_제안서_%s.pdf" % tag, "40_견적서_%s.xlsx" % tag,
+               "41_견적서_시공업체용_%s.xlsx" % tag):
+        src = os.path.join(out_dir, nm)
+        if os.path.exists(src):
+            base, ext = os.path.splitext(src)
+            dst = base + BLOCKED_SUFFIX + ext
+            os.replace(src, dst)
+            moved.append(dst)
+    return moved
 
 
 def run(job: Dict, out_dir: Optional[str] = None, *, pdf: bool = False, png: bool = False,
         xlsx: bool = True, pptx: bool = True, verbose: bool = True,
-        job_path: Optional[str] = None, image_fetch=None) -> Dict:
-    """`image_fetch(code) -> data-URI|None` = 앱이 주는 사진 공급자(서버에는 서비스계정 파일이 없다 · V109)."""
+        job_path: Optional[str] = None, image_fetch=None, customer: bool = True) -> Dict:
+    """`image_fetch(code) -> data-URI|None` = 앱이 주는 사진 공급자(서버에는 서비스계정 파일이 없다 · V109).
+
+    [V117 · 2단계] 한 번에 두 벌 — 내부 검토본(`…_내부검토` · 지금 출력 그대로 · res["pptx"]·res["xlsx"]) +
+    고객 전달본(기존 파일명 · res["customer"] · design.customer 가 내부본을 손질). 관문 차단이면 고객본은 만들지 않는다."""
     assert job.get("schema") == SCHEMA_JOB, "job schema != %s" % SCHEMA_JOB
     meta = job.setdefault("meta", {})
     notes = localize(job, job_path)          # [V109] 서버 job 이면 경로를 이 PC 에 맞춘다(값 무변경)
+    if meta.get("photos"):
+        # 🔴 [V117 · K-01·K-10] 현장 사진은 **렌더 전에** 이 PC 에서 열리는지 확정한다 — 서버 경로면 job 에 실린 축소본을
+        #    풀고, 그것도 없으면 누락(대체 없음). 누락은 summary 관문에 들어가 표지 수 = 앱 수가 된다(예전엔 렌더에서
+        #    FileNotFoundError 로 발행 전체가 멈췄고, 누락은 렌더 뒤에 더해져 표지와 앱의 확인 항목 수가 달랐다).
+        from . import photos as _ph
+        _pw = os.path.join(out_dir or meta.get("out_dir") or os.path.join(ROOT, "_제안"), "_작업", "사진_job")
+        meta["photos"], _miss = _ph.localize(meta["photos"], _pw)
+        meta["photo_missing"] = list(dict.fromkeys(list(meta.get("photo_missing") or []) + _miss))
     if "design" not in job or not job["design"]:
         job["design"] = _design(job["site"], _price_db(meta) or None)
     S = _summary.build(job)
+    if not job["design"].get("money") and _price_db(meta):
+        notes.append("단가 DB 가 있지만 이 job 은 단가 없이 저장됐습니다 — 금액을 붙이려면 reprice(job) 를 먼저 부르세요(--reprice)")
     date = meta.get("date") or _date.today().isoformat()
     out_dir = out_dir or meta.get("out_dir") or os.path.join(ROOT, "_제안", "P2_" + _slug(S["name"]))
     os.makedirs(out_dir, exist_ok=True)
     tag = "%s_%s" % (_slug(S["name"]), date.replace("-", ""))
-    res: Dict = {"out_dir": out_dir, "summary": S, "localized": notes}
+    res: Dict = {"out_dir": out_dir, "summary": S, "localized": notes, "gate": S["gate"]}
 
     with open(os.path.join(out_dir, "_job.json"), "w", encoding="utf-8") as f:
         json.dump(job, f, ensure_ascii=False, indent=1)
@@ -279,10 +469,11 @@ def run(job: Dict, out_dir: Optional[str] = None, *, pdf: bool = False, png: boo
 
     ok_pptx, why = pptx_ready() if pptx else (False, "제안서 생성을 끄고 실행했습니다")
     res["pptx"], res["pptx_skip"], res["render_log"], res["page_check"] = None, why, [], {}
+    IS = INTERNAL_SUFFIX if customer else ""
     if ok_pptx:
         from . import render_pptx
-        pptx_path = os.path.join(out_dir, "30_제안서_%s.pptx" % tag)
-        r = render_pptx.Renderer(job, S, pptx_path, work_dir=os.path.join(out_dir, "_작업"))
+        pptx_path = os.path.join(out_dir, "30_제안서_%s%s.pptx" % (tag, IS))
+        r = render_pptx.Renderer(job, S, pptx_path, work_dir=os.path.join(out_dir, "_작업"), image_fetch=image_fetch)
         r.build()
         res["pptx"], res["pptx_skip"] = pptx_path, ""
         res["render_log"] = r.log
@@ -298,29 +489,83 @@ def run(job: Dict, out_dir: Optional[str] = None, *, pdf: bool = False, png: boo
         remarks = q.get("remarks")
         if isinstance(remarks, list):
             remarks = "\n".join(remarks)
+        _stamp = " (내부 검토용 — 발송 불가)" if S["gate"]["level"] == "blocked" else ""
+        from . import customer as _cu
+        _mgr = _cu.contact_manager(_cu.contact_of(meta), q.get("manager", "박형석"))   # [V117 · 2-C] 기존 담당자 칸
+        from . import segments as _sg
+        _head = _sg.profile(job.get("site") or {}).get("head")          # [V117 · 2-A] 관급·건설 머리글(농업 = None · 현행)
         xr = render_xlsx.build(
-            S, os.path.join(out_dir, "40_견적서_%s.xlsx" % tag), date=date,
-            label=q.get("label", S["parcel"] or S["name"]),
-            buyer={"recipient": q.get("recipient", ""), "manager": q.get("manager", "박형석"),
+            S, os.path.join(out_dir, "40_견적서_%s%s.xlsx" % (tag, IS)), date=date,
+            label=q.get("label", S["parcel"] or S["name"]) + _stamp,
+            buyer={"recipient": q.get("recipient", ""), "manager": _mgr,
                    "serial": q.get("serial", "P2-%s" % tag)},
             remarks=remarks or ("1. 견적 유효기간: 견적일로부터 15일 이내\n"
                                 + ("2. 영세율(부가세 0 %) 적용 — 농업경영체 등록확인서(농업회사법인은 사업자등록증) 사본 제출"
                                    if q.get("vat_zero") else "2. 부가가치세 별도")),
             svc=q.get("svc") or [], price_db=price_db, img_dir=meta.get("part_img_dir"), root=ROOT,
-            fetch=image_fetch)
+            fetch=image_fetch, head_labels=_head, site_name=S["name"])
         res["xlsx"] = xr
         # [V109] 시공업체용 두 단가 견적(대리점가1 | 소비자가 | 이익율) — 09-15 용산리에서 손으로 만들던 41_ 파일.
         if q.get("tier2"):
             res["xlsx2"] = render_xlsx.build(
-                S, os.path.join(out_dir, "41_견적서_시공업체용_%s.xlsx" % tag), date=date,
-                label=q.get("label", S["parcel"] or S["name"]) + " (시공업체용)",
-                buyer={"recipient": q.get("recipient", ""), "manager": q.get("manager", "박형석"),
+                S, os.path.join(out_dir, "41_견적서_시공업체용_%s%s.xlsx" % (tag, IS)), date=date,
+                label=q.get("label", S["parcel"] or S["name"]) + " (시공업체용)" + _stamp,
+                buyer={"recipient": q.get("recipient", ""), "manager": _mgr,
                        "serial": q.get("serial", "P2-%s" % tag)},
                 remarks=remarks or "1. 견적 유효기간: 견적일로부터 15일 이내\n2. 부가가치세 별도",
                 svc=q.get("svc") or [], price_db=price_db, img_dir=meta.get("part_img_dir"), root=ROOT,
-                fetch=image_fetch, tier2=q["tier2"])
+                fetch=image_fetch, tier2=q["tier2"], head_labels=_head, site_name=S["name"])
+
+    # [V114 · F06] 생성물 대조 — 어긋나면 **차단**으로 올린다(정상 완료로 표시하지 않는다).
+    res["consistency"] = consistency(res.get("pptx"), S, res.get("xlsx"), res.get("xlsx2"))
+    # [V117 · 2단계] 고객 전달본 — 내부본을 손질한 사본(삭제·이동·치환만 · customer_text.json). 차단이면 만들지 않는다.
+    res["customer"] = None
+    if customer and S["gate"]["level"] == "blocked":
+        res["customer"] = {"skip": "관문 차단 — 고객 전달본을 만들지 않았습니다(내부 검토본만)"}
+    elif customer:
+        res["customer"] = _customer_set(job, S, res, out_dir, tag, date, image_fetch)
+        if pdf and res["customer"].get("pptx"):          # PDF 는 PowerPoint 전용(작업 PC)
+            from . import render_pptx
+            res["customer"]["pdf"] = render_pptx.export_pdf(res["customer"]["pptx"])
+        cc = res["customer"]["consistency"]
+        if not cc["ok"] or res["customer"]["scan"]:
+            g = dict(res["gate"])
+            g["block"] = list(g["block"]) + ["고객본 불일치: " + x for x in cc["issues"]] + \
+                (["고객본에 내부 표기 %d건 남음(%s)" % (len(res["customer"]["scan"]),
+                                                   " · ".join(sorted({h["hit"] for h in res["customer"]["scan"]}))[:120])]
+                 if res["customer"]["scan"] else [])
+            g["level"], g["label"] = "blocked", "내부 검토용 — 결함 %d건 · 발송 불가" % len(g["block"])
+            res["gate"] = g
+    if not res["consistency"]["ok"]:
+        g = dict(S["gate"])
+        g["block"] = list(g["block"]) + ["생성물 불일치: " + x for x in res["consistency"]["issues"]]
+        g["level"], g["label"] = "blocked", "내부 검토용 — 결함 %d건 · 발송 불가" % len(g["block"])
+        res["gate"] = g
+    # [V117 · 3차 검토 D1] 최종 관문이 차단이거나 내부본 대조가 어긋나면 **고객 전달본 파일을 남기지 않는다**(`_차단` 접미 ·
+    #    앱은 내려받기 단추를 숨긴다). 앞 실행이 같은 폴더에 남긴 고객본도 함께 옮긴다.
+    if customer and (res["gate"]["level"] == "blocked" or not res["consistency"]["ok"]):
+        _held = _withhold_customer(out_dir, tag)
+        cu = res.get("customer") or {}
+        why = "관문 차단(%s) — 고객 전달본을 내보내지 않습니다(내부 검토본만)" % res["gate"]["label"]
+        if cu and not cu.get("skip"):
+            cu["withheld"] = why
+            cu["withheld_files"] = _held
+            for k in ("pptx", "pdf", "xlsx", "xlsx2"):
+                cu[k] = None
+        elif cu:
+            cu["withheld_files"] = _held
+    # [V116] 현장 사진 누락 — 다른 사진으로 채우지 않았다 · 담당자가 확인할 항목.
+    # [V117 · K-10] 관문에는 summary.build 가 **렌더 전에** 넣었다(표지·견적서·앱이 같은 수). 여기서 다시 더하지 않는다.
+    res["photo_missing"] = list(meta.get("photo_missing") or [])
+    with open(os.path.join(out_dir, "_gate.json"), "w", encoding="utf-8") as f:
+        json.dump({"gate": res["gate"], "consistency": res["consistency"],
+                   "customer": {k: v for k, v in (res.get("customer") or {}).items() if k not in ("xlsx", "xlsx2")}},
+                  f, ensure_ascii=False, indent=1, default=str)
 
     if verbose:
+        print("관문: %s" % res["gate"]["label"])
+        for x in res["gate"]["block"] + res["gate"]["conditional"]:
+            print("  · " + x)
         for n in notes:
             print("  ↪ 경로 보정: " + n)
         if res["pptx"]:
@@ -331,7 +576,8 @@ def run(job: Dict, out_dir: Optional[str] = None, *, pdf: bool = False, png: boo
             print("제안서 지면 건너뜀 — " + res["pptx_skip"])
         print("  %s · %s ㎡(%s평) · 헤드 %d · 가지관 %d열 %d m · 주배관 %d m · 커버 %.0f %% · 합계 %s원"
               % (S["name"], format(S["area_m2"], ","), format(S["area_py"], ","), S["n_heads"], S["n_lats"],
-                 S["lat_total_m"], S["main_total_m"], S["cover"] * 100, format(S["total"], ",")))
+                 S["lat_total_m"], S["main_total_m"], S["cover"] * 100,
+                 format(S["cost"]["grand"], ",") if S["cost"]["grand"] is not None else "미확정"))
         from .supply_docs import zone_line
         for row in S.get("supply", {}).get("zones", []):
             print("  " + zone_line(row))
@@ -355,6 +601,16 @@ def run(job: Dict, out_dir: Optional[str] = None, *, pdf: bool = False, png: boo
                 print("시공업체용 %s · %s 합계 %s원 / %s 합계 %s원"
                       % (os.path.basename(x2["path"]), x2["tier2"], format(x2["total2"], ","),
                          x2["tier"], format(x2["total"], ",")))
+        cu = res.get("customer") or {}
+        if cu.get("skip"):
+            print("고객 전달본 — " + cu["skip"])
+        elif cu.get("withheld"):
+            print("고객 전달본 — %s · %s" % (cu["withheld"], " · ".join(os.path.basename(x) for x in cu.get("withheld_files") or [])))
+        elif cu:
+            print("고객 전달본 %s · %s · 내부 표기 남음 %d건 · 확인 목록 +%d · 두 벌 합계 %s"
+                  % (os.path.basename(cu["pptx"] or "-"), os.path.basename((cu.get("xlsx") or {}).get("path", "-")),
+                     len(cu["scan"]), len(((cu.get("report") or {}).get("ask") or {}).get("added") or []),
+                     "같음" if cu["totals_equal"] else "다름"))
         if pdf:
             print("PDF " + res["pdf"])
         if png:
@@ -457,6 +713,8 @@ if __name__ == "__main__":
         job = DEMOS[key]()
     else:
         job = json.load(open(pos[0], encoding="utf-8"))
+    if "--reprice" in flags:
+        reprice(job)
     out = None
     if "--out" in flags:
         out = pos[-1]

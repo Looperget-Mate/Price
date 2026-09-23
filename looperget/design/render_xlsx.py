@@ -173,11 +173,14 @@ class _WB:
 def build(summary: Dict, out_path: str, *, date: str, label: str, buyer: Dict, remarks: str,
           svc: Optional[List[Dict]] = None, price_db: Optional[Dict] = None,
           img_dir: Optional[str] = None, root: Optional[str] = None,
-          fetch=None, tier2: Optional[str] = None) -> Dict:
+          fetch=None, tier2: Optional[str] = None, head_labels=None, site_name: str = "",
+          hide_code: bool = False) -> Dict:
     """→ {"path", "n_items", "n_img", "total", "total_row"}
 
     [V109] `tier2` 를 주면 **시공업체용 두 단가 양식**(엔진 profit 양식) — 왼쪽 = tier2(대리점가1 등) · 오른쪽 =
     summary tier(소비자가) · 이익율. 단가는 price_db[code][tier2] 에서 읽고 없으면 0 + `missing2`.
+    [V117 · 2단계] head_labels = (발주처, 현장명, 담당) — 관급·건설 머리글(design.segments · 수신/참조/담당자 칸 라벨) ·
+    hide_code = 품목정보 칸의 품목 코드 줄 숨김(관급 고객본). 기본값이면 예전과 같은 파일이다.
     """
     root = root or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     src = ImageSource(img_dir, price_db or {}, root, fetch=fetch)
@@ -221,6 +224,7 @@ def build(summary: Dict, out_path: str, *, date: str, label: str, buyer: Dict, r
                                   "font_size": 20, "align": "center"}))
         ws.set_column(0, 0, IMG_COL_CHARS)
         total = summary["total"] + sum(int(s["금액"]) for s in svc)
+        total_text = None
         total2 = None
         if not tier2:
             ws.set_column(6, 6, 34)
@@ -232,7 +236,16 @@ def build(summary: Dict, out_path: str, *, date: str, label: str, buyer: Dict, r
                     ws.write(ROW0 + i, 4, "미확정", f_rmk)
                     ws.write(ROW0 + i, 5, "미확정", f_rmk)
                 ws.write(ROW0 + i, 6, r["note"], f_rmk)
-            ws.write_formula(total_row, 5, "=SUM(F$%d:INDEX(F:F,ROW()-1))" % (ROW0 + 1), f_tot, total)
+            # [R03] 전 품목 단가가 없으면 합계는 **미확정**(식이 「미확정」 글자를 0 으로 더하지 않게)
+            if summary["bom"] and all(r["price"] is None for r in summary["bom"]):
+                ws.write(total_row, 5, "미확정", f_tot)
+                total_text = "미확정"
+            else:
+                ws.write_formula(total_row, 5, "=SUM(F$%d:INDEX(F:F,ROW()-1))" % (ROW0 + 1), f_tot, total)
+            # [R04] 추가 비용 줄이 있으면 「자재비 합계」가 아니다
+            if svc:
+                ws.write(total_row, 0, "합계 (자재 + %s)" % " · ".join(str(s["항목"]) for s in svc),
+                         F(bold=True, bg_color="#E6E6E6", align="center", font_size=14))
         else:
             # profit 양식: D 수량 · E 단가1(tier2) · F 금액1 · G 단가2(tier) · H 금액2 · I 이익율. 비고 열은 없다.
             f_pct = F(align="center", font_size=14, num_format="0.0%", shrink=True)
@@ -254,16 +267,35 @@ def build(summary: Dict, out_path: str, *, date: str, label: str, buyer: Dict, r
                     ws.write(ROW0 + i, 6, "미확정", f_rmk)
                     ws.write(ROW0 + i, 7, "미확정", f_rmk)
                     ws.write(ROW0 + i, 8, "미확정", f_rmk)
-            ws.write_formula(total_row, 7, "=SUM(H$%d:INDEX(H:H,ROW()-1))" % (ROW0 + 1), f_tot, total)
+            # [V115 · C03] 두 단가 양식도 같은 정책 — 전 품목 단가가 없으면 합계 칸은 0 이 아니라 **미확정**.
+            if summary["bom"] and all(r["price"] is None for r in summary["bom"]):
+                ws.write(total_row, 7, "미확정", f_tot)
+                total_text = "미확정"
+            else:
+                ws.write_formula(total_row, 7, "=SUM(H$%d:INDEX(H:H,ROW()-1))" % (ROW0 + 1), f_tot, total)
+            if svc:
+                ws.write(total_row, 0, "합계 (자재 + %s)" % " · ".join(str(s["항목"]) for s in svc),
+                         F(bold=True, bg_color="#E6E6E6", align="center", font_size=14))
         if summary.get("missing") or missing2:
-            ws.write(0, 0, "견 적 서 — %s (가격 확정 품목 소계 · 미확정 별도)" % label,
+            ws.write(0, 0, "견 적 서 — %s (%s)" % (label, "단가 미확정 — 물량만" if total_text == "미확정"
+                                                     else "가격 확정 품목 소계 · 미확정 별도"),
                      real.add_format({"font_name": "맑은 고딕", "bold": True, "font_size": 16}))
         lines = sum(max(1, -(-len(t) // 56)) for t in remarks.split("\n"))
         ws.set_row(total_row + 3, max(20 * lines + 12, 44))
+        if head_labels:          # [V117 · 2단계] 관급·건설 머리글 — 엔진 양식의 칸 자리 그대로(수신 A3 · 참조 A4/B4 · 담당자 C6)
+            f_lbl = F(bold=True, bg_color="#F0F0F0", align="center", font_size=11)
+            ws.write(2, 0, head_labels[0], f_lbl)
+            ws.write(3, 0, head_labels[1], f_lbl)
+            ws.write(3, 1, site_name or "/", F(align="left", font_size=11))
+            ws.write(5, 2, head_labels[2], f_lbl)
+        if hide_code:            # [V117 · 2단계] 관급 고객본 — 품목정보 칸 「이름 · 규격」만(코드 줄 숨김 · 사진은 코드로 그대로 찾는다)
+            f_it = F(bold=True, align="left", font_size=12, text_wrap=True)
+            for i, r in enumerate(summary["bom"]):
+                ws.write(ROW0 + i, 1, "%s\n%s" % (r["name"], r["spec"]), f_it)
     finally:
         quote_docs.xlsxwriter = saved
         real.close()
-    return {"path": out_path, "n_items": len(items), "n_img": ws.n_img, "total": total,
+    return {"path": out_path, "n_items": len(items), "n_img": ws.n_img, "total": total, "total_text": total_text,
             "total_row": total_row + 1, "img_local": src.n_local, "img_drive": src.n_drive,
             "tier": tier, "tier2": tier2, "total2": total2, "missing2": missing2}
 

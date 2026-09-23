@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Sequence
 
+from . import segments as _seg
 from . import site as _site
 
 SCHEMA = "looperget.design.intake/1"
@@ -33,6 +34,14 @@ SCHEMA = "looperget.design.intake/1"
 # 나머지는 비어도 진행하되 `[미확정]` 으로 남는다.
 QUESTIONS: List[Dict] = [
     # ── A. 접수 ──
+    # 🔵 [V117 · 2단계 · 결정 #98] 맨 위 = 대상 종류. V116 「판매 경로(일반/관급)」 질문을 대신한다 — 관급이면 site.channel=관급
+    #    (조달용 세트 우선 · V116 경로 그대로). 세 종류는 각각 따로 선다(프로필 = design.segments 한 곳). 옛 답 channel 도 읽는다.
+    {"key": "segment", "group": "접수", "req": False,
+     "ask": "대상 종류를 고르세요",
+     "choices": _seg.choices(), "default": _seg.SEGMENTS[_seg.DEFAULT]["choice"],
+     "warn_if": {_seg.SEGMENTS[k]["choice"]: "🔵 " + _seg.SEGMENTS[k]["notice"] for k in _seg.ORDER if _seg.SEGMENTS[k]["notice"]},
+     "why": "site.segment(V117) → design.segments.profile — 관급 = site.channel 관급(조달용 세트 우선) · 관급·건설 = 머리글 "
+            "「발주처 · 현장명 · 담당」·현장 사진 0장이면 확인 항목 · 농업 = 현행 그대로. 원가계산서(법정 서식)는 만들지 않는다."},
     {"key": "address", "group": "접수", "req": True,
      "ask": "설치하실 밭 **지번**을 불러 주세요 (예: 논산시 상월면 상도리 482-42).",
      "why": "mapsrc.geocode → PNU → 필지 폴리곤·위성 프레임. 읍·면을 추측해 붙이지 않는다."},
@@ -210,17 +219,31 @@ def to_site(answers: Dict, drawn: Optional[Dict] = None, name: Optional[str] = N
         site["pump"] = {"model": str(answers["pump"]).strip()}
     if d.get("main_mm"):                            # 주배관 호칭(#49) — 기본은 bom 이 50 을 쓴다
         site["main_mm"] = int(d["main_mm"])
+    # [V117 · 2단계] 대상 종류 — 옛 답(V116 「판매 경로」 channel 관급)은 관급으로 읽는다. 관급이면 조달 세트 우선(V116 경로).
+    _sg = _seg.from_answer(answers.get("segment")) or (
+        "관급" if str(answers.get("channel") or "").strip() == "관급" else _seg.DEFAULT)
+    site["segment"] = _sg
+    if _seg.SEGMENTS[_sg]["channel"] == "관급":
+        site["channel"] = "관급"
     if d.get("head_kit"):                           # [V109] 헤드 구성(design.heads.KITS) — 기본은 01998 세트
         site["head_kit"] = d["head_kit"]
     # V110: structured inputs survive site/job round trips, without inventing defaults.
     import copy
-    for key in ("chains", "supply", "row_kits", "tool_items", "p_end", "connection_compatibility"):
+    for key in ("chains", "supply", "row_kits", "tool_items", "p_end", "connection_compatibility", "link_intent", "photos", "connection_examples", "contact"):
         if key in d:
             site[key] = copy.deepcopy(d[key])
     c = check(answers, waived)
     site["intake"] = {"schema": SCHEMA, "answers": dict(answers), "check": c,
                       "waived": c["waived"], "warn": c["warn"]}
     return site
+
+
+def normalize(answers: Optional[Dict]) -> Dict:
+    """[V117 · 2단계] 화면 표시용 답 사본 — 옛 답(V116 channel 관급)만 있으면 대상 종류 보기를 「🏛️ 관급」으로 채운다."""
+    a = dict(answers or {})
+    if not str(a.get("segment") or "").strip() and str(a.get("channel") or "").strip() == "관급":
+        a["segment"] = _seg.SEGMENTS["관급"]["choice"]
+    return a
 
 
 def validate(answers: Dict, drawn: Optional[Dict] = None, name: Optional[str] = None,
@@ -248,4 +271,4 @@ def script() -> str:
 
 
 __all__ = ["SCHEMA", "QUESTIONS", "REQUIRED", "WAIVABLE", "UNITS",
-           "check", "to_site", "validate", "script"]
+           "check", "to_site", "validate", "script", "normalize"]

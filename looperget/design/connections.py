@@ -189,8 +189,10 @@ def validate_chains(chains, compatibility=()):
             ports = {key: normalize_port({**value, "code": link.get("code") or (link.get("pipe") or {}).get("code"), "port_id": key}) for key, value in raw_ports.items()}
             link["ports"] = ports
             incoming, outgoing = link.get("in_port"), link.get("out_port")
+            k0 = len(checks)                     # [V117 · K-06] 이 링크 몫의 판정(앞 이음·가지·T) — 도해가 링크별로 그린다
             if not incoming or not outgoing or incoming == outgoing or incoming not in ports or outgoing not in ports:
                 checks.append(_result(UNKNOWN, [f"{link['id']}: 입구/출구 포트 ID 또는 근거 미확정"]))
+                link["check"] = checks[-1]
                 current = {}
                 continue
             checks.append(check_ports(current, ports[incoming], compatibility))
@@ -205,6 +207,10 @@ def validate_chains(chains, compatibility=()):
                     checks.append(check_ports(ports[key], branch["port"], compatibility))
             if link.get("shape") in ("T", "tee") and len(ports) < 3:
                 checks.append(_result(UNKNOWN, [f"{link['id']}: T 가지 포트 누락"]))
+            mine = checks[k0:]
+            link["check"] = _result(MISMATCH if any(c["status"] == MISMATCH for c in mine) else
+                                    UNKNOWN if any(c["status"] == UNKNOWN for c in mine) else CONFIRMED,
+                                    [i for c in mine for i in c["issues"]])
             current = ports[outgoing]
         chain["actual_end"] = deepcopy(current)
         declared = (chain.get("end") or {}).get("port")

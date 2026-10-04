@@ -87,7 +87,7 @@ def _ports_editor(ports, key):
             result[pid] = dict(ports.get(pid) or {})
             for k, v in row.items():
                 result[pid].pop(k, None)
-                if v not in (None, ""):
+                if v not in (None, "") and not (isinstance(v, float) and v != v):   # [2026-10-04] 빈 칸 NaN 은 저장하지 않음
                     result[pid][k] = v
     return result
 
@@ -149,6 +149,18 @@ def render_connections(pins, products, site_name="현장"):
                         codes.append(current)
                     link["code"] = st.selectbox("등록 품목 (직접 입력은 빈 선택)", codes, index=codes.index(current),
                                                  format_func=lambda c: (c + " · " + catalog.get(c, {}).get("name", "")) if c else "직접 입력 임시 품목")
+                    # [2026-10-04 · 대표 승인 「설계 도입」] 확인된 카플러 사양(S1 승인 9 + 대표 확인 27)으로 빈 포트 채움
+                    from . import coupler_specs as CS
+                    _cs = CS.spec_for(current)
+                    _cs_choice = CS.NONE
+                    if _cs:
+                        st.info("✅ 확인된 카플러 사양 — " + CS.describe(_cs))
+                        _cs_choice = st.selectbox("카플러 쪽 포트 채우기 (빈 칸만 · 물 흐름 방향을 보고 고름)",
+                                                  list(CS.options(_cs, list((link.get("ports") or {"in": {}, "out": {}}).keys()))))
+                    elif current:
+                        st.caption("이 품목은 카플러 확인 사양표에 없습니다 — 포트를 직접 적거나 미확정으로 둡니다.")
+                    for _n in link.get("spec_notes") or []:
+                        st.warning(_n)
                     link["custom_name"] = st.text_input("임시 품목명 / 보충 설명", link.get("custom_name", ""))
                     link["material"] = st.text_input("임시 품목 재질", link.get("material", ""))
                     link["nominal_mm"] = st.number_input("임시 품목 호칭 mm", min_value=0.0, value=_number_or_none(link.get("nominal_mm")))
@@ -180,6 +192,11 @@ def render_connections(pins, products, site_name="현장"):
                     pipe_id = st.number_input("관 실측 내경 mm (모르면 빈칸)", min_value=0.0, value=_number_or_none((link.get("pipe") or {}).get("id_mm")))
                     roll_m = st.number_input("판매단위당 길이 m (롤·본 판매일 때)", min_value=0.0, value=_number_or_none((link.get("pipe") or {}).get("roll_m")))
                     if st.form_submit_button("부품 저장") and ports is not None and branch_ports is not None:
+                        link.pop("spec_notes", None)
+                        if _cs and _cs_choice != CS.NONE and link.get("code") == current:
+                            ports, _notes = CS.fill_ports(ports, _cs, _cs_choice)
+                            if _notes:
+                                link["spec_notes"] = _notes
                         link["ports"] = ports
                         link["temporary"] = not bool(link.get("code"))
                         if shape:

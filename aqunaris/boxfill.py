@@ -110,14 +110,22 @@ def fill_svg(code, box, qty, scale=1.3):
         op = 0.55 + 0.2 * layer
         els.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="{min(w, h) / 4:.1f}" '
                    f'fill="{color}" fill-opacity="{op:.2f}" stroke="#062557" stroke-width="0.8"/>')
-    W, Hh = bw * scale + 2 * x0 + 12, bd * scale + 2 * y0 + 40
-    note = (f"{plan['box']} 바닥 {bw}×{bd} · 한 층 {plan['per_layer']}개 × {plan['layers']}층"
-            f"{' (그림은 3층까지)' if plan['layers'] > 3 else ''} = 기록 {plan['qty']}개 · 격자 기준 최대 {plan['cap']}개 → {plan['level']}")
+    # [2026-10-04 시험 결함 수정] 설명이 그림 폭을 넘어 잘렸다 → 두 줄 + 폭에 맞춘 글자 크기.
+    # 넉넉/빠듯 판정은 그림에서 뺀다 — 불규칙 형상은 격자보다 훨씬 많이 들어가 거짓 경보가 났다(시험 17건).
+    lines = [f"{plan['box']} 바닥 {bw}×{bd} mm · 기록 {plan['qty']}개",
+             f"한 층 {plan['per_layer']}개 × {plan['layers']}층" + (" (그림은 3층까지)" if plan["layers"] > 3 else "")]
+    W = bw * scale + 2 * x0 + 12
+    em = max(sum(1.0 if ord(ch) > 0x2000 else 0.6 for ch in ln) for ln in lines)
+    fs = max(9.0, min(13.0, (W - 2 * x0) / em))
+    Hh = bd * scale + 2 * y0 + 12 + fs * 2.6
+    note = " · ".join(lines)
+    ty = bd * scale + y0 + 8 + fs * 1.1
+    text = "".join(f'<text x="{x0}" y="{ty + n * fs * 1.3:.1f}" font-size="{fs:.1f}" fill="#3A3D44">{escape(ln)}</text>'
+                   for n, ln in enumerate(lines))
     svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W:.0f} {Hh:.0f}" style="max-width:100%;height:auto" '
            f'role="img" aria-label="{escape(note)}">'
            f'<rect x="{x0}" y="{y0}" width="{bw * scale:.1f}" height="{bd * scale:.1f}" rx="6" fill="#FFF6B8" stroke="#B9A30F" stroke-width="2"/>'
-           + "".join(els) +
-           f'<text x="{x0}" y="{bd * scale + y0 + 24:.0f}" font-size="13" fill="#3A3D44">{escape(note)}</text></svg>')
+           + "".join(els) + text + "</svg>")
     return svg, {**plan, "part": pdim, "note": note}
 
 

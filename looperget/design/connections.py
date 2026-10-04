@@ -175,6 +175,8 @@ def validate_chains(chains, compatibility=()):
                 raise ValueError("링크는 객체여야 합니다")
             _unique(link.get("id"), link_ids, "link.id")
             _number(link.get("qty", 1), "수량", positive=True)
+            if link.get("segment_id") == "":       # [2026-10-04] 빈 칸 = 관 구간 없음(옛 저장분 포함)
+                link["segment_id"] = None
             if link.get("segment_id") is not None:
                 _unique(link["segment_id"], segments, "segment_id")
             if "pipe" in link:

@@ -134,12 +134,17 @@ def render_connections(pins, products, site_name="현장"):
             if st.button("마지막에 부품 추가", key=key + "_add"):
                 chain["links"].append({"id": "link-" + uuid.uuid4().hex[:10], "qty": 1,
                                        "in_port": "in", "out_port": "out", "ports": {"in": {}, "out": {}}})
+                st.session_state["p3_link_pick_" + chain["id"]] = len(chain["links"]) - 1   # [2026-10-04] 새 부품을 바로 편집
                 pins["chains"] = chains
                 _save(pins)
             links = chain.get("links") or []
             if links:
+                # [2026-10-04 실구동 결함] 저장마다 epoch 가 바뀌어 위젯 키가 새로 생기며 1번 부품으로 되돌아갔다 → 보던 부품 유지
+                _pick_key = "p3_link_pick_" + chain["id"]
                 li = st.selectbox("부품 순서", list(range(len(links))),
+                                  index=min(int(st.session_state.get(_pick_key) or 0), len(links) - 1),
                                   format_func=lambda i: f"{i+1}. {links[i].get('code') or links[i].get('custom_name') or '미입력'}", key=key + "_link")
+                st.session_state[_pick_key] = li
                 link = links[li]
                 with st.form(key + "_item_" + link["id"]):
                     catalog = {str(p.get("code", "")).zfill(5): p for p in products if p.get("code")}
@@ -186,7 +191,8 @@ def render_connections(pins, products, site_name="현장"):
                         branch_ports = _ports_editor({"mate": branch.get("port") or {}}, key + "_branch_" + link["id"])
                     except ValueError as exc:
                         st.error(str(exc)); branch_ports = None
-                    link["segment_id"] = st.text_input("지도와 같은 관 구간 ID (경로 이름)", link.get("segment_id", ""))
+                    # [2026-10-04 실구동 결함] 빈 칸을 "" 로 두면 validate_chains 가 「segment_id: 안정된 ID」로 사슬 전체를 멈춘다 → 비면 None
+                    link["segment_id"] = st.text_input("지도와 같은 관 구간 ID (경로 이름)", link.get("segment_id") or "").strip() or None
                     link["len_m"] = st.number_input("길이 있는 관 길이(m)", min_value=0.0, value=float(link.get("len_m") or 0))
                     material = st.text_input("관 재질 모델 (확인한 모델 키)", (link.get("pipe") or {}).get("material", ""))
                     pipe_id = st.number_input("관 실측 내경 mm (모르면 빈칸)", min_value=0.0, value=_number_or_none((link.get("pipe") or {}).get("id_mm")))
@@ -213,6 +219,7 @@ def render_connections(pins, products, site_name="현장"):
                 cols = st.columns(3)
                 if cols[0].button("앞으로 이동", disabled=li == 0, key=key + "_up"):
                     links[li-1], links[li] = links[li], links[li-1]
+                    st.session_state[_pick_key] = li - 1
                     pins["chains"] = chains; _save(pins)
                 if cols[1].button("부품 삭제", key=key + "_delete"):
                     links.pop(li); pins["chains"] = chains; _save(pins)

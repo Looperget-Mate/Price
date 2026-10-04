@@ -208,6 +208,14 @@ def render_connections(pins, products, site_name="현장"):
                 st.warning(str(issue))
         except ValueError as exc:
             st.error("사슬 입력 오류: " + str(exc))
+        # [2026-10-04 · 대표 A안] 설계 CAD 끼움 자리 참고 — 위 판정을 바꾸지 않는다(CAD 부속 = 추정 형상)
+        from . import cad_ports as CP
+        _cad_hints = CP.chain_hints(pins.get("chains") or [])
+        if _cad_hints:
+            with st.expander(f"🧩 CAD 참고 — 이웃 부속 끼움 후보 {len(_cad_hints)}건 (판정 아님)", expanded=False):
+                st.caption(CP.source_note() + " · 확정은 위 연결 검사와 대표 확인으로만 합니다.")
+                for _h in _cad_hints:
+                    st.caption("• " + _h)
         if any(link.get("requires_site_confirmation") for chain in pins.get("chains", []) for link in chain.get("links", [])):
             st.warning("불러온 판례의 수량·길이는 과거 현장 값입니다. 현재 현장에 맞게 수정하고 확인해 주세요. 단가는 다시 입력해야 합니다.")
             if st.button("현재 현장의 수량·길이·사용 맥락 확인", key="p3_chain_confirm_site"):

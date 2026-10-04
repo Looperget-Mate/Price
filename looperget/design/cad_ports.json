@@ -1,0 +1,2199 @@
+{
+"meta": {
+"cad_root": "my-product-cad",
+"catalog": "01_Specs/Irrigation/catalog.json",
+"catalog_date": "2026-10-04",
+"catalog_sha1": "900a50f681c7",
+"link_table": "01_Specs/제품코드_모델_연결표.json",
+"status": "추정 · 내부 참고 (실측·승인 아님)"
+},
+"parts": {
+"00189": {
+"group": "스마트카플러",
+"model_nominal": 40,
+"name": "스마트카플러 WF 4-11 DC END",
+"ports": [
+{
+"cam_size": "중",
+"id": "p0",
+"kind": "camC",
+"label": "C타입(암)",
+"nominal": 40
+}
+],
+"shape": "cap",
+"status": "추정"
+},
+"00190": {
+"group": "스마트카플러",
+"model_nominal": 40,
+"name": "C.F 변형L보 (WF4-15/넓은들)",
+"ports": [
+{
+"cam_size": "중",
+"id": "p0",
+"kind": "camC",
+"label": "C타입(암)",
+"nominal": 40
+},
+{
+"cam_size": "중",
+"id": "p1",
+"kind": "camE",
+"label": "E타입(수)",
+"nominal": 40
+}
+],
+"shape": "elbow",
+"status": "추정"
+},
+"00210": {
+"group": "조임식",
+"model_nominal": 25,
+"name": "일자소켓(조임식연결구)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "compression",
+"label": "조임식",
+"nominal": 25
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "compression",
+"label": "조임식",
+"nominal": 25
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"00211": {
+"group": "조임식",
+"model_nominal": 40,
+"name": "이경소켓(조임식연결구)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "compression",
+"label": "조임식",
+"nominal": 40
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "compression",
+"label": "조임식",
+"nominal": 25
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"00215": {
+"group": "조임식",
+"model_nominal": 25,
+"name": "티밸브바디(조임식연결구)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "compression",
+"label": "조임식",
+"nominal": 25
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "compression",
+"label": "조임식",
+"nominal": 25
+},
+{
+"cam_size": null,
+"id": "p2",
+"kind": "male",
+"label": "수나사",
+"nominal": 25
+}
+],
+"shape": "tee",
+"status": "추정"
+},
+"00216": {
+"group": "점적",
+"model_nominal": 16,
+"name": "테이프소켓(나사식)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "tape",
+"label": "점적테이프 캡",
+"nominal": 16
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "tape",
+"label": "점적테이프 캡",
+"nominal": 16
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"00217": {
+"group": "점적",
+"model_nominal": 13,
+"name": "엘디 티소켓",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 13
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 13
+},
+{
+"cam_size": null,
+"id": "p2",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 13
+}
+],
+"shape": "tee",
+"status": "추정"
+},
+"00222": {
+"group": "조임식",
+"model_nominal": 25,
+"name": "정티(조임식연결구)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "compression",
+"label": "조임식",
+"nominal": 25
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "compression",
+"label": "조임식",
+"nominal": 25
+},
+{
+"cam_size": null,
+"id": "p2",
+"kind": "compression",
+"label": "조임식",
+"nominal": 25
+}
+],
+"shape": "tee",
+"status": "추정"
+},
+"00226": {
+"group": "조임식",
+"model_nominal": 25,
+"name": "암나사싱글밸브",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "compression",
+"label": "조임식",
+"nominal": 25
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "female",
+"label": "암나사",
+"nominal": 25
+}
+],
+"shape": "valve",
+"status": "추정"
+},
+"00227": {
+"group": "조임식",
+"model_nominal": 25,
+"name": "유니온밸브",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "compression",
+"label": "조임식",
+"nominal": 25
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "compression",
+"label": "조임식",
+"nominal": 25
+}
+],
+"shape": "valve",
+"status": "추정"
+},
+"00228": {
+"group": "점적",
+"model_nominal": 13,
+"name": "엘디 와이소켓",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 13
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 13
+},
+{
+"cam_size": null,
+"id": "p2",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 13
+}
+],
+"shape": "wye",
+"status": "추정"
+},
+"00235": {
+"group": "조임식",
+"model_nominal": 25,
+"name": "엘보90도(조임식연결구)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "compression",
+"label": "조임식",
+"nominal": 25
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "compression",
+"label": "조임식",
+"nominal": 25
+}
+],
+"shape": "elbow",
+"status": "추정"
+},
+"00236": {
+"group": "조임식",
+"model_nominal": 25,
+"name": "엔드플러그(조임식연결구)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "compression",
+"label": "조임식",
+"nominal": 25
+}
+],
+"shape": "cap",
+"status": "추정"
+},
+"00246": {
+"group": "점적",
+"model_nominal": 13,
+"name": "엘디 일자소켓",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 13
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 13
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"00248": {
+"group": "점적",
+"model_nominal": 16,
+"name": "라인밸브 (양나사)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "tape",
+"label": "점적테이프 캡",
+"nominal": 16
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "tape",
+"label": "점적테이프 캡",
+"nominal": 16
+}
+],
+"shape": "valve",
+"status": "추정"
+},
+"00442": {
+"group": "조임식",
+"model_nominal": 25,
+"name": "숫나사싱글밸브",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "compression",
+"label": "조임식",
+"nominal": 25
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "male",
+"label": "수나사",
+"nominal": 25
+}
+],
+"shape": "valve",
+"status": "추정"
+},
+"00593": {
+"group": "조임식",
+"model_nominal": 25,
+"name": "숫엘보90도(조임식연결구)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "compression",
+"label": "조임식",
+"nominal": 25
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "male",
+"label": "수나사",
+"nominal": 25
+}
+],
+"shape": "elbow",
+"status": "추정"
+},
+"00598": {
+"group": "조임식",
+"model_nominal": 25,
+"name": "밸브소켓(조임식연결구)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "compression",
+"label": "조임식",
+"nominal": 25
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "male",
+"label": "수나사",
+"nominal": 25
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"00635": {
+"group": "나사식",
+"model_nominal": 25,
+"name": "부싱(나사식연결구)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "male",
+"label": "수나사",
+"nominal": 25
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "female",
+"label": "암나사",
+"nominal": 20
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"00650": {
+"group": "나사식",
+"model_nominal": 25,
+"name": "이경소켓(나사식연결구)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "female",
+"label": "암나사",
+"nominal": 25
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "female",
+"label": "암나사",
+"nominal": 20
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"00679": {
+"group": "나사식",
+"model_nominal": 20,
+"name": "암나사정티(나사식연결구)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "female",
+"label": "암나사",
+"nominal": 20
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "female",
+"label": "암나사",
+"nominal": 20
+},
+{
+"cam_size": null,
+"id": "p2",
+"kind": "female",
+"label": "암나사",
+"nominal": 20
+}
+],
+"shape": "tee",
+"status": "추정"
+},
+"00688": {
+"group": "나사식",
+"model_nominal": 40,
+"name": "장닛쁠(나사식연결구)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "male",
+"label": "수나사",
+"nominal": 40
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "male",
+"label": "수나사",
+"nominal": 40
+}
+],
+"shape": "long",
+"status": "추정"
+},
+"00691": {
+"group": "나사식",
+"model_nominal": 20,
+"name": "소켓(나사식연결구)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "female",
+"label": "암나사",
+"nominal": 20
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "female",
+"label": "암나사",
+"nominal": 20
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"00697": {
+"group": "나사식",
+"model_nominal": 20,
+"name": "단닛쁠(나사식연결구)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "male",
+"label": "수나사",
+"nominal": 20
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "male",
+"label": "수나사",
+"nominal": 20
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"00703": {
+"group": "나사식",
+"model_nominal": 20,
+"name": "암나사엘보(나사식연결구)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "female",
+"label": "암나사",
+"nominal": 20
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "female",
+"label": "암나사",
+"nominal": 20
+}
+],
+"shape": "elbow",
+"status": "추정"
+},
+"00767": {
+"group": "점적",
+"model_nominal": 20,
+"name": "1구 미늘 (숫나사)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "male",
+"label": "수나사",
+"nominal": 20
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 13
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"00768": {
+"group": "점적",
+"model_nominal": 20,
+"name": "2구 미늘 (숫나사)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 13
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 13
+},
+{
+"cam_size": null,
+"id": "p2",
+"kind": "male",
+"label": "수나사",
+"nominal": 20
+}
+],
+"shape": "tee",
+"status": "추정"
+},
+"00794": {
+"group": "송수호스",
+"model_nominal": 40,
+"name": "호스연결구(PC)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 40
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 40
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"00798": {
+"group": "송수호스",
+"model_nominal": 40,
+"name": "발소(펌프용)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 40
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "male",
+"label": "수나사",
+"nominal": 40
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"00808": {
+"group": "점적",
+"model_nominal": 13,
+"name": "엘디 엘보소켓",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 13
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 13
+}
+],
+"shape": "elbow",
+"status": "추정"
+},
+"00824": {
+"group": "스마트카플러",
+"model_nominal": 40,
+"name": "스마트카플러 WF 4-1",
+"ports": [
+{
+"cam_size": "중",
+"id": "p0",
+"kind": "camC",
+"label": "C타입(암)",
+"nominal": 40
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 40
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"00826": {
+"group": "스마트카플러",
+"model_nominal": 40,
+"name": "스마트카플러 WF 4-2",
+"ports": [
+{
+"cam_size": "중",
+"id": "p0",
+"kind": "camE",
+"label": "E타입(수)",
+"nominal": 40
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 40
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"00857": {
+"group": "스마트카플러",
+"model_nominal": 40,
+"name": "스마트카플러 WF 4-3",
+"ports": [
+{
+"cam_size": "중",
+"id": "p0",
+"kind": "camC",
+"label": "C타입(암)",
+"nominal": 40
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "compression",
+"label": "조임식",
+"nominal": 40
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"00913": {
+"group": "스마트카플러",
+"model_nominal": 40,
+"name": "스마트카플러 WF 4-8",
+"ports": [
+{
+"cam_size": "중",
+"id": "p0",
+"kind": "camC",
+"label": "C타입(암)",
+"nominal": 40
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "male",
+"label": "수나사",
+"nominal": 40
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"00924": {
+"group": "스마트카플러",
+"model_nominal": 40,
+"name": "스마트카플러 WF 4-9",
+"ports": [
+{
+"cam_size": "중",
+"id": "p0",
+"kind": "camE",
+"label": "E타입(수)",
+"nominal": 40
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "female",
+"label": "암나사",
+"nominal": 40
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"00941": {
+"group": "스마트카플러",
+"model_nominal": 40,
+"name": "스마트카플러 WF 4-4",
+"ports": [
+{
+"cam_size": "중",
+"id": "p0",
+"kind": "camE",
+"label": "E타입(수)",
+"nominal": 40
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "compression",
+"label": "조임식",
+"nominal": 40
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"00942": {
+"group": "스마트카플러",
+"model_nominal": 40,
+"name": "스마트카플러 WF 4-14 L형",
+"ports": [
+{
+"cam_size": "중",
+"id": "p0",
+"kind": "camE",
+"label": "E타입(수)",
+"nominal": 40
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "male",
+"label": "수나사",
+"nominal": 40
+}
+],
+"shape": "elbow",
+"status": "추정"
+},
+"00943": {
+"group": "스마트카플러",
+"model_nominal": 40,
+"name": "스마트카플러 CE밸브 中",
+"ports": [
+{
+"cam_size": "중",
+"id": "p0",
+"kind": "camC",
+"label": "C타입(암)",
+"nominal": 40
+},
+{
+"cam_size": "중",
+"id": "p1",
+"kind": "camE",
+"label": "E타입(수)",
+"nominal": 40
+}
+],
+"shape": "valve",
+"status": "추정"
+},
+"00946": {
+"group": "스마트카플러",
+"model_nominal": 40,
+"name": "스마트카플러 WF 4-7",
+"ports": [
+{
+"cam_size": "중",
+"id": "p0",
+"kind": "camE",
+"label": "E타입(수)",
+"nominal": 40
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "male",
+"label": "수나사",
+"nominal": 40
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"00947": {
+"group": "스마트카플러",
+"model_nominal": 40,
+"name": "스마트카플러 WF 4-12 DP END",
+"ports": [
+{
+"cam_size": "중",
+"id": "p0",
+"kind": "camE",
+"label": "E타입(수)",
+"nominal": 40
+}
+],
+"shape": "cap",
+"status": "추정"
+},
+"00964": {
+"group": "스마트카플러",
+"model_nominal": 40,
+"name": "스마트카플러 WF 3-1 E조임T밸브",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "compression",
+"label": "조임식",
+"nominal": 40
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "compression",
+"label": "조임식",
+"nominal": 40
+},
+{
+"cam_size": "중",
+"id": "p2",
+"kind": "camE",
+"label": "E타입(수)",
+"nominal": 40
+}
+],
+"shape": "tee_valve",
+"status": "추정"
+},
+"00970": {
+"group": "스마트카플러",
+"model_nominal": 40,
+"name": "스마트카플러 WF 4-10",
+"ports": [
+{
+"cam_size": "중",
+"id": "p0",
+"kind": "camC",
+"label": "C타입(암)",
+"nominal": 40
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "female",
+"label": "암나사",
+"nominal": 40
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"01201": {
+"group": "스마트카플러",
+"model_nominal": 40,
+"name": "스마트카플러 CCCT 中",
+"ports": [
+{
+"cam_size": "중",
+"id": "p0",
+"kind": "camC",
+"label": "C타입(암)",
+"nominal": 40
+},
+{
+"cam_size": "중",
+"id": "p1",
+"kind": "camC",
+"label": "C타입(암)",
+"nominal": 40
+},
+{
+"cam_size": "중",
+"id": "p2",
+"kind": "camC",
+"label": "C타입(암)",
+"nominal": 40
+}
+],
+"shape": "tee",
+"status": "추정"
+},
+"01206": {
+"group": "스마트카플러",
+"model_nominal": 40,
+"name": "스마트카플러 E호스밸브",
+"ports": [
+{
+"cam_size": "중",
+"id": "p0",
+"kind": "camE",
+"label": "E타입(수)",
+"nominal": 40
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 40
+}
+],
+"shape": "valve",
+"status": "추정"
+},
+"01781": {
+"group": "점적",
+"model_nominal": 20,
+"name": "라인밸브 숫나사",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "male",
+"label": "수나사",
+"nominal": 20
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "tape",
+"label": "점적테이프 캡",
+"nominal": 16
+}
+],
+"shape": "valve",
+"status": "추정"
+},
+"01787": {
+"group": "점적",
+"model_nominal": 20,
+"name": "3구 미늘 (숫나사)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 13
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 13
+},
+{
+"cam_size": null,
+"id": "p2",
+"kind": "male",
+"label": "수나사",
+"nominal": 20
+},
+{
+"cam_size": null,
+"id": "p3",
+"kind": "barb",
+"label": "호스미늘",
+"nominal": 13
+}
+],
+"shape": "cross",
+"status": "추정"
+},
+"01789": {
+"group": "나사식",
+"model_nominal": 25,
+"name": "이경부싱(나사식연결구)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "male",
+"label": "수나사",
+"nominal": 20
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "female",
+"label": "암나사",
+"nominal": 25
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"01841": {
+"group": "물호스",
+"model_nominal": 20,
+"name": "캡라인밸브(숫나사)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "male",
+"label": "수나사",
+"nominal": 20
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "hosecap",
+"label": "물호스 캡",
+"nominal": 16
+}
+],
+"shape": "valve",
+"status": "추정"
+},
+"01844": {
+"group": "물호스",
+"model_nominal": 16,
+"name": "캡라인밸브",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "hosecap",
+"label": "물호스 캡",
+"nominal": 16
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "tape",
+"label": "점적테이프 캡",
+"nominal": 16
+}
+],
+"shape": "valve",
+"status": "추정"
+},
+"01845": {
+"group": "물호스",
+"model_nominal": 16,
+"name": "캡엘디티(쓰리캡)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "hosecap",
+"label": "물호스 캡",
+"nominal": 16
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "hosecap",
+"label": "물호스 캡",
+"nominal": 16
+},
+{
+"cam_size": null,
+"id": "p2",
+"kind": "hosecap",
+"label": "물호스 캡",
+"nominal": 16
+}
+],
+"shape": "tee",
+"status": "추정"
+},
+"01846": {
+"group": "나사식",
+"model_nominal": 20,
+"name": "암수밸브",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "male",
+"label": "수나사",
+"nominal": 20
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "female",
+"label": "암나사",
+"nominal": 20
+}
+],
+"shape": "valve",
+"status": "추정"
+},
+"01848": {
+"group": "스마트카플러",
+"model_nominal": 40,
+"name": "스마트카플러 이경소켓",
+"ports": [
+{
+"cam_size": "중",
+"id": "p0",
+"kind": "camE",
+"label": "E타입(수)",
+"nominal": 40
+},
+{
+"cam_size": "소",
+"id": "p1",
+"kind": "camE",
+"label": "E타입(수)",
+"nominal": 25
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"01861": {
+"group": "물호스",
+"model_nominal": 16,
+"name": "투캡라인밸브",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "hosecap",
+"label": "물호스 캡",
+"nominal": 16
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "hosecap",
+"label": "물호스 캡",
+"nominal": 16
+}
+],
+"shape": "valve",
+"status": "추정"
+},
+"01867": {
+"group": "물호스",
+"model_nominal": 16,
+"name": "엘디소켓(투캡)",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "hosecap",
+"label": "물호스 캡",
+"nominal": 16
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "hosecap",
+"label": "물호스 캡",
+"nominal": 16
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"01902": {
+"group": "물호스",
+"model_nominal": 20,
+"name": "물호스 밸브소켓",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "male",
+"label": "수나사",
+"nominal": 20
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "hosecap",
+"label": "물호스 캡",
+"nominal": 16
+}
+],
+"shape": "straight",
+"status": "추정"
+},
+"01903": {
+"group": "물호스",
+"model_nominal": 16,
+"name": "물호스 엘보",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "hosecap",
+"label": "물호스 캡",
+"nominal": 16
+},
+{
+"cam_size": null,
+"id": "p1",
+"kind": "hosecap",
+"label": "물호스 캡",
+"nominal": 16
+}
+],
+"shape": "elbow",
+"status": "추정"
+},
+"01978": {
+"group": "나사식",
+"model_nominal": 20,
+"name": "엔드캡 Male Thd.",
+"ports": [
+{
+"cam_size": null,
+"id": "p0",
+"kind": "male",
+"label": "수나사",
+"nominal": 20
+}
+],
+"shape": "cap",
+"status": "추정"
+}
+},
+"sku": {
+"00189": {
+"family": "00189",
+"label": "16~50㎜",
+"nominal": 50.0
+},
+"00190": {
+"family": "00190",
+"label": "20~50㎜",
+"nominal": 50.0
+},
+"00210": {
+"family": "00210",
+"label": "40mm",
+"nominal": 40.0
+},
+"00211": {
+"family": "00211",
+"label": "30mm*25mm",
+"nominal": 30.0
+},
+"00215": {
+"family": "00215",
+"label": "25mm*25mm",
+"nominal": 25.0
+},
+"00216": {
+"family": "00216",
+"label": "16mm",
+"nominal": 16.0
+},
+"00217": {
+"family": "00217",
+"label": "13mm",
+"nominal": 13.0
+},
+"00222": {
+"family": "00222",
+"label": "40mm",
+"nominal": 40.0
+},
+"00223": {
+"family": "00222",
+"label": "25mm",
+"nominal": 25.0
+},
+"00226": {
+"family": "00226",
+"label": "25mm",
+"nominal": 25.0
+},
+"00227": {
+"family": "00227",
+"label": "40mm",
+"nominal": 40.0
+},
+"00228": {
+"family": "00228",
+"label": "13mm",
+"nominal": 13.0
+},
+"00229": {
+"family": "00226",
+"label": "30mm",
+"nominal": 30.0
+},
+"00231": {
+"family": "00210",
+"label": "30mm",
+"nominal": 30.0
+},
+"00232": {
+"family": "00227",
+"label": "30mm",
+"nominal": 30.0
+},
+"00233": {
+"family": "00210",
+"label": "25mm",
+"nominal": 25.0
+},
+"00234": {
+"family": "00210",
+"label": "50mm",
+"nominal": 50.0
+},
+"00235": {
+"family": "00235",
+"label": "25mm",
+"nominal": 25.0
+},
+"00236": {
+"family": "00236",
+"label": "25mm",
+"nominal": 25.0
+},
+"00237": {
+"family": "00215",
+"label": "40mm*40mm",
+"nominal": 40.0
+},
+"00238": {
+"family": "00226",
+"label": "40mm",
+"nominal": 40.0
+},
+"00239": {
+"family": "00215",
+"label": "30mm*30mm",
+"nominal": 30.0
+},
+"00244": {
+"family": "00222",
+"label": "30mm",
+"nominal": 30.0
+},
+"00245": {
+"family": "00235",
+"label": "40mm",
+"nominal": 40.0
+},
+"00246": {
+"family": "00246",
+"label": "13mm",
+"nominal": 13.0
+},
+"00248": {
+"family": "00248",
+"label": "16mm",
+"nominal": 16.0
+},
+"00430": {
+"family": "00227",
+"label": "20mm",
+"nominal": 20.0
+},
+"00431": {
+"family": "00227",
+"label": "25mm",
+"nominal": 25.0
+},
+"00434": {
+"family": "00227",
+"label": "50mm",
+"nominal": 50.0
+},
+"00436": {
+"family": "00226",
+"label": "20mm",
+"nominal": 20.0
+},
+"00440": {
+"family": "00226",
+"label": "50mm",
+"nominal": 50.0
+},
+"00442": {
+"family": "00442",
+"label": "20mm",
+"nominal": 20.0
+},
+"00443": {
+"family": "00442",
+"label": "25mm",
+"nominal": 25.0
+},
+"00444": {
+"family": "00442",
+"label": "30mm",
+"nominal": 30.0
+},
+"00445": {
+"family": "00442",
+"label": "40mm",
+"nominal": 40.0
+},
+"00446": {
+"family": "00442",
+"label": "50mm",
+"nominal": 50.0
+},
+"00585": {
+"family": "00210",
+"label": "20mm",
+"nominal": 20.0
+},
+"00587": {
+"family": "00235",
+"label": "20mm",
+"nominal": 20.0
+},
+"00588": {
+"family": "00235",
+"label": "30mm",
+"nominal": 30.0
+},
+"00589": {
+"family": "00235",
+"label": "50mm",
+"nominal": 50.0
+},
+"00591": {
+"family": "00222",
+"label": "20mm",
+"nominal": 20.0
+},
+"00592": {
+"family": "00222",
+"label": "50mm",
+"nominal": 50.0
+},
+"00593": {
+"family": "00593",
+"label": "25mm",
+"nominal": 25.0
+},
+"00594": {
+"family": "00593",
+"label": "30mm",
+"nominal": 30.0
+},
+"00595": {
+"family": "00593",
+"label": "40mm",
+"nominal": 40.0
+},
+"00596": {
+"family": "00593",
+"label": "50mm",
+"nominal": 50.0
+},
+"00598": {
+"family": "00598",
+"label": "20mm",
+"nominal": 20.0
+},
+"00599": {
+"family": "00598",
+"label": "25mm",
+"nominal": 25.0
+},
+"00600": {
+"family": "00598",
+"label": "30mm",
+"nominal": 30.0
+},
+"00601": {
+"family": "00598",
+"label": "40mm",
+"nominal": 40.0
+},
+"00602": {
+"family": "00598",
+"label": "50mm",
+"nominal": 50.0
+},
+"00604": {
+"family": "00236",
+"label": "20mm",
+"nominal": 20.0
+},
+"00606": {
+"family": "00236",
+"label": "30mm",
+"nominal": 30.0
+},
+"00607": {
+"family": "00236",
+"label": "40mm",
+"nominal": 40.0
+},
+"00608": {
+"family": "00236",
+"label": "50mm",
+"nominal": 50.0
+},
+"00611": {
+"family": "00211",
+"label": "30mm*20mm",
+"nominal": 30.0
+},
+"00613": {
+"family": "00211",
+"label": "40mm*25mm",
+"nominal": 40.0
+},
+"00617": {
+"family": "00211",
+"label": "50mm*25mm",
+"nominal": 50.0
+},
+"00618": {
+"family": "00211",
+"label": "50mm*30mm",
+"nominal": 50.0
+},
+"00635": {
+"family": "00635",
+"label": "25mm*20mm",
+"nominal": 25.0
+},
+"00637": {
+"family": "00635",
+"label": "30mm*20mm",
+"nominal": 30.0
+},
+"00638": {
+"family": "00635",
+"label": "30mm*25mm",
+"nominal": 30.0
+},
+"00640": {
+"family": "00635",
+"label": "40mm*20mm",
+"nominal": 40.0
+},
+"00641": {
+"family": "00635",
+"label": "40mm*25mm",
+"nominal": 40.0
+},
+"00642": {
+"family": "00635",
+"label": "40mm*30mm",
+"nominal": 40.0
+},
+"00644": {
+"family": "00635",
+"label": "50mm*20mm",
+"nominal": 50.0
+},
+"00645": {
+"family": "00635",
+"label": "50mm*25mm",
+"nominal": 50.0
+},
+"00646": {
+"family": "00635",
+"label": "50mm*30mm",
+"nominal": 50.0
+},
+"00647": {
+"family": "00635",
+"label": "50mm*40mm",
+"nominal": 50.0
+},
+"00650": {
+"family": "00650",
+"label": "25mm*20mm",
+"nominal": 25.0
+},
+"00652": {
+"family": "00650",
+"label": "30mm*20mm",
+"nominal": 30.0
+},
+"00653": {
+"family": "00650",
+"label": "30mm*25mm",
+"nominal": 30.0
+},
+"00655": {
+"family": "00650",
+"label": "40mm*20mm",
+"nominal": 40.0
+},
+"00656": {
+"family": "00650",
+"label": "40mm*25mm",
+"nominal": 40.0
+},
+"00657": {
+"family": "00650",
+"label": "40mm*30mm",
+"nominal": 40.0
+},
+"00659": {
+"family": "00650",
+"label": "50mm*20mm",
+"nominal": 50.0
+},
+"00660": {
+"family": "00650",
+"label": "50mm*25mm",
+"nominal": 50.0
+},
+"00661": {
+"family": "00650",
+"label": "50mm*30mm",
+"nominal": 50.0
+},
+"00662": {
+"family": "00650",
+"label": "50mm*40mm",
+"nominal": 50.0
+},
+"00679": {
+"family": "00679",
+"label": "20mm",
+"nominal": 20.0
+},
+"00680": {
+"family": "00679",
+"label": "25mm",
+"nominal": 25.0
+},
+"00681": {
+"family": "00679",
+"label": "30mm",
+"nominal": 30.0
+},
+"00682": {
+"family": "00679",
+"label": "40mm",
+"nominal": 40.0
+},
+"00683": {
+"family": "00679",
+"label": "50mm",
+"nominal": 50.0
+},
+"00688": {
+"family": "00688",
+"label": "40mm",
+"nominal": 40.0
+},
+"00689": {
+"family": "00688",
+"label": "50mm",
+"nominal": 50.0
+},
+"00691": {
+"family": "00691",
+"label": "20mm",
+"nominal": 20.0
+},
+"00692": {
+"family": "00691",
+"label": "25mm",
+"nominal": 25.0
+},
+"00693": {
+"family": "00691",
+"label": "30mm",
+"nominal": 30.0
+},
+"00694": {
+"family": "00691",
+"label": "40mm",
+"nominal": 40.0
+},
+"00695": {
+"family": "00691",
+"label": "50mm",
+"nominal": 50.0
+},
+"00697": {
+"family": "00697",
+"label": "20mm",
+"nominal": 20.0
+},
+"00698": {
+"family": "00697",
+"label": "25mm",
+"nominal": 25.0
+},
+"00699": {
+"family": "00697",
+"label": "30mm",
+"nominal": 30.0
+},
+"00700": {
+"family": "00697",
+"label": "40mm",
+"nominal": 40.0
+},
+"00701": {
+"family": "00697",
+"label": "50mm",
+"nominal": 50.0
+},
+"00703": {
+"family": "00703",
+"label": "20mm",
+"nominal": 20.0
+},
+"00704": {
+"family": "00703",
+"label": "25mm",
+"nominal": 25.0
+},
+"00705": {
+"family": "00703",
+"label": "30mm",
+"nominal": 30.0
+},
+"00706": {
+"family": "00703",
+"label": "40mm",
+"nominal": 40.0
+},
+"00707": {
+"family": "00703",
+"label": "50mm",
+"nominal": 50.0
+},
+"00767": {
+"family": "00767",
+"label": "25*13",
+"nominal": null
+},
+"00768": {
+"family": "00768",
+"label": "25*13",
+"nominal": null
+},
+"00794": {
+"family": "00794",
+"label": "40mm",
+"nominal": 40.0
+},
+"00795": {
+"family": "00794",
+"label": "50mm",
+"nominal": 50.0
+},
+"00798": {
+"family": "00798",
+"label": "40mm",
+"nominal": 40.0
+},
+"00799": {
+"family": "00798",
+"label": "50mm",
+"nominal": 50.0
+},
+"00802": {
+"family": "00215",
+"label": "50mm*50mm",
+"nominal": 50.0
+},
+"00803": {
+"family": "00768",
+"label": "20*13",
+"nominal": null
+},
+"00808": {
+"family": "00808",
+"label": "13mm",
+"nominal": 13.0
+},
+"00824": {
+"family": "00824",
+"label": "40mm",
+"nominal": 40.0
+},
+"00825": {
+"family": "00824",
+"label": "50mm",
+"nominal": 50.0
+},
+"00826": {
+"family": "00826",
+"label": "40mm",
+"nominal": 40.0
+},
+"00827": {
+"family": "00826",
+"label": "50mm",
+"nominal": 50.0
+},
+"00828": {
+"family": "00767",
+"label": "20*13",
+"nominal": null
+},
+"00857": {
+"family": "00857",
+"label": "50mm",
+"nominal": 50.0
+},
+"00913": {
+"family": "00913",
+"label": "40mm",
+"nominal": 40.0
+},
+"00924": {
+"family": "00924",
+"label": "40mm",
+"nominal": 40.0
+},
+"00926": {
+"family": "00913",
+"label": "50mm",
+"nominal": 50.0
+},
+"00940": {
+"family": "00857",
+"label": "40mm",
+"nominal": 40.0
+},
+"00941": {
+"family": "00941",
+"label": "40mm",
+"nominal": 40.0
+},
+"00942": {
+"family": "00942",
+"label": "40mm",
+"nominal": 40.0
+},
+"00943": {
+"family": "00943",
+"label": "호스,PE,PVC 16~50",
+"nominal": null
+},
+"00946": {
+"family": "00946",
+"label": "40mm",
+"nominal": 40.0
+},
+"00947": {
+"family": "00947",
+"label": "16~50",
+"nominal": null
+},
+"00951": {
+"family": "00946",
+"label": "50mm",
+"nominal": 50.0
+},
+"00959": {
+"family": "00942",
+"label": "50mm",
+"nominal": 50.0
+},
+"00964": {
+"family": "00964",
+"label": "40mm",
+"nominal": 40.0
+},
+"00969": {
+"family": "00941",
+"label": "50mm",
+"nominal": 50.0
+},
+"00970": {
+"family": "00970",
+"label": "50mm",
+"nominal": 50.0
+},
+"00975": {
+"family": "00924",
+"label": "50mm",
+"nominal": 50.0
+},
+"01195": {
+"family": "00857",
+"label": "30mm",
+"nominal": 30.0
+},
+"01196": {
+"family": "00857",
+"label": "25mm",
+"nominal": 25.0
+},
+"01197": {
+"family": "00941",
+"label": "30mm",
+"nominal": 30.0
+},
+"01198": {
+"family": "00941",
+"label": "25mm",
+"nominal": 25.0
+},
+"01199": {
+"family": "00970",
+"label": "40mm",
+"nominal": 40.0
+},
+"01200": {
+"family": "00964",
+"label": "50mm",
+"nominal": 50.0
+},
+"01201": {
+"family": "01201",
+"label": "16~50",
+"nominal": null
+},
+"01203": {
+"family": "00947",
+"label": "25mm",
+"nominal": 25.0
+},
+"01206": {
+"family": "01206",
+"label": "25mm",
+"nominal": 25.0
+},
+"01402": {
+"family": "01206",
+"label": "40mm",
+"nominal": 40.0
+},
+"01403": {
+"family": "01206",
+"label": "50mm",
+"nominal": 50.0
+},
+"01727": {
+"family": "00826",
+"label": "25mm 소",
+"nominal": 25.0
+},
+"01733": {
+"family": "00824",
+"label": "25mm 소",
+"nominal": 25.0
+},
+"01781": {
+"family": "01781",
+"label": "20mm*13mm",
+"nominal": 20.0
+},
+"01787": {
+"family": "01787",
+"label": "20*13",
+"nominal": null
+},
+"01788": {
+"family": "01787",
+"label": "25*13",
+"nominal": null
+},
+"01789": {
+"family": "01789",
+"label": "20mm*25mm",
+"nominal": 20.0
+},
+"01841": {
+"family": "01841",
+"label": "20mm*물호스16mm",
+"nominal": 20.0
+},
+"01844": {
+"family": "01844",
+"label": "물호스16mm*점적",
+"nominal": 16.0
+},
+"01845": {
+"family": "01845",
+"label": "물호스16mm",
+"nominal": 16.0
+},
+"01846": {
+"family": "01846",
+"label": "20mm",
+"nominal": 20.0
+},
+"01847": {
+"family": "01846",
+"label": "25mm",
+"nominal": 25.0
+},
+"01848": {
+"family": "01848",
+"label": "중*소",
+"nominal": null
+},
+"01861": {
+"family": "01861",
+"label": "물호스16mm",
+"nominal": 16.0
+},
+"01866": {
+"family": "00635",
+"label": "20mm*8mm",
+"nominal": 20.0
+},
+"01867": {
+"family": "01867",
+"label": "물호스16mm",
+"nominal": 16.0
+},
+"01902": {
+"family": "01902",
+"label": "20mm*물호스16mm",
+"nominal": 20.0
+},
+"01903": {
+"family": "01903",
+"label": "물호스16mm",
+"nominal": 16.0
+},
+"01914": {
+"family": "00215",
+"label": "20mm*20mm",
+"nominal": 20.0
+},
+"01915": {
+"family": "00593",
+"label": "20mm",
+"nominal": 20.0
+},
+"01978": {
+"family": "01978",
+"label": "20mm",
+"nominal": 20.0
+},
+"01979": {
+"family": "01978",
+"label": "25mm",
+"nominal": 25.0
+},
+"02016": {
+"family": "01846",
+"label": "40mm",
+"nominal": 40.0
+},
+"02017": {
+"family": "01846",
+"label": "50mm",
+"nominal": 50.0
+}
+}
+}

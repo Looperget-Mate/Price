@@ -45,7 +45,7 @@ try:
     _VERS = (int(getattr(_cm, "COMMON_VER", 0) or 0), int(getattr(_aqn, "AQN_VER", 0) or 0))
 except Exception:
     _VERS = (0, 0)
-if _VERS[0] < 1 or _VERS[1] < 1:
+if _VERS[0] < 1 or _VERS[1] < 2:   # [2026-10-04] AQN_VER 2 — aqunaris/boxfill
     st.error("🚨 **`common/`·`aqunaris/` 폴더가 없거나 구버전입니다** — aqunaris_app.py(AQ1)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`common/`·`aqunaris/` 폴더를 통째로** "
              "`aqunaris_app.py`와 함께 올린 뒤 재배포하세요.")
@@ -721,6 +721,31 @@ if True:   # [분리] app.py(V107) L4050-6133 「🏪 아쿠나리스」 모드 
                         except Exception as e:
                             st.error(f"기록 실패: {aq_err_str(e)}")
 
+            # [2026-10-04 · 대표 A안] 상자 채움 그림 — 기록된 수량만큼 그린다(수량은 기록이 정본 · 외형은 설계 CAD 대표형)
+            with st.expander("🧩 상자 채움 그림 — 기록 수량이 상자 바닥에 어떻게 깔리나 (참고)", expanded=False):
+                from aqunaris import boxfill as _BF
+                _last = {}
+                for _r in aq_itembox:                       # 같은 품목×상자는 뒤(나중) 기록 우선
+                    _q = pd.to_numeric(_r.get("수용수량"), errors="coerce")
+                    if pd.notna(_q) and _q > 0:
+                        _last[(_r["품목코드"], str(_r.get("상자종류", "") or ""))] = int(_q)
+                _nm = {r["품목코드"]: f"{r.get('품목명_AQ', '')} {r.get('규격_AQ', '')}".strip() for r in aq_items}
+                _keys = sorted(_last)
+                if not _keys:
+                    st.info("수용량 기록이 없습니다.")
+                else:
+                    _pick = st.selectbox("기록", _keys, key="aq_bf_pick",
+                                         format_func=lambda k: f"{k[0]} {_nm.get(k[0], '')} × {k[1]} = {_last[k]}개")
+                    _svg, _info = _BF.fill_svg(_pick[0], _pick[1], _last[_pick])
+                    if _svg:
+                        st.markdown(f'<div style="max-width:680px">{_svg}</div>', unsafe_allow_html=True)
+                        _lv = {"넉넉": st.success, "빠듯": st.info}.get(_info["level"], st.warning)
+                        _lv(f"격자로 눕혀 담으면 최대 {_info['cap']}개 · 기록 {_info['qty']}개 → **{_info['level']}** "
+                            f"(막 담으면 더 들어갈 수 있음 — 참고일 뿐, 수량은 기록값)")
+                    else:
+                        st.caption(_info)
+                    st.caption(_BF.source_note())
+            # [2026-10-04 · 대표 A안] 상자 채움 그림 끝
             # [V50] 수용량 기록 수정·삭제 — 잘못 기록된 수량·근거·상자를 고칠 수 있어야 한다
             with st.expander(f"🛠 수용량 기록 수정·삭제 (총 {len(aq_itembox)}건)", expanded=False):
                 st.caption("셀을 고치거나 행을 지운 뒤 **'기록 저장'**을 누르면 반영됩니다. 같은 품목×상자 기록이 여럿이면 **뒤(나중) 기록이 우선** 적용됩니다. "

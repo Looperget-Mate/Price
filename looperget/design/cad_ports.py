@@ -40,8 +40,26 @@ def ports_of(code):
     part = d["parts"].get(fam)
     if not part:
         return None
+    ports = part.get("ports") or []
+    if sku and (code != fam or (sku.get("nominal") and part.get("model_nominal")
+                                 and sku["nominal"] != part["model_nominal"])):   # 대표 코드가 곧 소형 규격인 계열(01206 25 mm)
+        ports = [dict(p, cam_size=_sku_cam(sku, p)) if p.get("kind") in CAM else p for p in ports]
     return {"code": code, "family": fam, "label": (sku or {}).get("label"), "nominal": (sku or {}).get("nominal"),
-            "name": part.get("name"), "ports": part.get("ports") or []}
+            "name": part.get("name"), "ports": ports}
+
+
+def _sku_cam(sku, port):
+    """[2026-10-04 시험 결함 수정] 판매 규격의 캠 크기. CAD 는 한 계열을 중형 하나로 그려 소형 규격(25 mm 소 등)도
+    「중」을 물려받았다(영상·승인표 대조에서 3건 어긋남). 라벨에 소·중이 있으면 그것, 40·50 mm 는 중(S1: 中 = 40·50),
+    표시 없는 25·30 mm 는 중형도 소형도 있어(01196 中 · 01206 小) 모름(None)."""
+    label = str(sku.get("label") or "")
+    if "소" in label and "중" not in label:
+        return "소"
+    if "중" in label and "소" not in label:
+        return "중"
+    if (sku.get("nominal") or 0) >= 40:
+        return "중"
+    return None
 
 
 def _pair(a, b, na, nb):
@@ -52,7 +70,9 @@ def _pair(a, b, na, nb):
             return CLASH, f"같은 성(둘 다 {CAM[ka]})"
         if sa and sb and sa != sb:
             return CLASH, f"캠 크기 다름({sa}·{sb}) — 이경 부속 필요"
-        return MATCH, f"C–E 짝 · 캠 {sa or '?'}"
+        if not (sa and sb):
+            return COND, "C–E 짝 · 캠 크기(중/소) 미확인"
+        return MATCH, f"C–E 짝 · 캠 {sa}"
     if ka in THREAD and kb in THREAD:
         if ka == kb:
             return CLASH, f"같은 {THREAD[ka]}나사"

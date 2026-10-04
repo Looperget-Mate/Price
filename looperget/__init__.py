@@ -13,7 +13,8 @@ app.py에서 **자립도가 높은 출력 엔진**을 기계적으로 추출해 
 📌 모듈을 추가/변경할 때는 `PKG_VER`를 올리고, app.py의 가드 기준도 함께 올린다.
 """
 
-PKG_VER = 112  # [2026-10-04 시험 후속] cad_ports 판매 규격 캠 크기(소형 25 mm 「중」 물려받기 결함) · 크기 모르면 조건부
+PKG_VER = 113  # [2026-10-04 · 대표 승인 「설계 도입」] design/coupler_specs(+coupler_specs.json · tools/coupler_spec_sync.py) 확인 카플러 36규격 → 연결 사슬 포트 채움(+ 반대쪽 나사 암수 · S1 상대 규격 통일) · editor_ui
+# PKG_VER 112  # [2026-10-04 시험 후속] cad_ports 판매 규격 캠 크기(소형 25 mm 「중」 물려받기 결함) · 크기 모르면 조건부
 # PKG_VER 111  # [2026-10-04 · 대표 A안] design/cad_ports(+cad_ports.json · tools/cad_sync.py) 설계 CAD 끼움 후보 참고 · editor_ui 🧩 접이식 표시
 # PKG_VER 110 # [V117 2단계, 2026-09-23] design/segments(대상 종류 🌾/🏛️/🏗️) · design/customer + customer_text.json(고객 전달본/내부 검토본 두 벌 · 연락처 줄 · 반경 표기) · render_pptx 경량 마스터·부속 사진 공급자 · publish 두 벌·대조
 # PKG_VER 109 # [V117, 2026-09-23] 1단계 정합·결함 — summary 접점 도장(K-03·K-08)·R5-3 고리·BOM kit(K-04)·관급 확인(K-05)·렌더 전 사진 관문(K-10) · photos 번호 유지·job 내장(K-01·K-09) · connections 링크별 판정(K-06) · render_pptx R/Ø·고정 도해 치환 · editor_ui 비우기·사진 폴더(K-02·K-11)

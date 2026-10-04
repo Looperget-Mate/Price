@@ -45,7 +45,7 @@ try:
     _VERS = (int(getattr(_cm, "COMMON_VER", 0) or 0), int(getattr(_aqn, "AQN_VER", 0) or 0))
 except Exception:
     _VERS = (0, 0)
-if _VERS[0] < 1 or _VERS[1] < 2:   # [2026-10-04] AQN_VER 2 — aqunaris/boxfill
+if _VERS[0] < 1 or _VERS[1] < 3:   # [2026-10-04] AQN_VER 3 — aqunaris/boxfill 설명 두 줄
     st.error("🚨 **`common/`·`aqunaris/` 폴더가 없거나 구버전입니다** — aqunaris_app.py(AQ1)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`common/`·`aqunaris/` 폴더를 통째로** "
              "`aqunaris_app.py`와 함께 올린 뒤 재배포하세요.")
@@ -739,9 +739,8 @@ if True:   # [분리] app.py(V107) L4050-6133 「🏪 아쿠나리스」 모드 
                     _svg, _info = _BF.fill_svg(_pick[0], _pick[1], _last[_pick])
                     if _svg:
                         st.markdown(f'<div style="max-width:680px">{_svg}</div>', unsafe_allow_html=True)
-                        _lv = {"넉넉": st.success, "빠듯": st.info}.get(_info["level"], st.warning)
-                        _lv(f"격자로 눕혀 담으면 최대 {_info['cap']}개 · 기록 {_info['qty']}개 → **{_info['level']}** "
-                            f"(막 담으면 더 들어갈 수 있음 — 참고일 뿐, 수량은 기록값)")
+                        st.caption("그림은 기록 수량을 바둑판처럼 깐 참고 모습입니다 — 실제로는 엇갈려 담겨 층수가 더 적을 수 있습니다. "
+                                   "넉넉/빠듯 판정은 하지 않습니다(불규칙한 부속에서 맞지 않음 · 2026-10-04 시험).")
                     else:
                         st.caption(_info)
                     st.caption(_BF.source_note())

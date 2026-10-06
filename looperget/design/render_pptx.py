@@ -117,14 +117,15 @@ BAD = RGBColor(0xD9, 0x2D, 0x20)                      # [V114] 급수 불가 열
 FEED = RGBColor(0x00, 0xA6, 0x51)
 FEED_MIN_IN = 0.45                                    # 급수 지점이 밭에 너무 붙어 선이 안 보이면 표시만 이만큼 띄운다(좌표는 그대로)
 # 물 공급 계통도 부속(대표 지정 · 관경별). 관경은 설계 main_mm 을 따른다 — 40·50 외에는 50 으로 그리고 기록한다.
-WD_BY_MM = {40: {"wf44": "00941", "wf410": "01199", "e_valve": "01402", "wf42": "00826"},
-            50: {"wf44": "00969", "wf410": "00970", "e_valve": "01403", "wf42": "00827"}}
+# [2026-10-07 대표 교정] ① 첫 연결부 = 일자연결 세트(WF 4-1 + 호스밴드 + WF 4-2) · ③ 매니폴드 입구 = WF 4-2 → CCCT T
+WD_BY_MM = {40: {"wf41": "00824", "e_valve": "01402", "wf42": "00826"},
+            50: {"wf41": "00825", "e_valve": "01403", "wf42": "00827"}}
 # 총 소요 내역 표 — 열 폭(사진 · 품목 · 규격 · 수량 · 단가 · 비고 = 6.05 in) · 사진 칸 때문에 행 최소 높이 0.30 · 한 단 최대 높이
 BOM_COLS = (0.46, 1.74, 0.96, 0.62, 0.70, 1.57)
 BOM_RMIN = 0.30
 BOM_PAGE_H = 4.65
 WD_COMMON = {"h20": "01920", "gauge": "01870", "ccct": "01201", "elbow": "00190", "band": "00278"}
-WD_NAMES = {"00941": "WF 4-4", "00969": "WF 4-4", "01199": "WF 4-10", "00970": "WF 4-10", "01402": "E호스밸브", "01403": "E호스밸브",
+WD_NAMES = {"00824": "WF 4-1", "00825": "WF 4-1", "00941": "WF 4-4", "00969": "WF 4-4", "01199": "WF 4-10", "00970": "WF 4-10", "01402": "E호스밸브", "01403": "E호스밸브",
             "00826": "WF 4-2", "00827": "WF 4-2", "01920": "루퍼젯 H20", "01870": "압력계", "01201": "CCCT 中",
             "00190": "변형 L보", "00278": "호스밴드"}
 
@@ -774,7 +775,7 @@ class Renderer:
 
     # ── [계통도] 물 공급 계통도 지면 — 대표 작도(sketch_pages)가 없을 때 코드로 그린다 ──
     def _water_diagram(self, prs, anchor):
-        """오른쪽 펌프(고객 보유)·여과기 → 노란 송수호스 → ① 첫 연결부(WF 4-4 + 호스밴드 + WF 4-10) → 인입관 위 ② 압력계 세트
+        """오른쪽 펌프(고객 보유)·여과기 → 노란 송수호스 → ① 첫 연결부(WF 4-1 + 호스밴드 + WF 4-2 = 일자연결 세트) → 인입관 위 ② 압력계 세트
         (루퍼젯 H20 + 압력계) → ③ 매니폴드(CCCT T + E호스밸브 = 1구역 / 변형 L보 + E호스밸브 = 2구역). 구역 1개면 밸브 1개.
         부속 코드 = 대표 지정표(WD_BY_MM · WD_COMMON · 관경은 설계 main_mm). 사진이 없으면 「사진 없음」 칸(빈칸 금지)."""
         S = self.S
@@ -786,7 +787,7 @@ class Renderer:
         zn = [str(z["zone"]) for z in (S.get("zones") or [])] or [z for z in self.zone_color] or ["1"]
         nz = len(zn)
         bom_codes = {str(b.get("code")) for b in S.get("bom") or []}
-        miss = [c for c in ("wf44", "wf410", "h20", "gauge", "e_valve") if K[c] not in bom_codes]
+        miss = [c for c in ("wf41", "wf42", "h20", "gauge", "e_valve") if K[c] not in bom_codes]
         if miss:
             self.log.append("계통도 부속 중 견적(BOM)에 없는 것: %s — 그림에는 표시(급수 계통 품목 여부 확인)"
                             % " · ".join("%s %s" % (WD_NAMES.get(K[c], c), K[c]) for c in miss))
@@ -795,7 +796,7 @@ class Renderer:
         RED = ov.DIM
         W_, H_ = DS.CHIP.FRAME_W, DS.CHIP.FRAME_H
         CH = H_ + DS.CHIP.GAP_BELOW + DS.CHIP.NAME_H
-        PITCH, PAD, GAP = 0.97, 0.14, 0.85
+        PITCH, PAD, GAP = 0.93, 0.12, 0.62
         yA = 2.0 if nz >= 2 else 2.55                                         # 구역 1개면 밸브 한 줄이라 지면 가운데 쪽으로
         ycA = yA + H_ / 2
         yB = yA + CH + 0.34
@@ -803,26 +804,25 @@ class Renderer:
         # 가로 배치 — 오른쪽(펌프)에서 왼쪽으로
         PX = DS.SLIDE_W - DS.G.MARGIN_R - 1.59
         r1 = PX - GAP
-        x1 = [r1 - PAD - W_ - PITCH * i for i in range(3)]                    # WF 4-4 · 호스밴드 · WF 4-10
+        x1 = [r1 - PAD - W_ - PITCH * i for i in range(3)]                    # WF 4-1 · 호스밴드 · WF 4-2 (일자연결 세트)
         l1 = x1[-1] - PAD
         r2 = l1 - GAP
         x2 = [r2 - PAD - W_ - PITCH * i for i in range(2)]                    # H20 · 압력계
         l2 = x2[-1] - PAD
         r3 = l2 - GAP
-        n3 = 2 if nz >= 2 else 1
-        x3 = [r3 - PAD - W_ - PITCH * i for i in range(n3)]                   # T · E호스밸브 (구역 1개면 E호스밸브만)
+        n3 = 3 if nz >= 2 else 2
+        x3 = [r3 - PAD - W_ - PITCH * i for i in range(n3)]                   # WF 4-2 · T · E호스밸브 (구역 1개면 WF 4-2 · E호스밸브)
         l3 = min(x3[-1] - PAD, r3 - 2.35)                                      # 묶음 이름표(「③ 매니폴드(구역 밸브 N)」)가 들어가는 폭
-        if n3 == 1:
-            x3[0] = (l3 + r3) / 2 - W_ / 2                                     # 밸브 1개 = 묶음 가운데
+
         # 노란 송수호스 · 인입관 — 사진 칸 뒤로 지나간다
         BAR = 0.16
         hose = lambda xa, ya, xb, yb: DS._rect(s, MSO_SHAPE.RECTANGLE, min(xa, xb), min(ya, yb), abs(xb - xa) or BAR, abs(yb - ya) or BAR,
                                                fill=ov.PIPE_MAIN)
         hose(x3[-1] + W_ / 2, ycA - BAR / 2, PX, ycA + BAR / 2)
         if nz >= 2:
-            tcx = x3[0] + W_ / 2
+            tcx = x3[1] + W_ / 2
             hose(tcx - BAR / 2, ycA, tcx + BAR / 2, ycB)                       # T 에서 아래로 — 2구역 쪽
-            hose(x3[1] + W_ / 2, ycB - BAR / 2, tcx, ycB + BAR / 2)
+            hose(x3[2] + W_ / 2, ycB - BAR / 2, tcx, ycB + BAR / 2)
         # 펌프·여과기 — 고객 보유(사진 없음 · 이름 박스)
         pump_nm = str((self.site.get("pump") or {}).get("model") or "").strip()
         pump_nm = "" if (pump_nm in ("없음", "미정", "[미확정]") or len(pump_nm) > 14) else pump_nm     # 긴 설명문은 박스에 안 넣는다
@@ -843,9 +843,9 @@ class Renderer:
             if png is None:                                     # 빈칸 금지 — 사진이 없으면 그 자리에 이유를 적는다
                 DS.text(s, x, y + H_ * 0.34, "사진 없음", size=8.5, font=DS.T.CAPTION, color=DS.C.INK500, w=W_, h=0.3, align=PP_ALIGN.CENTER)
 
-        part(x1[0], yA, K["wf44"])
+        part(x1[0], yA, K["wf41"])
         part(x1[1], yA, K["band"])
-        part(x1[2], yA, K["wf410"])
+        part(x1[2], yA, K["wf42"])
         part(x2[0], yA, K["h20"])
         part(x2[1], yA, K["gauge"])
         zc = lambda i: (self.zone_color.get(zn[i]) if self.zone_color.get(zn[i]) else (ov.PIPE_MAIN, LINE2)[min(i, 1)])
@@ -857,19 +857,20 @@ class Renderer:
             sh = DS._rect(s, MSO_SHAPE.ROUNDED_RECTANGLE, x, y, W_, 0.24, fill=col)
             DS.text(s, x, y + 0.035, nm + " 밸브", size=9, font=DS.T.HEAD, color=(DS.C.WHITE if lum < 140 else DS.C.INK),
                     w=W_, h=0.2, bold=True, align=PP_ALIGN.CENTER)
+        part(x3[0], yA, K["wf42"])                                     # 인입관 → 매니폴드 입구
         if nz >= 2:
-            part(x3[0], yA, K["ccct"], spec="01201 · T")
+            part(x3[1], yA, K["ccct"], spec="01201 · T")
+            part(x3[2], yA, K["e_valve"])
+            ztag(x3[2], yA - 0.30, 0)
+            part(x3[1], yB, K["elbow"])
+            part(x3[2], yB, K["e_valve"])
+            ztag(x3[2], yB - 0.30, 1)
+        else:
             part(x3[1], yA, K["e_valve"])
             ztag(x3[1], yA - 0.30, 0)
-            part(x3[0], yB, K["elbow"])
-            part(x3[1], yB, K["e_valve"])
-            ztag(x3[1], yB - 0.30, 1)
-        else:
-            part(x3[0], yA, K["e_valve"])
-            ztag(x3[0], yA - 0.30, 0)
         # 빨간 둥근 테두리 + 번호·이름 라벨 — ① ② ③ 묶음
         top = yA - 0.31
-        for (lx, rx, bot, nm) in ((l1, r1, yA + CH + 0.16, "① 첫 연결부"), (l2, r2, yA + CH + 0.16, "② 압력계 설치"),
+        for (lx, rx, bot, nm) in ((l1, r1, yA + CH + 0.16, "① 첫 연결부(일자연결 세트)"), (l2, r2, yA + CH + 0.16, "② 압력계 설치"),
                                   (l3, r3, (yB + CH + 0.16) if nz >= 2 else (yA + CH + 0.16), "③ 매니폴드(구역 밸브 %d)" % nz)):
             sh = DS._rect(s, MSO_SHAPE.ROUNDED_RECTANGLE, lx, top, rx - lx, bot - top, fill=None, line=RED, line_pt=2.25)
             try:

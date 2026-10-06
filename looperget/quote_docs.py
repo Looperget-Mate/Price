@@ -427,6 +427,12 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
         col_widths = [14, 25, 6, 8, 10, 13, 10]
         COL_IMG, COL_INFO, COL_UNIT, COL_QTY, COL_P1, COL_AMT, COL_RMK = range(7)
         LAST_COL = 6
+    elif form_type == "tier3":
+        # [2026-10-07] 내부 검토 세 단가 — E 단가1(매입) F 금액1 · G 단가2(중간업체) H 금액2 · I 단가3(소비자) J 금액3 · K 이익율(소비자 대비 매입)
+        NUM_COLS = 11
+        col_widths = [14, 25, 6, 8, 10, 13, 10, 13, 10, 13, 10]
+        COL_IMG, COL_INFO, COL_UNIT, COL_QTY, COL_P1, COL_AMT1, COL_P2, COL_AMT2, COL_P3, COL_AMT3, COL_PROF = range(11)
+        LAST_COL = 10
     else:
         NUM_COLS = 9
         # A=14, B=25, C=6, D=8, E=10, F=13, G=10, H=13, I=10
@@ -538,6 +544,9 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
         ws.write(8, COL_AMT1, "금액",   f_hdr)
         ws.write(8, COL_P2,   l2,      f_hdr)
         ws.write(8, COL_AMT2, "금액",   f_hdr)
+        if form_type == "tier3":
+            ws.write(8, COL_P3,   price_labels[2] if len(price_labels) > 2 else "단가3", f_hdr)
+            ws.write(8, COL_AMT3, "금액",   f_hdr)
         ws.write(8, COL_PROF, "이익율", f_hdr)
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -545,7 +554,7 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     ROW_H_ITEM = 72   # 품목 행 높이(이미지 충분히)
     data_row = 9
-    total_a1 = 0; total_a2 = 0; svc_total = 0
+    total_a1 = 0; total_a2 = 0; total_a3 = 0; svc_total = 0
     temp_files = []
 
     for item in final_data_list:
@@ -624,6 +633,14 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
             ws.write(data_row, COL_AMT1, a1,             f_num_14_shrink)
             ws.write(data_row, COL_P2,   p2,             f_num_14_shrink)
             ws.write(data_row, COL_AMT2, a2,             f_num_14_shrink)
+            if form_type == "tier3":
+                try: p3 = int(float(item.get("price_3", 0)))
+                except: p3 = 0
+                a3 = p3 * qty
+                total_a3 += a3
+                rate = ((a3 - a1) / a3 * 100) if a3 else 0
+                ws.write(data_row, COL_P3,   p3,         f_num_14_shrink)
+                ws.write(data_row, COL_AMT3, a3,         f_num_14_shrink)
             ws.write(data_row, COL_PROF, f"{rate:.1f}%", f_center_14)
 
         data_row += 1
@@ -635,7 +652,7 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
         data_row += 1
         for s in service_items:
             ws.set_row(data_row, 20)
-            amt_col = COL_AMT if form_type == "basic" else COL_AMT2
+            amt_col = COL_AMT if form_type == "basic" else (COL_AMT3 if form_type == "tier3" else COL_AMT2)
             if amt_col > 0:
                 ws.merge_range(data_row, 0, data_row, amt_col - 1, s['항목'], f_svc_val)
             else:
@@ -649,12 +666,17 @@ def create_quote_excel(final_data_list, service_items, quote_name, quote_date, f
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # 자재비 합계 — 16pt, 행 높이 30
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    final_total = (total_a1 if form_type == "basic" else total_a2) + svc_total
+    final_total = (total_a1 if form_type == "basic" else
+                   (total_a3 if form_type == "tier3" else total_a2)) + svc_total
     ws.set_row(data_row, 30)
     if form_type == "basic":
         ws.merge_range(data_row, 0, data_row, COL_P1, "자재비 합계", f_total_lbl)
         ws.write(data_row, COL_AMT, final_total, f_total_val_shrink)
         ws.write(data_row, COL_RMK, "",          f_total_emp)
+    elif form_type == "tier3":
+        ws.merge_range(data_row, 0, data_row, COL_P3, "자재비 합계", f_total_lbl)
+        ws.write(data_row, COL_AMT3, final_total, f_total_val_shrink)
+        ws.write(data_row, COL_PROF, "",           f_total_emp)
     else:
         ws.merge_range(data_row, 0, data_row, COL_P2, "자재비 합계", f_total_lbl)
         ws.write(data_row, COL_AMT2, final_total, f_total_val_shrink)

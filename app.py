@@ -243,7 +243,7 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 117:   # [2026-10-07] PKG_VER 117 — 계통도·인입관·견적 사진 열·세 단가·회색 타일
+if _LG_VER < 118:   # [2026-10-07] PKG_VER 118 — 계통도 교정(첫 연결부 일자연결 세트 · 매니폴드 입구 4-2)
     st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V117)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/`·`common/` 폴더를 통째로** "
              "`app.py`와 함께 올린 뒤 재배포하세요. 제안서 PPTX 까지 쓰려면 `tools/agri_overlay.py` · "

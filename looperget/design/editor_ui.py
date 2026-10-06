@@ -146,14 +146,22 @@ def render_connections(pins, products, site_name="현장"):
                                   format_func=lambda i: f"{i+1}. {links[i].get('code') or links[i].get('custom_name') or '미입력'}", key=key + "_link")
                 st.session_state[_pick_key] = li
                 link = links[li]
+                # [2026-10-06 · 대표 승인 개선] 품목 선택을 폼 밖으로 — 고르는 즉시 확인 사양이 떠서 「저장 두 번」이 없어진다
+                catalog = {str(p.get("code", "")).zfill(5): p for p in products if p.get("code")}
+                codes = [""] + sorted(catalog)
+                current = str(link.get("code") or "")
+                if current and current not in codes:
+                    codes.append(current)
+                _picked = st.selectbox("등록 품목 (직접 입력은 빈 선택)", codes, index=codes.index(current),
+                                       format_func=lambda c: (c + " · " + catalog.get(c, {}).get("name", "")) if c else "직접 입력 임시 품목",
+                                       key=key + "_code_" + link["id"])
+                if _picked != current:
+                    link["code"] = _picked
+                    link["temporary"] = not bool(_picked)
+                    link.pop("spec_notes", None)
+                    pins["chains"] = chains
+                    _save(pins)
                 with st.form(key + "_item_" + link["id"]):
-                    catalog = {str(p.get("code", "")).zfill(5): p for p in products if p.get("code")}
-                    codes = [""] + sorted(catalog)
-                    current = str(link.get("code") or "")
-                    if current and current not in codes:
-                        codes.append(current)
-                    link["code"] = st.selectbox("등록 품목 (직접 입력은 빈 선택)", codes, index=codes.index(current),
-                                                 format_func=lambda c: (c + " · " + catalog.get(c, {}).get("name", "")) if c else "직접 입력 임시 품목")
                     # [2026-10-04 · 대표 승인 「설계 도입」] 확인된 카플러 사양(S1 승인 9 + 대표 확인 27)으로 빈 포트 채움
                     from . import coupler_specs as CS
                     _cs = CS.spec_for(current)
@@ -227,7 +235,10 @@ def render_connections(pins, products, site_name="현장"):
                 chains.pop(idx); pins["chains"] = chains; _save(pins)
         try:
             checked = C.validate_chains(pins.get("chains") or [])
-            st.write("연결 검사: **" + checked["status"] + "** · 수리 검사: **" + checked["hydraulic_status"] + "**")
+            if not pins.get("chains"):      # [2026-10-06] 빈 목록을 「확인됨」으로 보이지 않게
+                st.write("연결 검사: **사슬 없음** — 사슬을 추가하면 검사합니다")
+            else:
+                st.write("연결 검사: **" + checked["status"] + "** · 수리 검사: **" + checked["hydraulic_status"] + "**")
             for issue in checked.get("issues", []):
                 st.warning(str(issue))
         except ValueError as exc:

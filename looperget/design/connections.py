@@ -197,7 +197,11 @@ def validate_chains(chains, compatibility=()):
                 link["check"] = checks[-1]
                 current = {}
                 continue
-            checks.append(check_ports(current, ports[incoming], compatibility))
+            # [2026-10-06 · 대표 승인 개선] 경고에 위치 — 「시작→1번(00970) 이음: …」
+            _n = len(link_ids)
+            _where = f"{'시작' if _n == 1 else str(_n - 1) + '번'}→{_n}번({link.get('code') or link.get('custom_name') or '미입력'}) 이음: "
+            _c = check_ports(current, ports[incoming], compatibility)
+            checks.append({**_c, "issues": [_where + i for i in _c["issues"]]})
             branches = link.get("branches") or {}
             for key in ports.keys() - {incoming, outgoing}:
                 branch = branches.get(key) or {}
@@ -206,7 +210,8 @@ def validate_chains(chains, compatibility=()):
                 elif not branch.get("port"):
                     checks.append(_result(UNKNOWN, [f"{link['id']}/{key}: 가지 연결/마감 상대 포트 미확정"]))
                 else:
-                    checks.append(check_ports(ports[key], branch["port"], compatibility))
+                    _c = check_ports(ports[key], branch["port"], compatibility)
+                    checks.append({**_c, "issues": [f"{_n}번 가지 {key}: " + i for i in _c["issues"]]})
             if link.get("shape") in ("T", "tee") and len(ports) < 3:
                 checks.append(_result(UNKNOWN, [f"{link['id']}: T 가지 포트 누락"]))
             mine = checks[k0:]

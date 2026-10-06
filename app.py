@@ -243,7 +243,7 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 113:   # [2026-10-04] PKG_VER 113 — design/coupler_specs 확인 카플러 포트 채움
+if _LG_VER < 115:   # [2026-10-06] PKG_VER 115 — 연결 사슬 개선(즉시 사양·이음 위치·사슬 없음)
     st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V117)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/`·`common/` 폴더를 통째로** "
              "`app.py`와 함께 올린 뒤 재배포하세요. 제안서 PPTX 까지 쓰려면 `tools/agri_overlay.py` · "

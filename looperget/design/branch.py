@@ -62,6 +62,70 @@ def find_tap(p0: Pt, dir_: Pt, routes: Sequence[Sequence[Pt]]) -> Optional[Dict]
     return {"route": i, "s": round(s, 2), "pt": (pt[0], pt[1]), "how": how}
 
 
+LEAD_MAX = 60.0          # [경계 연결] 주배관에서 이 길이 안이면 25 mm를 경계 따라 올려 잇는다(m)
+
+
+def boundary_lead(p0: Pt, poly: Sequence[Pt], routes: Sequence[Sequence[Pt]],
+                  max_m: float = LEAD_MAX) -> Optional[Dict]:
+    """주배관과 만나지 않는 열 — 가장 가까운 주배관 점에서 H25로 따서 **25 mm를 밭 경계를 따라**
+    열 시작점 p0까지 올린다(대표 지시 2026-10-06 군위 봉소리 97: 「주배관을 올리지 말고 25를 따서
+    경계 따라 올라가다가 그 열을 연결하도록 안내」). 40 mm 주배관을 그 열까지 끌어올리지 않는다.
+
+    → {"route": 주배관 index, "pt": 탭점, "pts": [탭점 … p0](경계 꼭짓점 경유), "len": m} · 없으면 None."""
+    ring = [tuple(p) for p in poly]
+    if len(ring) < 3 or not routes:
+        return None
+    if ring[0] != ring[-1]:
+        ring = ring + [ring[0]]
+    perim = G.polyline_len(ring)
+    if perim <= 0:
+        return None
+
+    def arc_pos(q: Pt) -> Tuple[float, Pt]:
+        s, pt, _ = G.nearest_on_polyline(ring, q)
+        return s, pt
+
+    def walk(s_a: float, s_b: float, forward: bool) -> List[Pt]:
+        """경계 위 s_a → s_b 사이의 꼭짓점(끝점 제외) — forward 면 꼭짓점 순서대로."""
+        acc, cum = [], [0.0]
+        for a, b in zip(ring, ring[1:]):
+            cum.append(cum[-1] + G.dist(a, b))
+        verts = list(zip(cum[:-1], ring[:-1]))       # (호 위치, 꼭짓점) — 닫는 점 제외
+        if forward:
+            span = (s_b - s_a) % perim
+            for c, v in sorted(verts, key=lambda cv: (cv[0] - s_a) % perim):
+                if 1e-6 < (c - s_a) % perim < span - 1e-6:
+                    acc.append(v)
+        else:
+            span = (s_a - s_b) % perim
+            for c, v in sorted(verts, key=lambda cv: (s_a - cv[0]) % perim):
+                if 1e-6 < (s_a - c) % perim < span - 1e-6:
+                    acc.append(v)
+        return acc
+
+    s_p, q_p = arc_pos(p0)
+    best = None
+    for i, rt in enumerate(routes):
+        if len(rt) < 2:
+            continue
+        _s, tap, _ = G.nearest_on_polyline(rt, p0)
+        s_t, q_t = arc_pos(tap)
+        for fwd in (True, False):
+            mid = walk(s_t, s_p, fwd)
+            pts = [tap]
+            if G.dist(tap, q_t) > 0.3:
+                pts.append(q_t)
+            pts += mid
+            if G.dist(pts[-1], p0) > 1e-6:
+                pts.append(p0)
+            L = G.polyline_len(pts)
+            if best is None or L < best["len"]:
+                best = {"route": i, "pt": tap, "pts": pts, "len": L}
+    if best is None or best["len"] > max_m:
+        return None
+    return best
+
+
 def branch_path(p0: Pt, p1: Pt, off: float, routes: Sequence[Sequence[Pt]], n_seg: int = 14
                 ) -> Tuple[List[Pt], float, float, float]:
     """가지관 1열의 실제 경로. 직각에서 BRANCH_DEV 이상 벗어나면 분기부를 3차 베지어로 잇는다.

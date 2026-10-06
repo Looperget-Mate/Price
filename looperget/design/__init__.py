@@ -46,6 +46,15 @@ def design(site: Dict, price_db: Optional[Dict] = None, tier: str = "소비자�
             d = r.to_dict()
             d["block"] = blk["name"]
             tap = branch.find_tap(r.p0, r.dir, route_pts)
+            lead = None
+            if tap is None:
+                # [경계 연결 2026-10-06] 주배관과 만나지 않는 열 — 25 mm를 경계 따라 올려 잇는다.
+                lead = branch.boundary_lead(r.p0, [tuple(p) for p in blk["polygon"]], route_pts)
+                if lead is not None:
+                    tap = {"route": lead["route"], "pt": lead["pt"], "how": "경계 연결"}
+                    warnings.append(f"{blk['name']} 열 a={r.a:.1f}: 주배관과 만나지 않아 가장 가까운 주배관에서 "
+                                    f"H25로 따서 25 mm 가지관을 밭 경계 따라 {lead['len']:.0f} m 올려 잇는다 "
+                                    "(주배관을 그 열까지 올리지 않는다 · 대표 지시 2026-10-06)")
             if tap is None:
                 if feeder_pts and branch.find_tap(r.p0, r.dir, feeder_pts) is not None:
                     warnings.append(f"{blk['name']} 열 a={r.a:.1f}: 인입관에만 닿는다 — "
@@ -57,6 +66,14 @@ def design(site: Dict, price_db: Optional[Dict] = None, tier: str = "소비자�
                 rt = site["routes"][main_idx[tap["route"]]]
                 d.update(tap=[round(tap["pt"][0], 1), round(tap["pt"][1], 1)], tap_how=tap["how"],
                          route=rt["name"], zone=rt["zone"])
+            if lead is not None:
+                # 연결 25 mm 는 가지관 물량·손실에 그대로 들어간다(롤 절단·임계 열 길이).
+                pts = list(lead["pts"]) + [tuple(r.p1)]
+                Lp = lead["len"] + geom.dist(r.p0, r.p1)
+                d.update(path=[list(p) for p in pts], len_m=round(Lp, 1),
+                         extra_m=round(lead["len"], 2), dev_deg=0.0, lead_m=round(lead["len"], 1))
+                laterals.append(d)
+                continue
             pts, Lp, extra, dev = branch.branch_path(r.p0, r.p1, r.off, route_pts)
             d.update(path=[list(p) for p in pts] if extra > 0 else None,
                      len_m=round(Lp, 1), extra_m=round(extra, 2), dev_deg=dev)

@@ -144,13 +144,21 @@ def _gaps(heads: Sequence[Sequence[float]]) -> Dict:
     return {"gaps": g, "gap_min": min(g) if g else None, "gap_max": max(g) if g else None}
 
 
-def _lat_path(row, route_pts) -> List[List[float]]:
+def _lat_path(row, route_pts, poly=None) -> List[List[float]]:
     """가지관 1열의 **실제 경로**. 주배관이 있고 직각에서 벗어나면 곡선으로 꺾인다(규칙 14).
 
     없으면 직선 두 점. `design()` 이 쓰는 `branch.branch_path` 를 그대로 부른다 —
     **미리보기와 설계가 다른 선을 그리면 안 된다.**
     """
     if route_pts:
+        # [경계 연결 2026-10-06] 주배관과 만나지 않는 열은 25 mm 가 경계 따라 올라간다 — ④ 와 같은 선.
+        if poly and _branch.find_tap(row.p0, row.dir, route_pts) is None:
+            try:
+                lead = _branch.boundary_lead(row.p0, poly, route_pts)
+            except Exception:
+                lead = None
+            if lead is not None:
+                return [[round(q[0], 1), round(q[1], 1)] for q in list(lead["pts"]) + [tuple(row.p1)]]
         try:
             pts, _L, extra, _dev = _branch.branch_path(row.p0, row.p1, row.off, route_pts)
             if extra > 0:
@@ -221,7 +229,7 @@ def block_preview(blocks: Sequence[Dict], flow_lpm: Optional[float] = None,
                          # 예상 살수를 눈으로 보게 — 헤드 좌표(로컬 m)
                          "head_pts": [[round(h[0], 1), round(h[1], 1)]
                                       for r in rows for h in r.heads],
-                         "row_lines": [_lat_path(r, route_pts) for r in rows]})
+                         "row_lines": [_lat_path(r, route_pts, poly) for r in rows]})
         n_rows += len(rows)
         n_heads += heads
         n_dropped += len(drops)

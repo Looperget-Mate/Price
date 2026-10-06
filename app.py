@@ -3583,7 +3583,7 @@ elif mode == "🗺️ 설계(P3)":
                           else "furrow" if _draw_role_label.startswith("🧭") else "main")
             _edit_rows = st.checkbox("↔ 가지관 위치 조정", value=True, key="p3_edit_rows")
             st.caption("가지관 가운데 **초록 ↔ 손잡이**를 잡고 옆으로 옮기세요. 놓으면 바로 반영됩니다. "
-                       "**노란 점선**은 가지관 시작→첫 헤드 거리입니다. 주배관과 교차하지 않는 열은 밭 경계 기준입니다.")
+                       "**분홍 점선**은 가지관 시작→첫 헤드 거리입니다. 주배관과 교차하지 않는 열은 밭 경계 기준입니다.")
             # 🚫 [V101] 스프링클러 빼기 — 「표시한 곳의 스프링클러를 검토에 따라 뺄 수도 있어야
             #    한다」(대표 2026-09-08). 밭 밖으로 살수가 새는 자리·길 쪽 자리를 **대표가 보고 뺀다.**
             #    🔴 빼도 **남은 배치는 그대로 둔다** — 다시 풀어 벌리면 대표가 보고 결정한 그림이 바뀐다.
@@ -3773,9 +3773,9 @@ elif mode == "🗺️ 설계(P3)":
                     for _rd in _bp.get("row_details", []):
                         _ll = _p3m.from_local_m([_rd["p0"], _rd["first"]], _org)
                         _gap_text = "첫 헤드까지 %.1f m (직선 거리)" % _rd["first_m"]
-                        _fo.PolyLine([[_q[1], _q[0]] for _q in _ll], color="#ffe36e", weight=3,
+                        _fo.PolyLine([[_q[1], _q[0]] for _q in _ll], color="#ff7ad9", weight=3,   # [2026-10-06] 분홍 — 밭 경계(노랑)와 구분(대표 지시)
                                      dash_array="3,5", tooltip=_gap_text).add_to(_fgh)
-                        _fo.CircleMarker([_ll[1][1], _ll[1][0]], radius=4, color="#ffe36e", fill=True,
+                        _fo.CircleMarker([_ll[1][1], _ll[1][0]], radius=4, color="#ff7ad9", fill=True,
                                          tooltip=_gap_text).add_to(_fgh)
                 _fgh.add_to(_M)
 

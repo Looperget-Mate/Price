@@ -621,6 +621,18 @@ def probe(query: str = "논산시 상월면 상도리 482-42", key_kind: str = "
     return out
 
 
+def _blank_tile(im) -> bool:
+    """영상 없는 자리의 안내 타일 — 거의 한 가지 회색(채도 0)으로 채워진 판. 글자만 조금 섞인다."""
+    sm = im.resize((32, 32))
+    px = list(sm.getdata())
+    grey = [p for p in px if max(p) - min(p) <= 6]
+    if len(grey) < 0.85 * len(px):
+        return False
+    from collections import Counter
+    v, n = Counter(p[0] // 4 for p in grey).most_common(1)[0]
+    return n >= 0.75 * len(px)
+
+
 def tile_mosaic(fr: Dict, url_tmpl: str = ESRI_TILES, timeout: int = 20,
                 quality: int = 88) -> bytes:
     """XYZ 타일을 **프레임 그대로** 이어 붙인 배경(JPEG bytes).
@@ -634,7 +646,7 @@ def tile_mosaic(fr: Dict, url_tmpl: str = ESRI_TILES, timeout: int = 20,
     g = tile_grid(fr)
     w, h = fr["size"]
     im = Image.new("RGB", (w, h), (24, 24, 24))
-    got = 0
+    got = blank = 0
     ctx = ssl.create_default_context()
     for X in range(g["x0"], g["x1"] + 1):
         for Y in range(g["y0"], g["y1"] + 1):
@@ -643,7 +655,10 @@ def tile_mosaic(fr: Dict, url_tmpl: str = ESRI_TILES, timeout: int = 20,
             try:
                 with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
                     body = r.read()
-                im.paste(Image.open(_io.BytesIO(body)).convert("RGB"),
+                _t = Image.open(_io.BytesIO(body)).convert("RGB")
+                if _blank_tile(_t):
+                    blank += 1               # [2026-10-07] Esri 「Map data not yet available」 회색 안내 타일
+                im.paste(_t,
                          (int(round((X - g["x0"]) * TILE_PX + g["ox"])),
                           int(round((Y - g["y0"]) * TILE_PX + g["oy"]))))
                 got += 1
@@ -651,6 +666,10 @@ def tile_mosaic(fr: Dict, url_tmpl: str = ESRI_TILES, timeout: int = 20,
                 continue                     # 한 장이 비어도 판은 나온다
     if got == 0:
         raise RuntimeError("타일 배경 실패 — %d장 중 한 장도 못 받았다" % g["n"])
+    if blank * 2 > got:
+        # 🔴 [2026-10-07 군위 봉소리 97] Esri 는 영상이 없는 배율에서 회색 안내 타일을 **정상 응답(200)** 으로 준다.
+        #    그것을 성공으로 세면 제안서 배경이 「Map data not yet available」 회색판이 된다.
+        raise RuntimeError("타일 배경 실패 — %d장 중 %d장이 「영상 없음」 안내 타일" % (got, blank))
     buf = _io.BytesIO()
     im.save(buf, "JPEG", quality=quality)
     return buf.getvalue()

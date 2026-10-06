@@ -515,6 +515,16 @@ def run(job: Dict, out_dir: Optional[str] = None, *, pdf: bool = False, png: boo
                 remarks=remarks or "1. 견적 유효기간: 견적일로부터 15일 이내\n2. 부가가치세 별도",
                 svc=q.get("svc") or [], price_db=price_db, img_dir=meta.get("part_img_dir"), root=ROOT,
                 fetch=image_fetch, tier2=q["tier2"], head_labels=_head, site_name=S["name"])
+        # [2026-10-07 대표] 내부 검토 세 단가(매입가 | 중간업체가 | 소비자가 | 이익율) — 고객 전달본으로는 만들지 않는다.
+        if q.get("tier3"):
+            res["xlsx3"] = render_xlsx.build(
+                S, os.path.join(out_dir, "40_견적서_원가세단가_%s%s.xlsx" % (tag, IS)), date=date,
+                label=q.get("label", S["parcel"] or S["name"]) + " (내부 검토 · 원가 포함 · 외부 발송 금지)",
+                buyer={"recipient": q.get("recipient", ""), "manager": _mgr,
+                       "serial": q.get("serial", "P2-%s" % tag)},
+                remarks=remarks or "내부 검토용 — 매입가 포함. 고객·중간업체에 보내지 않습니다.",
+                svc=q.get("svc") or [], price_db=price_db, img_dir=meta.get("part_img_dir"), root=ROOT,
+                fetch=image_fetch, tier3=list(q["tier3"]), head_labels=_head, site_name=S["name"])
 
     # [V114 · F06] 생성물 대조 — 어긋나면 **차단**으로 올린다(정상 완료로 표시하지 않는다).
     res["consistency"] = consistency(res.get("pptx"), S, res.get("xlsx"), res.get("xlsx2"))

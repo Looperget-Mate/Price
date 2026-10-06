@@ -174,14 +174,18 @@ def build(summary: Dict, out_path: str, *, date: str, label: str, buyer: Dict, r
           svc: Optional[List[Dict]] = None, price_db: Optional[Dict] = None,
           img_dir: Optional[str] = None, root: Optional[str] = None,
           fetch=None, tier2: Optional[str] = None, head_labels=None, site_name: str = "",
-          hide_code: bool = False) -> Dict:
+          hide_code: bool = False, tier3: Optional[List[str]] = None) -> Dict:
     """→ {"path", "n_items", "n_img", "total", "total_row"}
 
     [V109] `tier2` 를 주면 **시공업체용 두 단가 양식**(엔진 profit 양식) — 왼쪽 = tier2(대리점가1 등) · 오른쪽 =
     summary tier(소비자가) · 이익율. 단가는 price_db[code][tier2] 에서 읽고 없으면 0 + `missing2`.
     [V117 · 2단계] head_labels = (발주처, 현장명, 담당) — 관급·건설 머리글(design.segments · 수신/참조/담당자 칸 라벨) ·
     hide_code = 품목정보 칸의 품목 코드 줄 숨김(관급 고객본). 기본값이면 예전과 같은 파일이다.
+    [2026-10-07] `tier3` = [매입가 열, 중간업체가 열] → **내부 검토 세 단가 양식**(매입 · 중간업체 · 소비자 · 이익율).
+    tier2 와 함께 주지 않는다(tier3 가 우선).
     """
+    if tier3:
+        tier2 = None
     root = root or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     src = ImageSource(img_dir, price_db or {}, root, fetch=fetch)
     tier = summary.get("tier", "소비자가")
@@ -203,10 +207,17 @@ def build(summary: Dict, out_path: str, *, date: str, label: str, buyer: Dict, r
                 if p2 is None:
                     missing2.append(r["code"])
                 it["price_1"], it["price_2"] = int(p2 or 0), r["price"] or 0
+            if tier3:
+                _pp = (price_db or {}).get(r["code"], {})
+                pb, pm = _pp.get(tier3[0]), _pp.get(tier3[1])
+                if pb is None or pm is None:
+                    missing2.append(r["code"])
+                it["price_1"], it["price_2"], it["price_3"] = int(pb or 0), int(pm or 0), r["price"] or 0
             items.append(it)
         svc = svc or []
-        form = "profit" if tier2 else "basic"
-        quote_docs.create_quote_excel(items, svc, label, date, form, ([tier2, tier] if tier2 else [tier]),
+        form = "tier3" if tier3 else ("profit" if tier2 else "basic")
+        quote_docs.create_quote_excel(items, svc, label, date, form,
+                                      ([{"대리점가1": "중간업체가"}.get(tier3[0], tier3[0]), {"대리점가1": "중간업체가"}.get(tier3[1], tier3[1]), tier] if tier3 else ([tier2, tier] if tier2 else [tier])),
                                       buyer, remarks)
         ws = proxy.last
         n = len(items)
@@ -226,7 +237,35 @@ def build(summary: Dict, out_path: str, *, date: str, label: str, buyer: Dict, r
         total = summary["total"] + sum(int(s["금액"]) for s in svc)
         total_text = None
         total2 = None
-        if not tier2:
+        if tier3:
+            # 세 단가: D 수량 · E 매입 F 금액 · G 중간업체 H 금액 · I 소비자 J 금액 · K 이익율(소비자 대비 매입)
+            f_pct = F(align="center", font_size=14, num_format="0.0%", shrink=True)
+            total2 = 0
+            for i, it in enumerate(items):
+                ws.set_row(ROW0 + i, ROW_H_ITEM)
+                er = ROW0 + i + 1
+                q_ = float(it["수량"])
+                a1, a2, a3 = (round(int(it[k]) * q_) for k in ("price_1", "price_2", "price_3"))
+                total2 += a1
+                for col, a, let in ((5, a1, "E"), (7, a2, "G"), (9, a3, "I")):
+                    ws.write_formula(ROW0 + i, col, "=D%d*%s%d" % (er, let, er), f_amt, a)
+                ws.write_formula(ROW0 + i, 10, "=IF(J%d>0,(J%d-F%d)/J%d,0)" % (er, er, er, er), f_pct,
+                                 ((a3 - a1) / a3) if a3 else 0)
+                if it["코드"] in missing2:
+                    for col in (4, 5, 6, 7, 10):
+                        ws.write(ROW0 + i, col, "미확정", f_rmk)
+                if summary["bom"][i]["price"] is None:
+                    for col in (8, 9, 10):
+                        ws.write(ROW0 + i, col, "미확정", f_rmk)
+            if summary["bom"] and all(r["price"] is None for r in summary["bom"]):
+                ws.write(total_row, 9, "미확정", f_tot)
+                total_text = "미확정"
+            else:
+                ws.write_formula(total_row, 9, "=SUM(J$%d:INDEX(J:J,ROW()-1))" % (ROW0 + 1), f_tot, total)
+            if svc:
+                ws.write(total_row, 0, "합계 (자재 + %s)" % " · ".join(str(s["항목"]) for s in svc),
+                         F(bold=True, bg_color="#E6E6E6", align="center", font_size=14))
+        elif not tier2:
             ws.set_column(6, 6, 34)
             for i, r in enumerate(summary["bom"]):
                 ws.set_row(ROW0 + i, ROW_H_ITEM)
@@ -297,7 +336,7 @@ def build(summary: Dict, out_path: str, *, date: str, label: str, buyer: Dict, r
         real.close()
     return {"path": out_path, "n_items": len(items), "n_img": ws.n_img, "total": total, "total_text": total_text,
             "total_row": total_row + 1, "img_local": src.n_local, "img_drive": src.n_drive,
-            "tier": tier, "tier2": tier2, "total2": total2, "missing2": missing2}
+            "tier": tier, "tier2": tier2, "tier3": tier3, "total2": total2, "missing2": missing2}
 
 
 __all__ = ["build", "ImageSource", "autocrop", "fit_image"]

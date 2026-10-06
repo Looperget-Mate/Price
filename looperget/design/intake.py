@@ -219,6 +219,11 @@ def to_site(answers: Dict, drawn: Optional[Dict] = None, name: Optional[str] = N
         site["pump"] = {"model": str(answers["pump"]).strip()}
     if d.get("main_mm"):                            # 주배관 호칭(#49) — 기본은 bom 이 50 을 쓴다
         site["main_mm"] = int(d["main_mm"])
+        # [2026-10-07 봉소리 97] 호칭을 정했으면 재질을 비운 관(인입관·주배관)은 **같은 호칭 송수호스**로 본다 —
+        #   비워 두면 「송수호스 50」이 되어 40 mm 현장에 50 mm 롤이 따로 붙었다. 대표가 고른 재질은 그대로.
+        _hm = {40: "hose40", 50: "hose50"}.get(int(d["main_mm"]))
+        if _hm:
+            site["routes"] = [dict(r, material=r.get("material") or _hm) for r in site["routes"]]
     # [V117 · 2단계] 대상 종류 — 옛 답(V116 「판매 경로」 channel 관급)은 관급으로 읽는다. 관급이면 조달 세트 우선(V116 경로).
     _sg = _seg.from_answer(answers.get("segment")) or (
         "관급" if str(answers.get("channel") or "").strip() == "관급" else _seg.DEFAULT)

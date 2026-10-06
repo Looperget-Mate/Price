@@ -13,3 +13,5 @@ segno
 # [V81 2026-09-07] ④ 지도에서 찍기 — 타일은 브라우저가 직접 받는다(서버 502와 무관).
 folium
 streamlit-folium
+# [2026-10-06] ④ 제안서·견적서 — 견적 xlsx 대조(customer.xlsx_items)가 openpyxl 을 쓴다(서버 「No module named openpyxl」 실측)
+openpyxl

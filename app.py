@@ -243,7 +243,7 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 116:   # [2026-10-06] PKG_VER 116 — 주배관과 안 만나는 열은 25 mm 경계 연결(봉소리 97)
+if _LG_VER < 117:   # [2026-10-07] PKG_VER 117 — 계통도·인입관·견적 사진 열·세 단가·회색 타일
     st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V117)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/`·`common/` 폴더를 통째로** "
              "`app.py`와 함께 올린 뒤 재배포하세요. 제안서 PPTX 까지 쓰려면 `tools/agri_overlay.py` · "
@@ -4904,6 +4904,10 @@ elif mode == "🗺️ 설계(P3)":
                                     value=False, key="p3_q_tier2",
                                     help="[V109] 41_견적서_시공업체용_*.xlsx — 대리점가1은 Products 시트 그대로. "
                                          "09-15 용산리에서 손으로 만들던 파일입니다.")
+                _q_t3 = st.checkbox("🔒 내부 검토 세 단가 견적(매입가 | 중간업체가(대리점가1) | 소비자가 | 이익율)도 만들기",
+                                    value=True, key="p3_q_tier3",
+                                    help="[2026-10-07 대표] 내부검토용 — 매입가는 Products 「매입단가」. 고객 전달본에는 나가지 않습니다. "
+                                         "농민 직거래 건은 이것 + 농민용(소비자가) 두 벌, 중간업체가 끼면 위 시공업체용까지 세 벌.")
                 # 🚚 [V113 · 결정 #93] 배송비는 **사람이 보고 적는다**(규칙은 추후). 0 이면 견적서에 넣지 않는다.
                 _q_ship = st.number_input("🚚 배송비(원 · 수기 입력 · 0 = 견적서에 넣지 않음)", min_value=0, value=0,
                                           step=1000, key="p3_q_ship",
@@ -4949,7 +4953,7 @@ elif mode == "🗺️ 설계(P3)":
                             _all4 = ([_q for _b in (_site.get("blocks") or []) for _q in (_b.get("polygon") or [])]
                                      + [_x["pt"] for _x in (_site.get("sources") or [])]
                                      + [_q for _r in (_site.get("routes") or []) for _q in (_r.get("pts") or [])])
-                            _ff4 = _p3m.fit_frame(_all4, _o4, size=1024)
+                            _ff4 = _p3m.fit_frame(_all4, _o4, size=1024, zoom_max=18)   # [2026-10-07] 19 는 브이월드 정지영상 범위 밖 → Esri 회색판(봉소리 97)
                             _p3_keys()
                             _bg4, _src4 = _p3m.basemap_image(_ff4, prefer="auto")
                             _nm4 = "P3_" + _p3pub._slug(str(_site.get("name") or "대상지"))
@@ -4976,6 +4980,8 @@ elif mode == "🗺️ 설계(P3)":
                                                   # [V109] 두 단가 견적 · 사진 ID — 서버 견적서 사진 0 결함(09-14)
                                                   "대리점가1": int(_pr.get("price_agy1", 0) or 0) or None,
                                                   "대리점가2": int(_pr.get("price_agy2", 0) or 0) or None,
+                                                  # [2026-10-07] 내부 검토 세 단가(매입 · 중간업체 · 소비자) — 고객본에는 나가지 않는다
+                                                  "매입가": int(_pr.get("price_buy", 0) or 0) or None,
                                                   "img": (str(_pr.get("image") or "") or None)}
                             # [V109] 사진 — 세트 품목(01998 등)은 Sets 시트 「이미지파일명」의 구성 사진, 낱개는 Products image.
                             #    render_xlsx 는 서비스계정 파일(.secrets)로 Drive 를 읽는데 서버엔 그 파일이 없다 →
@@ -5007,6 +5013,7 @@ elif mode == "🗺️ 설계(P3)":
                                                 "recipient": _q_to, "manager": _q_mgr or "박형석",
                                                 "vat_zero": bool(_q_vat),
                                                 "tier2": ("대리점가1" if _q_t2 else None),
+                                                "tier3": (["매입가", "대리점가1"] if _q_t3 else None),
                                                 "svc": ([{"항목": "배송비", "금액": int(_q_ship)}]
                                                         if _q_ship else []),
                                                 "install_support": {"농가 자가 시공": False,
@@ -5019,6 +5026,7 @@ elif mode == "🗺️ 설계(P3)":
                             st.session_state.p3_pub = {
                                 "pptx": _out4.get("pptx"), "xlsx": _out4["xlsx"]["path"],
                                 "xlsx2": (_out4.get("xlsx2") or {}).get("path"),
+                                "xlsx3": (_out4.get("xlsx3") or {}).get("path"),
                                 "n_img": _out4["xlsx"]["n_img"],
                                 "log": list(_out4.get("render_log") or []),
                                 "skip": _out4.get("pptx_skip") or "",
@@ -5064,6 +5072,12 @@ elif mode == "🗺️ 설계(P3)":
                                                 file_name=os.path.basename(_pub["xlsx2"]),
                                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                                 key="p3_dl_xlsx2")
+                    if _pub.get("xlsx3") and os.path.exists(_pub["xlsx3"]):
+                        with open(_pub["xlsx3"], "rb") as _f:
+                            _d3.download_button("🔒 내부 검토 세 단가 XLSX(매입·중간·소비자)", _f.read(),
+                                                file_name=os.path.basename(_pub["xlsx3"]),
+                                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                                key="p3_dl_xlsx3")
                     # [V117 · 2단계] 고객 전달본(기존 파일명) — 아래는 내부 검토본
                     _cu4 = _pub.get("cust") or {}
                     # [V117 · 3차 검토 D1] 최종 관문 차단(고객본 검사 실패 포함)·내부본 대조 어긋남 → 고객본 단추를 숨기고 이유 한 줄

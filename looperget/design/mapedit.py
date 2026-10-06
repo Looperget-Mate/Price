@@ -230,7 +230,7 @@ def merge_routes(existing, features, origin, default_role="main"):
         zone = max([int(r.get("zone") or 0) for r in out] or [0]) + 1
         out.append({"id": "R%d" % num, "name": "R%d" % num, "role": role,
                     "zone": None if role == "feeder" else zone,
-                    "material": "hose50" if role == "feeder" else None, "d_mm": None,
+                    "material": None,   # [2026-10-07] 인입관도 빈칸 — 엔진 기본 송수호스 50 · main_mm 지정 시 같은 호칭(intake) "d_mm": None,
                     "pts": pts, "by_ceo": True, "draw_id": draw_id})
     return out
 

@@ -45,7 +45,7 @@ try:
     _VERS = (int(getattr(_cm, "COMMON_VER", 0) or 0), int(getattr(_aqn, "AQN_VER", 0) or 0))
 except Exception:
     _VERS = (0, 0)
-if _VERS[0] < 1 or _VERS[1] < 3:   # [2026-10-04] AQN_VER 3 — aqunaris/boxfill 설명 두 줄
+if _VERS[0] < 2 or _VERS[1] < 3:   # [2026-10-08] COMMON 2 — 상품 시트 나사 열 보존 ·   # [2026-10-04] AQN_VER 3 — aqunaris/boxfill 설명 두 줄
     st.error("🚨 **`common/`·`aqunaris/` 폴더가 없거나 구버전입니다** — aqunaris_app.py(AQ1)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`common/`·`aqunaris/` 폴더를 통째로** "
              "`aqunaris_app.py`와 함께 올린 뒤 재배포하세요.")

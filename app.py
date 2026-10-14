@@ -13,6 +13,8 @@ import tempfile
 import json
 import datetime
 import time
+import re
+import shutil   # [2026-10-07] ④ 품목 사진 바꾸기 — 부속 사진 폴더 복사
 import xlsxwriter 
 from PIL import Image
 from fpdf import FPDF
@@ -61,7 +63,7 @@ try:
     _CM_VER = int(getattr(_cm, "COMMON_VER", 0) or 0)
 except Exception:
     _CM_VER = 0
-if _CM_VER < 1:
+if _CM_VER < 2:   # [2026-10-08] COMMON 2 — 상품 시트 나사 열 보존
     st.error("🚨 **`common/` 폴더가 없거나 구버전입니다** — app.py(V117)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`common/` 폴더를 통째로** 올린 뒤 재배포하세요.")
     st.stop()
@@ -243,7 +245,7 @@ try:
     _LG_VER = int(getattr(_lg, "PKG_VER", 0) or 0)
 except Exception:
     _LG_VER = 0
-if _LG_VER < 119:   # [2026-10-07] PKG_VER 119 — 빈 재질 빈칸 유지(인입관 50 mm 오가산 · 봉소리 97)
+if _LG_VER < 126:   # [2026-10-08] PKG_VER 126 — ② H20↔압력계 규칙 판정(결정 #109) · 이전 125 — 분수 라인(fountain_lines) · 124 — 테프론 결정 #104 · 1구역 ③ 4-1 · 123 — 나사 규칙 결정 #103 · 연결부 끝 추적 · 122 — 연결부 묶음(junctions.json · 결정 #102) · [2026-10-07] PKG_VER 121 — 규칙 22 탭 1 m · 가까운 구역 (120 = 🔢 좌표 숫자 입력 · 🧩 칸)
     st.error("🚨 **`looperget/` 폴더가 없거나 구버전입니다** — app.py(V117)와 짝이 맞지 않습니다.\n\n"
              "GitHub `Looperget-Mate/Price`에 **`looperget/`·`common/` 폴더를 통째로** "
              "`app.py`와 함께 올린 뒤 재배포하세요. 제안서 PPTX 까지 쓰려면 `tools/agri_overlay.py` · "
@@ -3882,6 +3884,11 @@ elif mode == "🗺️ 설계(P3)":
             _moved, _move_error = _p3edit.move_rows(_pins["blocks"], _pins["routes"], _pvm,
                                                   [(_out or {}).get("last_active_drawing") or {}], _org, _rev)
             st.session_state.p3_map_drafts = _dws
+            # 🔢 [2026-10-07 봉소리 97 · 대표] 숫자로 그린 도형 — 지도 그림 대신 이번 한 번 이것으로 목록에 넣는다.
+            _num_take = st.session_state.pop("p3_num_take", None)
+            if _num_take is not None:
+                _dws = _num_take
+                st.session_state.p3_map_drafts = _dws
             # 🚫 [V101] 스프링클러 빼기·되살리기. 손잡이와 **같은 통로**(draw:edited)로 오고
             #    표식의 `kind` 로 갈린다. 지난 클릭은 `revision` 이 달라 다시 적용되지 않는다.
             _dropped, _drop_error = _p3edit.toggle_heads(
@@ -3929,11 +3936,57 @@ elif mode == "🗺️ 설계(P3)":
                        "🟢 초록 점(이어짐) · 🔴 빨간 점 + 거리(끊김)로 표시됩니다."
                        % (len(_points), len(_polys), len(_lines),
                           (" · 🧭고랑 선 %d" % len(_furrows)) if _furrows else ""))
+            # 🔢 [2026-10-07 봉소리 97 · 대표] 「사람이 화면에 따라 넣어 **같은 값**이 나오게」 — 클릭은 0.01 m 를 못 맞춘다.
+            #    숫자 도형은 지도 그림과 같은 모양으로 만들어 아래 「목록에 넣기」와 **같은 길**을 탄다(mapedit.coord_features).
+            with st.expander("🔢 좌표를 숫자로 그리기 · 고치기 (m · 지도 기준점에서 동쪽 x · 북쪽 y)"):
+                st.caption("줄마다 「**종류 이름: x,y x,y …**」 — 종류 = **밭 · 급수원 · 주배관 · 인입관**. "
+                           "점은 「x,y」(쉼표 뒤 띄어쓰기 없이), 점과 점 사이는 띄어쓰기. **적은 순서대로** 목록에 들어갑니다 "
+                           "(주배관 구역 = 1·2… · 첫 급수원 = 물탱크 · 밴드 4). 기준점은 위 「📍 다른 곳으로 옮기기」의 "
+                           "**좌표 붙여넣기**로 먼저 맞춥니다 — 기준점이 다르면 같은 숫자도 다른 땅입니다.  \n"
+                           "**지금 목록**이 이 형식으로 미리 채워져 있습니다 — 적어 둔 값과 같은지 대조할 때도 씁니다.")
+                _ct_now = _p3edit.coord_text(_pins)
+                _ct = st.text_area("도형 좌표", value=_ct_now, height=180,
+                                   key="p3_num_text_%s" % _p3edit.revision(_pins["blocks"], [_pins["routes"], _pins["sources"]])[:8],
+                                   placeholder="밭 A: -53.7,-35.97 -53.7,-21.15 …\n급수원 물탱크: 51.66,-29.34\n"
+                                               "주배관 R1: 44.48,-24.03 -0.75,-28.78\n인입관 R3: 51.66,-29.34 44.48,-24.03")
+                _n1, _n2 = st.columns(2)
+                if _n1.button("🔢 이 숫자로 목록 다시 만들기 (밭·급수원·관)", key="p3_num_apply",
+                              help="지금 목록을 비우고 적은 도형으로 다시 넣습니다. 고랑 방향·간격은 아래 표에서, "
+                                   "헤드 빼기·더하기는 고랑을 정한 **다음에** 넣습니다(고랑·간격을 바꾸면 뺀 자리가 풀립니다)."):
+                    try:
+                        _sh, _hd = _p3edit.parse_coord_text(_ct)
+                        if not _sh:
+                            raise ValueError("밭·급수원·관 줄이 없습니다")
+                        st.session_state.p3_pins = _pins = dict(_pins, sources=[], routes=[], blocks=[])
+                        st.session_state.p3_num_take = _p3edit.coord_features(_sh, _org)
+                        st.session_state.p3_map_epoch = st.session_state.get("p3_map_epoch", 0) + 1
+                        for _k in ("p3_result", "p3_site"):
+                            st.session_state.pop(_k, None)
+                        st.rerun()
+                    except ValueError as _e:
+                        st.error("좌표를 읽지 못했습니다 — " + str(_e))
+                if _n2.button("🚫➕ 헤드 빼기·더하기 줄만 적용", key="p3_num_heads",
+                              disabled=not _pins["blocks"],
+                              help="「헤드 빼기: x,y …」·「헤드 더하기: x,y …」 줄만 읽어 첫 밭에 그대로 넣습니다(지도 🚫·➕와 같은 칸)."):
+                    try:
+                        _sh, _hd = _p3edit.parse_coord_text(_ct)
+                        _pol = _pins["blocks"][0].setdefault("policy", {})
+                        for _k in ("drop_heads", "add_heads"):
+                            if _hd.get(_k):
+                                _pol[_k] = _hd[_k]
+                            else:
+                                _pol.pop(_k, None)
+                        st.session_state.p3_pins = _pins
+                        for _k in ("p3_result", "p3_site"):
+                            st.session_state.pop(_k, None)
+                        st.rerun()
+                    except ValueError as _e:
+                        st.error("좌표를 읽지 못했습니다 — " + str(_e))
             _ca, _cb = st.columns([2, 1])
             if _ca.button("✅ 그린 것을 목록에 넣기 (급수원 %d · 밭 %d · 관 %d)"
                           % (len(_points), len(_polys), len(_lines)),
                           type="primary", key="p3_take_all",
-                          disabled=not (_points or _polys or _lines)):
+                          disabled=not (_points or _polys or _lines)) or _num_take is not None:
                 if _polys:
                     # 🔴 **그린 그대로**(`polygon_raw`)를 남긴다 — 둥글게는 언제든 되돌릴 수 있어야 한다.
                     _old_blocks = _pins["blocks"]
@@ -4563,6 +4616,52 @@ elif mode == "🗺️ 설계(P3)":
                     if int(_vv["zones"]) != _hv:
                         st.warning("분배점 기준은 **%d개**인데 **%d개**로 적으셨습니다 — 뜻이 있으면 그대로 두세요."
                                    % (_hv, int(_vv["zones"])))
+                # 🧩 [2026-10-07 봉소리 97 · 대표 교정] 주배관 호칭 · 세트 여분 · 매니폴드 T · 구역 밸브 밴드 —
+                #    전에는 「작도 결과 JSON 올리기」로만 들어갔다. 사람이 화면에서 넣어 같은 값을 내게 칸으로 둔다.
+                #    값은 대표 입력(규칙 7) — 수량은 엔진이 bom 에서 센다.
+                st.markdown("###### 🧩 주배관 호칭 · 세트 여분 · 매니폴드")
+                _m1, _m2, _m3 = st.columns(3)
+                _mm_opts = ["엔진이 고름", 40, 50]
+                _mm_cur = _pins.get("main_mm")
+                _mm = _m1.selectbox("주배관 호칭(mm)", _mm_opts,
+                                    index=_mm_opts.index(int(_mm_cur)) if _mm_cur in (40, 50) else 0,
+                                    key="p3_main_mm",
+                                    help="정하면 주배관 부속(일자·T·마감)이 그 호칭 품목이 되고, 재질이 빈 관은 같은 호칭 송수호스가 됩니다.")
+                if _mm == "엔진이 고름":
+                    _pins.pop("main_mm", None)
+                else:
+                    _pins["main_mm"] = int(_mm)
+                _hs = int(_m2.number_input("스프링클러 세트 여분(조)", 0, 50, int(_pins.get("head_spare") or 0),
+                                           key="p3_head_spare",
+                                           help="두수에 더해 견적에 넣는 세트 개수(농가가 더 놓을 자리용). 0 = 없음."))
+                if _hs:
+                    _pins["head_spare"] = _hs
+                else:
+                    _pins.pop("head_spare", None)
+                _mt = _m3.checkbox("분배점 T = 매니폴드 CCCT", value=bool(_pins.get("manifold_tee")),
+                                   key="p3_manifold_tee",
+                                   help="분배점 T 를 「물 공급 계통도」 ③ 매니폴드의 CCCT 로 셉니다(출구에 구역 밸브 직결). "
+                                        "T분기 세트(나가는 쪽 WF 4-2 ×2 · 밴드 4)와 연결부 d 카드가 빠집니다.")
+                if _mt:
+                    _pins["manifold_tee"] = True
+                else:
+                    _pins.pop("manifold_tee", None)
+                _zs_mb = sorted({int(_r.get("zone")) for _r in _pins["routes"] if _r.get("zone")})
+                if _zs_mb:
+                    _mbc = st.columns(len(_zs_mb))
+                    _mb = {}
+                    for _ci, _z in enumerate(_zs_mb):
+                        _n = int(_mbc[_ci].number_input(
+                            "%d구역 밸브 호스밴드(개)" % _z, 0, 12,
+                            int((_pins.get("manifold_bands") or {}).get(str(_z)) or 0),
+                            key="p3_mband_%d" % _z,
+                            help="매니폴드 구역 밸브 자리에 **더하는** 호스밴드. 견적 밴드에 더해지고 계통도 밸브 옆에 「호스밴드 ×n」."))
+                        if _n:
+                            _mb[str(_z)] = _n
+                    if _mb:
+                        _pins["manifold_bands"] = _mb
+                    else:
+                        _pins.pop("manifold_bands", None)
                 st.session_state.p3_pins = _pins
 
             st.divider()
@@ -4619,7 +4718,7 @@ elif mode == "🗺️ 설계(P3)":
                             _j = json.loads(_raw_drawn)
                             if not isinstance(_j, dict):
                                 raise ValueError("작도 결과는 JSON 객체여야 합니다")
-                            for _field, _type in (("chains", list), ("supply", dict), ("row_kits", dict), ("tool_items", list), ("link_intent", dict), ("photos", list), ("connection_examples", list), ("contact", dict)):
+                            for _field, _type in (("chains", list), ("supply", dict), ("row_kits", dict), ("tool_items", list), ("link_intent", dict), ("photos", list), ("connection_examples", list), ("contact", dict), ("junctions", dict), ("fountain_lines", list)):
                                 if _field in _j and not isinstance(_j[_field], _type):
                                     raise ValueError(_field + " 입력 형식이 올바르지 않습니다")
                             if "chains" in _j:
@@ -4628,7 +4727,8 @@ elif mode == "🗺️ 설계(P3)":
                             _dw = dict(st.session_state.get("p3_drawn") or {})
                             _dw.update(_j)
                             st.session_state.p3_drawn = _dw
-                            for _new_field in ("chains", "supply", "row_kits", "tool_items", "link_intent", "photos", "connection_examples", "contact"):
+                            for _new_field in ("chains", "supply", "row_kits", "tool_items", "link_intent", "photos", "connection_examples", "contact",
+                                               "main_mm", "head_spare", "manifold_tee", "manifold_bands", "junctions", "fountain_lines"):   # [2026-10-07] 화면 칸과 같은 정본(pins) · [10-08] 연결부 묶음
                                 if _new_field in _j:
                                     _pins[_new_field] = _j[_new_field]
                             st.session_state.p3_pins = _pins
@@ -4919,6 +5019,24 @@ elif mode == "🗺️ 설계(P3)":
                                        help="모르면 「미확정」 — 제안서에 「확인 필요」로 나갑니다(고객 보유로 쓰지 않습니다).")
                 _q_inst = _q5.selectbox("설치 방식", ["협의 필요", "농가 자가 시공", "설치 지원 약정"], key="p3_q_inst",
                                         help="「설치 지원 약정」일 때만 제안서 다음 단계에 설치 지원 인력을 적습니다.")
+                # 📅🖼 [2026-10-07 봉소리 97 · 대표] 같은 산출물을 화면에서 다시 내기 — 발행일(파일명·표지)과
+                #    이번 발행만 바꾸는 품목 사진(드라이브 파일). 사진 원본·시트는 건드리지 않는다(불변 원칙 5).
+                _q6, _q7 = st.columns([1, 3])
+                _q_date = _q6.date_input("발행일", value=datetime.date.today(), key="p3_q_date",
+                                         help="파일 이름·표지에 들어가는 날짜. 같은 건을 다시 낼 때는 처음 낸 날짜를 넣습니다.")
+                with _q7.expander("🖼 품목 사진 바꾸기 (이번 발행만 · 드라이브 파일)"):
+                    st.caption("품목코드(5자리)와 드라이브 파일 **링크 또는 ID** — 그 품목의 견적서·지면 사진이 이 파일(흰 바탕)로 "
+                               "바뀝니다. 시트·사진 폴더는 그대로입니다.")
+                    _ph_df = st.data_editor(pd.DataFrame(columns=["품목코드", "드라이브 파일"]),
+                                            num_rows="dynamic", hide_index=True, width="stretch", key="p3_q_photo_ed",
+                                            column_config={"품목코드": st.column_config.TextColumn(),
+                                                           "드라이브 파일": st.column_config.TextColumn(width="large")})
+                _q_photo = {}
+                for _, _pr in _ph_df.iterrows():
+                    _pc, _pf = str(_pr.get("품목코드") or "").strip(), str(_pr.get("드라이브 파일") or "").strip()
+                    if _pc and _pc not in ("nan", "None") and _pf and _pf not in ("nan", "None"):
+                        _mid = re.search(r"/d/([\w-]+)|[?&]id=([\w-]+)", _pf)
+                        _q_photo[_pc.zfill(5)] = (_mid.group(1) or _mid.group(2)) if _mid else _pf
                 _pptx_ok, _pptx_why = _p3pub.pptx_ready()
                 # [V114 · F10] 실제 생성물과 맞춘 안내 — 계통·매니폴드 면은 작도가 있을 때만 **추가**되고, 없으면 그 면이 없다.
                 st.caption("표지·수량·금액은 **위 설계 그대로** 들어갑니다. 주배관 연결부 상세는 **이 설계의 관경·부속**으로 "
@@ -4958,6 +5076,10 @@ elif mode == "🗺️ 설계(P3)":
                             _bg4, _src4 = _p3m.basemap_image(_ff4, prefer="auto")
                             _nm4 = "P3_" + _p3pub._slug(str(_site.get("name") or "대상지"))
                             _dir4 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_제안", _nm4)
+                            # 🔴 [2026-10-07] 저장소가 구글 드라이브(G:)면 임시 폴더로 — 20 MB 넘는 PPTX 를 G: 에 쓰다
+                            #    GoogleDriveFS 가 죽은 일이 있다(발행 산출은 G: 밖에). 파일은 아래 내려받기 단추로 받는다.
+                            if "내 드라이브" in _dir4 or "My Drive" in _dir4 or os.path.splitdrive(_dir4)[0].upper() == "G:":
+                                _dir4 = os.path.join(tempfile.gettempdir(), _nm4)
                             try:                       # 배포 서버는 저장소 폴더가 막혀 있을 수 있다
                                 os.makedirs(_dir4, exist_ok=True)
                                 _tf4 = os.path.join(_dir4, "_쓰기시험")
@@ -5004,9 +5126,22 @@ elif mode == "🗺️ 설계(P3)":
                             # 부속 사진 — 승인 제안서가 쓰는 폴더를 그대로 쓴다(있으면).
                             _imgd = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                                  "_설계", "배추밭스프링클러_20260824", "90_작업파일", "부속이미지")
+                            if _q_photo and os.path.isdir(_imgd):
+                                # 🖼 [2026-10-07] 이번 발행만 — 부속 사진 폴더를 복사해 그 품목만 드라이브 원본(흰 바탕)으로 바꾼다.
+                                _imgd2 = os.path.join(_dir4, "_부속이미지")
+                                shutil.rmtree(_imgd2, ignore_errors=True)
+                                shutil.copytree(_imgd, _imgd2, ignore=shutil.ignore_patterns("*.bak*"))
+                                _ds4 = get_google_services()[1]
+                                for _pc, _pf in _q_photo.items():
+                                    _raw4 = _ds4.files().get_media(fileId=_pf, supportsAllDrives=True).execute()
+                                    _im4 = Image.open(io.BytesIO(_raw4)).convert("RGBA")
+                                    _wb4 = Image.new("RGBA", _im4.size, (255, 255, 255, 255))
+                                    _wb4.alpha_composite(_im4)
+                                    _wb4.convert("RGB").save(os.path.join(_imgd2, "%s.png" % _pc))
+                                _imgd = _imgd2
                             _job4 = _p3pub.job_from_p3(
                                 _site, _res, frame=_ff4, origin=_o4, png_path=_png4,
-                                meta={"out_dir": _dir4, "price_db": _pdb4,
+                                meta={"out_dir": _dir4, "price_db": _pdb4, "date": _q_date.isoformat(),
                                       "part_img_dir": _imgd if os.path.isdir(_imgd) else None,
                                       "site_short": (_ans.get("crop") or "관수 설계"),
                                       "quote": {"label": str(_site.get("name") or ""),

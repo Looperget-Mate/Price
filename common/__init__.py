@@ -11,6 +11,7 @@
 🔴 looperget(프로매니저 전용)·aqunaris(아쿠나리스 전용)를 import 하지 않는다 — 시험으로 고정.
 """
 
-COMMON_VER = 1   # [2026-09-11] 프로매니저 V108 · 아쿠나리스 AQ1 분리
+COMMON_VER = 2   # [2026-10-08] db.COL_MAP 「나사 호칭」「나사 종류」(결정 #103 ③) — 옛 common 이면 앱 저장 때 두 열이 지워진다
+# COMMON_VER 1  # [2026-09-11] 프로매니저 V108 · 아쿠나리스 AQ1 분리
 
 __all__ = ["COMMON_VER"]

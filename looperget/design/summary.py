@@ -750,6 +750,7 @@ def build(job: Dict) -> Dict:
         "ends": [list(p) for p in design["mainline"]["end_pts"]],
         "tees": [[list(p), tag] for p, tag in design["mainline"]["tee_pts"]],
         "n_tees": design["mainline"]["tees"], "n_ends": design["mainline"]["ends"],
+        "n_manifold_tees": int(design["mainline"].get("manifold_tees") or 0),   # [2026-10-07] 분배점 T = 계통도 ③
         "n_joints": design["mainline"]["joints"],
         "sources": [{"name": s["name"], "pt": list(s["pt"])} for s in site["sources"]],
         "bom": bom, "total": money.get("total", 0), "tier": money.get("tier", "소비자가"),

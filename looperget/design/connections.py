@@ -16,7 +16,10 @@ import re
 CONFIRMED = "확인됨"
 MISMATCH = "불일치"
 UNKNOWN = "미확정"
-NOMINAL_INCHES = {25: "1", 40: "1½", 50: "2"}
+NOMINAL_INCHES = {25: "1", 32: "1¼", 40: "1½", 50: "2"}   # [2026-10-08 · 결정 #103 ①] 32A = 1¼″
+THREAD_MM_ALIAS = {30: 32}        # [결정 #103 ①] 한국 농업 「30 mm」 나사 = 32A(1¼″) — 나사 포트에만(호스 30 mm 는 그대로)
+BSPT_FAMILY = {"BSPT", "BSP", "R", "RC", "RP", "PT", "PS", "PF"}   # [결정 #103 ②] 암나사는 평행에 가깝고 일정치 않음 — Rc/Rp 구분 안 함
+RULE_NOTE = "규칙 판정 — 같은 호칭 · BSPT · 암수 반대(결정 #103 ④)"
 PARTS = {"A", "B", "C", "D", "E", "F"}
 
 
@@ -48,13 +51,15 @@ def normalize_port(port):
     if mm not in (None, ""):
         mm = _number(str(mm).lower().replace("mm", "").strip(), "호칭", positive=True)
         result["d_mm"] = int(mm) if mm.is_integer() else mm
+        if kind == "thread":
+            result["d_mm"] = THREAD_MM_ALIAS.get(result["d_mm"], result["d_mm"])
     else:
         result["d_mm"] = None
     inch = str(port.get("size_in") or "").strip().lower()
     for token in ('"', '″', 'inches', 'inch', 'in'):
         inch = inch.replace(token, "")
     inch = inch.replace(" ", "")
-    inch = {"1.0": "1", "1.5": "1½", "11/2": "1½", "2.0": "2"}.get(inch, inch)
+    inch = {"1.0": "1", "1.5": "1½", "11/2": "1½", "2.0": "2", "1.25": "1¼", "11/4": "1¼"}.get(inch, inch)
     inverse = {v: k for k, v in NOMINAL_INCHES.items()}
     result.pop("nominal_conflict", None)
     if inch in inverse:
@@ -121,9 +126,14 @@ def check_ports(left, right, compatibility=()):
         if a["d_mm"] != b["d_mm"]:
             return _result(MISMATCH, ["나사 호칭 불일치"])
         if a.get("standard") and b.get("standard") and a["standard"] != b["standard"]:
-            return _result(MISMATCH, ["나사 규격 불일치"])
+            fam = lambda p: str(p["standard"]).strip().upper() in BSPT_FAMILY
+            if not (fam(a) and fam(b)):
+                return _result(MISMATCH, ["나사 규격 불일치"])
         if _evidence_matches(a, b, compatibility):
             return _result(CONFIRMED)
+        # [2026-10-08 · 결정 #103 ④ 대표 「a」] 같은 호칭 + BSPT(Rc/Rp 구분 없음) + 암수 반대 → 확인됨(규칙 판정 표식)
+        if all(str(p.get("standard") or "").strip().upper() in BSPT_FAMILY for p in (a, b)):
+            return _result(CONFIRMED, [RULE_NOTE])
         return _result(UNKNOWN, ["나사 취급 조합의 확인 범위·근거·일자 미확정"])
     if a["d_mm"] is not None and b["d_mm"] is not None and a["d_mm"] != b["d_mm"]:
         return _result(MISMATCH, ["접속 관경 불일치"])

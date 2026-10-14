@@ -63,6 +63,29 @@ def find_tap(p0: Pt, dir_: Pt, routes: Sequence[Sequence[Pt]]) -> Optional[Dict]
 
 
 LEAD_MAX = 60.0          # [경계 연결] 주배관에서 이 길이 안이면 25 mm를 경계 따라 올려 잇는다(m)
+LEAD_TIE_M = 0.0         # [경계 연결 · 규칙 22] **가까운 구역**(대표 2026-10-07 답) — 그린 순서로 고르지 않는다. 길이가 같을 때만 구역 순서(옛 3.0 = 먼저 그린 관 우선)
+LEAD_TAP_MIN = 1.0       # [경계 연결 · 규칙 22] 탭 = 구역 주배관이 **시작되고 1 m 내외 지난 자리**(매니폴드·구역 밸브 뒤 · 대표 2026-10-07 · 옛 3.0)
+
+
+def _pull_inside(pts: List[Pt], ring: Sequence[Pt], tol: float = 0.3, n: int = 24) -> List[Pt]:
+    """경로 당기기 — 앞에서부터 **밭 안(경계 tol 이내 포함)으로 곧게 갈 수 있는 가장 먼 점**으로 건너뛴다.
+    [2026-10-07 봉소리 97 · 대표 교정] 탭에서 가장 가까운 경계로 먼저 내려갔다가(밭 밖 쪽) 되돌아 올라가던 경로 —
+    「1구역 주배관 시작 이후 지점에서 바로 올라가면 된다」. 꺾이는 자리는 원래 경로의 점만 쓴다(새 점을 만들지 않는다)."""
+    def ok(a, b):
+        for k in range(1, n):
+            t = k / n
+            q = (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+            if not (G.contains(ring, q) or G.edge_dist(q, ring) <= tol):
+                return False
+        return True
+    out, i = [pts[0]], 0
+    while i < len(pts) - 1:
+        j = len(pts) - 1
+        while j > i + 1 and not ok(pts[i], pts[j]):
+            j -= 1
+        out.append(pts[j])
+        i = j
+    return out
 
 
 def boundary_lead(p0: Pt, poly: Sequence[Pt], routes: Sequence[Sequence[Pt]],
@@ -104,11 +127,15 @@ def boundary_lead(p0: Pt, poly: Sequence[Pt], routes: Sequence[Sequence[Pt]],
         return acc
 
     s_p, q_p = arc_pos(p0)
-    best = None
+    best, cands = None, []
     for i, rt in enumerate(routes):
         if len(rt) < 2:
             continue
         _s, tap, _ = G.nearest_on_polyline(rt, p0)
+        # [2026-10-07 봉소리 97 · 대표 교정] 주배관 **출발점**(분배점 = 구역 밸브 자리)에서 따지 않는다 —
+        #    밸브 뒤 그 구역 주배관 위에서 딴다. 출발점에서 LEAD_TAP_MIN 안이면 그만큼 관을 따라 내려간 자리.
+        if _s < LEAD_TAP_MIN and G.polyline_len(rt) > LEAD_TAP_MIN:
+            tap = tuple(G.point_at(rt, LEAD_TAP_MIN)[0])
         s_t, q_t = arc_pos(tap)
         for fwd in (True, False):
             mid = walk(s_t, s_p, fwd)
@@ -118,9 +145,14 @@ def boundary_lead(p0: Pt, poly: Sequence[Pt], routes: Sequence[Sequence[Pt]],
             pts += mid
             if G.dist(pts[-1], p0) > 1e-6:
                 pts.append(p0)
+            pts = _pull_inside(pts, ring)
             L = G.polyline_len(pts)
-            if best is None or L < best["len"]:
-                best = {"route": i, "pt": tap, "pts": pts, "len": L}
+            cands.append({"route": i, "pt": tap, "pts": pts, "len": L})
+    # 길이가 LEAD_TIE_M 안으로 비슷하면 **먼저 그린 주배관**(구역 순서 — 1구역)을 따른다(2026-10-07 봉소리 97:
+    #    두 구역 관이 한 분배점에서 나란히 출발해 몇 m 차이로 2구역에 붙던 것 · 대표 「1구역 주배관에서 분기」).
+    if cands:
+        m = min(c["len"] for c in cands)
+        best = min((c for c in cands if c["len"] <= m + LEAD_TIE_M), key=lambda c: (c["route"], c["len"]))
     if best is None or best["len"] > max_m:
         return None
     return best

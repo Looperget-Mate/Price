@@ -14,8 +14,8 @@ looperget.design.bom — 설계 결과 → 자재 목록(코드·수량). 가격
   · 일자연결 = 00825 + 00827 + 00278×4 · 말단·구역밸브 = 00278×2
   · `site["spare_field"] = {코드: 수량}` = **현장 예비**(대표 판단 입력 · 규칙 19의 여분과 별개)
   · 케이블타이(규칙 17) 02038 = (열 + 게이지 새들)·2·1.5 → 10단위, 20916 = (두수+2)·2·1.5 → 10단위 (규칙 18: 견적 포함)
-  · 테프론 00955 = 열·2 → 10단위           · 여분(_spare): 수량 < 2 · 여분 제외 코드는 그대로, 아니면 ceil(·1.05)
-  · 여분 산정 정본 = 규칙 19 (헤드 3 % · 부속 5 % · 롤 여유 12 % · 케이블타이 ×1.5 10단위 · 테프론 열×2)
+  · 테프론 00955 = 나사 이음 ÷ 직경별 비율(sealant.py · 결정 #104)   · 여분(_spare): 수량 < 2 · 여분 제외 코드는 그대로, 아니면 ceil(·1.05)
+  · 여분 산정 정본 = 규칙 19 (헤드 3 % · 부속 5 % · 롤 여유 12 % · 케이블타이 ×1.5 10단위 · 테프론 = 결정 #104)
   · 대표 계통도 품목(규칙 7: 펌프측 커플러·여과기·압력계·매니폴드)은 site["water_items"]를 그대로 통과
   · 변형엘보 00190 은 만들지 않는다(규칙 2).
 """
@@ -26,6 +26,7 @@ from typing import Dict, List, Sequence
 
 from . import pipes
 from . import heads
+from . import sealant
 from .mainline import ROLL_M
 
 NO_SPARE = {"20002", "01909", "00527", "01870"}      # 펌프·여과기·압력계 — 여분 없음
@@ -103,6 +104,8 @@ def build(n_heads: int, lat_lengths: Sequence[float], main: Dict, site: Dict) ->
     rows: List[Dict] = []
 
     def put(code, base, note, spare=True, rate=None):
+        if not base:                     # [2026-10-08 대표] 수량 0 이면 줄 자체를 넣지 않는다(25 mm 연결세트 0 행)
+            return
         qty = _spare(code, base, rate) if spare else base
         if qty > base:
             note = f"{note} + 여분 {qty - base}"
@@ -119,8 +122,15 @@ def build(n_heads: int, lat_lengths: Sequence[float], main: Dict, site: Dict) ->
             _entry["base"] += _count * _per
             _entry["notes"].append(f"헤드 {_count}두" + (f" × 두당 {_per}" if _per != 1 else "")
                                  + (f" — {_kit['short']}" if _kit["key"] != heads.DEFAULT else ""))
+    # [2026-10-07 봉소리 97] `site["head_spare"]` = 헤드 세트 여분 **개수**(대표 지정 — 농가가 더 놓을 자리용).
+    #    없으면 규칙 19(3 %) 그대로.
+    _hs = site.get("head_spare")
     for _hc, _entry in _head_parts.items():
-        put(_hc, _entry["base"], " · ".join(_entry["notes"]), rate=SPARE_RATE["01998"])
+        if _hs is not None:
+            rows.append({"code": _hc, "qty": _entry["base"] + int(_hs), "base": _entry["base"],
+                         "note": " · ".join(_entry["notes"]) + f" + 여분 {int(_hs)}(추가 설치용)"})
+        else:
+            put(_hc, _entry["base"], " · ".join(_entry["notes"]), rate=SPARE_RATE["01998"])
     put("02044", rolls25 + extra25, f"25 mm 가지관 {lat_total:.0f} m → 100 m 롤 절단 계획 {rolls25}"
         + (f" + 여분 1(남는 길이 {slack25:.0f} m)" if extra25 else ""), spare=False)
     put("01999", joints25, "25 mm 롤 잇는 자리(절단 계획)", spare=False)
@@ -141,10 +151,13 @@ def build(n_heads: int, lat_lengths: Sequence[float], main: Dict, site: Dict) ->
             + (f" + 여분 1(남는 길이 {slack:.0f} m)" if extra else ""), spare=False)
     put(F["e_valve"], start_v + zone_v + ends,
         f"시작 {start_v} + 구역밸브 {zone_v}({zone_v_src}) + 말단 마감 {ends}")
-    if tees:
-        put("01201", tees, f"T {tees}")
+    m_tees = int(main.get("manifold_tees") or 0)      # [2026-10-07] 분배점 매니폴드 T — CCCT 만(출구에 밸브 직결)
+    if tees or m_tees:
+        put("01201", tees + m_tees, " + ".join(([f"T {tees}"] if tees else [])
+                                               + ([f"③ 매니폴드 T {m_tees}(출구에 구역 밸브 직결)"] if m_tees else [])))
     if 2 * tees + main_joints:
-        put(F["wf42"], 2 * tees + main_joints, f"T 나가는 쪽 2×{tees} + 일자 {main_joints}")
+        put(F["wf42"], 2 * tees + main_joints, " + ".join(([f"T 나가는 쪽 2×{tees}"] if tees else [])
+                                                          + ([f"일자 {main_joints}"] if main_joints else [])))
     if main_joints:
         put(F["wf41"], main_joints, f"주배관·동일 호칭 인입관 잇는 자리 {main_joints} — 일자연결 세트")
     for n, count in sorted(other_joints.items()):
@@ -152,14 +165,33 @@ def build(n_heads: int, lat_lengths: Sequence[float], main: Dict, site: Dict) ->
             fittings = pipes.main_fittings(n)
             put(fittings["wf41"], count, f"인입관 {n} mm 잇는 자리 {count} — 일자연결 세트")
             put(fittings["wf42"], count, f"인입관 {n} mm 일자 {count}")
+    _bt = [("시작 %d" % src_bands, src_bands), ("말단 2×%d" % ends, ends), ("T 4×%d" % tees, tees),
+           ("일자 4×%d" % joints, joints), ("구역밸브 2×%d" % zone_v, zone_v)]
     put("00278", src_bands + 2 * ends + 4 * tees + 4 * joints + 2 * zone_v,
-        f"시작 {src_bands} + 말단 2×{ends} + T 4×{tees} + 일자 4×{joints} + 구역밸브 2×{zone_v}")
-    put("02038", _up10((n_lat + gauge_saddles) * 2 * 1.5), "주배관·분기 고정 — 루퍼젯 H25·H20 부속마다 2개 (여유 1.5배)", spare=False)
-    put("20916", _up10((n_heads + 2) * 2 * 1.5), "25 mm 가지관 고정 — 헤드마다 2개 (여유 1.5배)", spare=False)
-    put("00955", _up10(n_lat * 2), "나사 연결부 — 열마다 2", spare=False)
+        " + ".join(t for t, n in _bt if n) or "-")
+    n_ftap = len((site.get("_fountain") or {}).get("lines") or [])     # [2026-10-08] 분수 라인 H25 도 같은 고정
+    # [2026-10-08 대표] 케이블타이 = 자리 × 2 → 10 단위 올림(올림분이 여분) — 270 mm 는 송수호스 위 루퍼젯 H25·H20(압력계) 자리,
+    #    140 mm 는 25 mm 가지관 위 헤드(H20) 자리. 옛 「여유 1.5배 · 헤드+2」 폐기(정창주 765 「8개 → 여분까지 10개 · 16개 → 20개」).
+    _t270 = n_lat + gauge_saddles + n_ftap
+    put("02038", _up10(_t270 * 2), "송수호스 위 루퍼젯 H25·H20 %d곳 × 2 = %d → 10 단위" % (_t270, _t270 * 2), spare=False)
+    put("20916", _up10(n_heads * 2), "가지관 위 헤드(H20) %d곳 × 2 = %d → 10 단위" % (n_heads, n_heads * 2), spare=False)
+    # [2026-10-07 봉소리 97 · 대표 교정] 매니폴드 구역 밸브 자리 호스밴드 = `site["manifold_bands"]` {구역: 개수}
+    #    (대표 지정 — 계통도 ③ 의 그 구역 밸브 칸에 같은 수가 그려진다)
+    for _z, _n in sorted((site.get("manifold_bands") or {}).items(), key=lambda kv: str(kv[0])):
+        if int(_n) > 0:
+            rows.append({"code": "00278", "qty": int(_n), "base": int(_n),
+                         "note": "③ 매니폴드 %s구역 밸브 호스밴드 %d" % (str(_z).replace("구역", ""), int(_n))})
     for w in water:
         rows.append({"code": w["code"], "qty": int(w["qty"]), "base": int(w["qty"]),
                      "note": w.get("note", "급수 계통 부속 — 대표 계통도 그대로")})
+    # [2026-10-08 · 정창주 남해 765 · 대표 A안] 분수 라인 — H25·분수숫싱글밸브·마감꽂이 줄마다 1 · 호스 롤(여분 없음)
+    if site.get("_fountain"):
+        from . import fountain as _fountain
+        rows += _fountain.bom_rows(site["_fountain"])
+    # [2026-10-08 · 결정 #104] 테프론 00955 = 나사 이음 ÷ 직경별 비율(50 mm 3개당 1 · 헤드 10개당 1 · 사이 보간) — 옛 「열×2 → 10단위」 대체
+    _tq, _tn = sealant.rolls(rows, n_heads)
+    if _tq:
+        rows.append({"code": "00955", "qty": _tq, "base": _tq, "note": _tn})
 
     # ── 현장 예비(규칙 7 계열 · 대표 판단 입력) ──
     # 규칙 19의 「여분」과 다르다. 여분은 자재 성질에서 나오는 계산이고,

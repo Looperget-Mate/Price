@@ -18,7 +18,10 @@ def invalidate():
 
 
 SITE_FIELDS = ("chains", "supply", "row_kits", "tool_items", "link_intent", "photos", "connection_examples",
-               "contact")   # [V117 · 2-C] 연락처·회신 기한(매번 수동 · 빈칸 허용)
+               "contact",   # [V117 · 2-C] 연락처·회신 기한(매번 수동 · 빈칸 허용)
+               "main_mm", "head_spare", "manifold_tee", "manifold_bands",   # [2026-10-07] ② 🧩 칸(봉소리 97 대표 교정)
+               "junctions",   # [2026-10-08] 연결부 묶음 선택 {자리: 묶음 id} — 설계 CAD 3D 선택 화면 내보내기(결정 #102)
+               "fountain_lines")   # [2026-10-08] 분수 라인(A안) — 작도 결과 JSON 으로 받는다
 
 
 def sync_site_fields(pins, drawn):

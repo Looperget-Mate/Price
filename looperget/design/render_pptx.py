@@ -121,19 +121,20 @@ FEED_MIN_IN = 0.45                                    # 급수 지점이 밭에 
 WD_BY_MM = {40: {"wf41": "00824", "e_valve": "01402", "wf42": "00826"},
             50: {"wf41": "00825", "e_valve": "01403", "wf42": "00827"}}
 # 총 소요 내역 표 — 열 폭(사진 · 품목 · 규격 · 수량 · 단가 · 비고 = 6.05 in) · 사진 칸 때문에 행 최소 높이 0.30 · 한 단 최대 높이
-BOM_COLS = (0.46, 1.74, 0.96, 0.62, 0.70, 1.57)
+BOM_COLS = (0.46, 1.50, 0.84, 0.55, 0.62, 0.80, 1.28)   # [2026-10-08 대표] 단가 옆 금액(공급가+부가세) 열 — 합 6.05 in 그대로
 BOM_RMIN = 0.30
 BOM_PAGE_H = 4.65
 WD_COMMON = {"h20": "01920", "gauge": "01870", "ccct": "01201", "elbow": "00190", "band": "00278"}
 WD_NAMES = {"00824": "WF 4-1", "00825": "WF 4-1", "00941": "WF 4-4", "00969": "WF 4-4", "01199": "WF 4-10", "00970": "WF 4-10", "01402": "E호스밸브", "01403": "E호스밸브",
             "00826": "WF 4-2", "00827": "WF 4-2", "01920": "루퍼젯 H20", "01870": "압력계", "01201": "CCCT 中",
-            "00190": "변형 L보", "00278": "호스밴드"}
+            "00190": "변형 L보", "00278": "호스밴드",
+            "00940": "WF 4-3", "00857": "WF 4-3"}   # [2026-10-08] 농수관 첫 연결부(N2-PIPE-*)
 
 # 🔵 [V114 · 2단계 §3] 고정면 문구 교정 — **생성 시 치환**한다(마스터 원문은 손대지 않는다 · 롤백 = 이 표를 비우면 끝).
 #    (면 번호는 마스터 1-base) 근거 없는 절대 표현은 계산 조건을 말하는 문장으로, 원시자료 확인 전 수치는 뺀다.
 #    ⚠ 면23 문장 속 빈칸은 오탈자가 아니다 — 그 자리에 ↑·↓ 화살표 도형이 얹혀 있다. 빈칸은 그대로 둔다.
 FIXED_TEXT_FIX = [
-    (1, "관수 사각지대 원천 차단", "헤드 반경·간격 계산으로 살수 공백을 줄이는 배치"),
+    (1, "관수 사각지대 원천 차단", "살수 공백을 줄이는 배치"),   # [2026-10-07] 두 줄로 접혀 본문 상자가 위 제목을 덮었다 — 한 줄로
     (1, "지형 맞춤형 빈틈없는 관수", "지형 맞춤형 배관·살수 배치"),
     (22, "노란 표면은 태양광을 반사해 최고 15% 이상 표면온도 감소", "노란 표면은 태양광을 반사해 표면온도 상승을 줄입니다"),
     (22, "뜨거운 물 유입 방지로 작물 스트레스 완화.", ""),      # 표면온도를 작물 효과로 넓히지 않는다
@@ -449,7 +450,7 @@ class Map:
         return fr
 
 
-def place_leaders(slide, fr, marks, cap_x=CAP_X, gap=0.40, size=13):
+def place_leaders(slide, fr, marks, cap_x=CAP_X, gap=0.40, size=13, names=True):
     """지시 라벨을 지도 오른쪽 여백에 세로로 펼친다(규칙 16). marks = [(대상점 m, 글자, 이름)]"""
     L, T, W, H = fr.rect
     bx = L + W + 0.24
@@ -475,7 +476,7 @@ def place_leaders(slide, fr, marks, cap_x=CAP_X, gap=0.40, size=13):
         lm = ((bx - fr.ox) / fr.s, (y - fr.oy) / fr.s)
         leader(slide, fr, tgt, lm, ch, size=size)
         # [V117 · C] 같은 기호·이름(말단 c 두 곳 등)은 이름을 한 번만 — 범례 「c 주배관 말단」 중복(7면)
-        if nm and (ch, nm) not in named:
+        if names and nm and (ch, nm) not in named:
             label(slide, tx, y - 0.105, nm, size=8.0, color=DS.C.INK500, w=tw, bold=False)
             named.add((ch, nm))
     return items
@@ -528,6 +529,13 @@ class Renderer:
             self.valve_of[zk] = {"id": "V%d" % k, "pt": h["pt"] if h else None}
             if h:
                 by_pt.setdefault(tuple(h["pt"]), []).append(("V%d" % k, zk))
+        # [2026-10-08 대표] 구역 밸브를 0 으로 적은 한 구역 현장 — 분배점은 밸브가 아니라 「③ 밭 시작 꺾임」(변형엘보로 주배관에 잇는다)
+        self.no_zone_valve = ((self.site.get("valves_01403") or {}).get("zones") == 0 and len(summary.get("zones") or []) <= 1)
+        self.bend3_pt = None
+        if self.no_zone_valve:
+            self.bend3_pt = next((list(h["pt"]) for h in summary.get("headers") or [] if h.get("pt") is not None), None)
+            self.valve_of = {zk: {"id": "① E호스밸브", "pt": None} for zk in self.valve_of}
+            by_pt = {}
         for pt, vz in by_pt.items():
             ids = [v for v, _ in vz]
             self.valves.append({"pt": list(pt), "mark": ids[0] if len(ids) == 1 else "%s~" % ids[0],
@@ -607,6 +615,10 @@ class Renderer:
         g["gauge"] = self._poly_mid(poly)
         return g
 
+    def _has_gauge(self):
+        """압력계 표식 — 현장이 연결부 ② 를 「압력계 없음」(N3-NONE)으로 고른 때만 끈다(옛 job 무변)."""
+        return (self.site.get("junctions") or {}).get("N3") in (None, "N3-H20-GAUGE")
+
     def draw_feeder(self, s, fr, gauge=False, w=W_MAIN):
         """인입관(초록 선) + 급수 지점(초록 점) + [gauge] 압력계 세트 표식(작은 원 + 라벨). 선이 없어도 점은 그린다."""
         g = self.feed_geom(fr)
@@ -618,7 +630,7 @@ class Renderer:
         if g["displaced"] and not getattr(self, "_disp_logged", False):
             self._disp_logged = True
             self.log.append("지도: 급수 지점이 밭에 붙어 있어 초록 점·인입관을 표시만 밭에서 띄움(실제 좌표 무변경)")
-        if gauge and g["gauge"] is not None:
+        if gauge and g["gauge"] is not None and self._has_gauge():   # [2026-10-08] 압력계 없는 현장(정창주 765)은 표식 없음
             gx, gy = fr.xy(*g["gauge"])
             r = 0.095
             ring = s.shapes.add_shape(MSO_SHAPE.OVAL, Emu(int(gx - Inches(r))), Emu(int(gy - Inches(r))), Inches(2 * r), Inches(2 * r))
@@ -668,6 +680,11 @@ class Renderer:
             if ids is None or l["id"] in ids:
                 pts = [tuple(q) for q in (l.get("path") or [l["p0"], l["p1"]])]
                 pipe(s, fr, pts, color=(BAD if l["id"] in bad else ov.PIPE_SUB), weight=w)
+        if ids is None:                                   # [2026-10-08] 분수 라인 — 물빛 파랑 점선 · 시작 = H25 점
+            for f in (self.design.get("fountain") or {}).get("lines") or []:
+                pts = [tuple(q) for q in f["pts"]]
+                pipe(s, fr, pts, color=ov.SPRAY, weight=w, dash=MSO_LINE_DASH_STYLE.ROUND_DOT)
+                head_dot(s, fr, pts[0][0], pts[0][1], r_in=0.05, color=ov.INK)
 
     def draw_heads(self, s, fr, r_in=0.045, ids=None):
         for l in self.lats:
@@ -774,6 +791,56 @@ class Renderer:
         return s
 
     # ── [계통도] 물 공급 계통도 지면 — 대표 작도(sketch_pages)가 없을 때 코드로 그린다 ──
+    def _fountain_page(self, prs, anchor, fa):
+        """[2026-10-08 · 정창주 남해 765] 분수호스 연결 — 주배관(송수호스)에서 H25 로 따서 분수호스를 낸다.
+        구성 = 대표 2026-10-08 · 그림 틀 = 메이트 「송수+분수호스」(2025-05-23) 3면(노란 송수호스 · 번호 부속 · 분수호스 선 · 끝 마감꽂이).
+        수량은 엔진(fountain.analyze) 값만 쓴다."""
+        from pptx.enum.shapes import MSO_CONNECTOR
+        from . import fountain as _F
+        ls = fa["lines"]
+        p0 = ls[0]["parts"]
+        punch = "01909"                                       # 펀치 송수용 20 mm — H25 = 20 mm 타공
+        s = new_slide_before(prs, anchor)
+        DS.title(s, "분수호스 연결", "주배관(송수호스 %d mm)에서 루퍼젯 H25 로 따서 분수호스를 냅니다 · %d줄 · %.0f m"
+                 % (int(self.S.get("main_mm") or 40), len(ls), fa["total_m"]))
+        W_, H_ = DS.CHIP.FRAME_W, DS.CHIP.FRAME_H
+        y = 2.35
+        cy = y + H_ / 2
+        # 노란 송수호스(비스듬히) — 왼쪽
+        cn = s.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(0.75), Inches(cy + 1.25), Inches(2.25), Inches(cy - 1.05))
+        cn.line.color.rgb = ov.PIPE_MAIN
+        cn.line.width = Pt(26)
+        DS.text(s, 0.55, cy + 1.40, "주배관 송수호스", size=10, font=DS.T.CAPTION, color=DS.C.INK500, w=1.8, h=0.22)
+        xs = [2.55, 3.75, 4.95]
+        steps = [(punch, "펀치 20 mm", "구멍 뚫기"), (p0["tap"], "루퍼젯 H25", "감싸 체결"), (p0["valve"], "숫싱글밸브", "분수 25 mm")]
+        x_end = DS.SLIDE_W - DS.G.MARGIN_R - W_ - 0.15
+        # 분수호스 — 밸브에서 끝 마감꽂이까지(물빛 파랑 굵은 선)
+        hs = s.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(xs[-1] + W_), Inches(cy), Inches(x_end), Inches(cy))
+        hs.line.color.rgb = ov.SPRAY
+        hs.line.width = Pt(7)
+        _hn = self.price_db.get(p0["hose"], {}) if isinstance(self.price_db, dict) else {}
+        DS.text(s, xs[-1] + W_ + 0.3, cy - 0.42, "%s %s — 줄당 약 %.0f m" % (
+                    (_hn.get("name") or "분수호스"), (_hn.get("spec") or ""), sum(l["len_m"] for l in ls) / len(ls)),
+                size=11, font=DS.T.HEAD, color=DS.C.INK, w=x_end - xs[-1] - W_ - 0.4, h=0.26, bold=True)
+        for i, (code, nm, sp) in enumerate(steps + [(p0["end"], "회전마감꽂이", "분수 · 끝 마감")]):
+            x = xs[i] if i < 3 else x_end
+            png = self.part_png(code)
+            DS.chip(s, x, y, nm, sp, png)
+            if png is None:
+                DS.text(s, x, y + H_ * 0.34, "사진 없음", size=8.5, font=DS.T.CAPTION, color=DS.C.INK500, w=W_, h=0.3, align=PP_ALIGN.CENTER)
+            DS.text(s, x, y - 0.36, "①②③④"[i], size=15, font=DS.T.HEAD, color=ov.DIM, w=W_, h=0.3, bold=True, align=PP_ALIGN.CENTER)
+        lines = ["① 송수호스 윗면에 펀치(20 mm)로 구멍을 뚫습니다 — 줄마다 1곳",
+                 "② 루퍼젯 H25 를 구멍 위에 감싸 체결하고 케이블타이로 고정합니다",
+                 "③ H25 위 25 mm 암나사에 분수숫싱글밸브를 물립니다(테프론 테이프)",
+                 "④ 밸브에 분수호스를 끼워 밭 끝까지 펴고, 끝은 회전마감꽂이로 접어 막습니다",
+                 "분수호스 %d줄 · 줄 사이 약 %.1f m · 합계 %.0f m → %s" % (
+                     len(ls), (G.dist(ls[0]["pts"][0], ls[1]["pts"][0]) if len(ls) > 1 else 0.0), fa["total_m"],
+                     " · ".join("%s m 롤 %d" % (int(_F.HOSE_ROLL_M[h]), n) for h, n in fa["rolls"].items()))]
+        lines += fa["operating"]
+        bullets(s, DS.G.MARGIN_L + 0.2, 4.45, DS.SLIDE_W - 2 * DS.G.MARGIN_L - 0.4, lines, size=12, gap=4)
+        self.log.append("분수호스 연결 면 추가(%d줄 · %.0f m)" % (len(ls), fa["total_m"]))
+        return s
+
     def _water_diagram(self, prs, anchor):
         """오른쪽 펌프(고객 보유)·여과기 → 노란 송수호스 → ① 첫 연결부(WF 4-1 + 호스밴드 + WF 4-2 = 일자연결 세트) → 인입관 위 ② 압력계 세트
         (루퍼젯 H20 + 압력계) → ③ 매니폴드(CCCT T + E호스밸브 = 1구역 / 변형 L보 + E호스밸브 = 2구역). 구역 1개면 밸브 1개.
@@ -786,13 +853,32 @@ class Renderer:
         K = dict(WD_COMMON, **WD_BY_MM[mm])
         zn = [str(z["zone"]) for z in (S.get("zones") or [])] or [z for z in self.zone_color] or ["1"]
         nz = len(zn)
+        # [2026-10-08 · 결정 #102] ①②③ 부속 순서 = 연결부 묶음(junctions.json) — 기본 묶음은 위 대표 지정표와 같은 부속.
+        #    이음 판정(확인됨/조건부/불일치)은 기록으로만 남긴다(그림·BOM 불변).
+        from . import junctions as _JN
+        JL, _jlog = _JN.water_layout(self.site, mm, nz)
+        self.log.extend(_jlog)
+        r1c, r2c = JL["N2"]["rows"]["A"], JL["N3"]["rows"]["A"]
+        r3a, r3b = JL["N4"]["rows"]["A"], JL["N4"]["rows"].get("B") or []
+        tee_i = int(JL["N4"]["tee"][1:]) if JL["N4"].get("tee") else None
         bom_codes = {str(b.get("code")) for b in S.get("bom") or []}
-        miss = [c for c in ("wf41", "wf42", "h20", "gauge", "e_valve") if K[c] not in bom_codes]
+        _skip = {K["band"], K["ccct"], K["elbow"]}                            # 예전 검사(WF 4-1·4-2·H20·압력계·밸브)와 같은 범위
+        miss = [c for c in dict.fromkeys(r1c + r2c + r3a + r3b) if c not in _skip and c not in bom_codes]
         if miss:
             self.log.append("계통도 부속 중 견적(BOM)에 없는 것: %s — 그림에는 표시(급수 계통 품목 여부 확인)"
-                            % " · ".join("%s %s" % (WD_NAMES.get(K[c], c), K[c]) for c in miss))
+                            % " · ".join("%s %s" % (WD_NAMES.get(c, c), c) for c in miss))
         s = new_slide_before(prs, anchor)
-        DS.title(s, "물 공급 계통도", "펌프에서 매니폴드까지 — 오른쪽에서 왼쪽으로 물이 지나는 순서입니다 · 주배관 %d mm 기준" % mm)
+        # [2026-10-08 · 정창주 765] 펌프가 없는 급수원(관정 배관·수도) — 오른쪽은 급수원 상자 하나 · 펌프·여과기 상자 없음
+        _src_nm = str(((self.site.get("sources") or [{}])[0]).get("name") or "급수원")
+        no_pump = str((self.site.get("junctions") or {}).get("N2") or "").startswith("N2-PIPE")   # 농수관에 바로 물림 = 펌프 상자 없음
+        _src_t1 = _src_nm.split("(")[0].strip() or "급수원"
+        _src_t2 = "(" + (_src_nm.split("(", 1)[1].rstrip(")") + " · " if "(" in _src_nm else "") + "고객 보유)"
+        DS.title(s, "물 공급 계통도", ("%s → 첫 연결부 → %s" % (_src_t1, ("구역 밸브" if K["e_valve"] in r3a else "꺾임 → 주배관") if nz < 2 else "매니폴드") if no_pump
+                                     else "물탱크 → 펌프 → 여과기 → 매니폴드")
+                 + " — 오른쪽에서 왼쪽으로 물이 지나는 순서입니다 · 주배관 %d mm 기준" % mm)
+        # [2026-10-07 대표 교정] 구역 밸브 자리 호스밴드(site.manifold_bands {구역: 개수}) — BOM 과 같은 값을 그 밸브 칸 옆에 그린다
+        mb = {str(k).replace("구역", ""): int(v) for k, v in (self.site.get("manifold_bands") or {}).items() if int(v) > 0}
+        band_z0 = mb.get(zn[0].replace("구역", ""), 0) if nz >= 2 else 0
         RED = ov.DIM
         W_, H_ = DS.CHIP.FRAME_W, DS.CHIP.FRAME_H
         CH = H_ + DS.CHIP.GAP_BELOW + DS.CHIP.NAME_H
@@ -801,16 +887,18 @@ class Renderer:
         ycA = yA + H_ / 2
         yB = yA + CH + 0.34
         ycB = yB + H_ / 2
-        # 가로 배치 — 오른쪽(펌프)에서 왼쪽으로
-        PX = DS.SLIDE_W - DS.G.MARGIN_R - 1.59
+        # 가로 배치 — 오른쪽(여과기)에서 왼쪽으로. 🔴 [2026-10-07 대표 교정] 여과기는 **펌프 다음**(토출 쪽)이다 —
+        #    펌프 앞(흡입 쪽)에 두면 물을 빨아올리기 어렵다. 펌프는 여과기 아래에 두고 세로로 잇는다(한 줄 폭이 모자람).
+        FW = 1.20
+        PX = DS.SLIDE_W - DS.G.MARGIN_R - FW                                   # 여과기 상자 왼쪽(줄 맨 오른쪽)
         r1 = PX - GAP
-        x1 = [r1 - PAD - W_ - PITCH * i for i in range(3)]                    # WF 4-1 · 호스밴드 · WF 4-2 (일자연결 세트)
+        x1 = [r1 - PAD - W_ - PITCH * i for i in range(len(r1c))]             # ① 묶음(기본 WF 4-1 · 호스밴드 · WF 4-2)
         l1 = x1[-1] - PAD
         r2 = l1 - GAP
-        x2 = [r2 - PAD - W_ - PITCH * i for i in range(2)]                    # H20 · 압력계
-        l2 = x2[-1] - PAD
+        x2 = [r2 - PAD - W_ - PITCH * i for i in range(len(r2c))]             # ② 묶음(기본 H20 · 압력계)
+        l2 = x2[-1] - PAD if r2c else l1                                       # [2026-10-08] ② 없음(N3-NONE) — 칸을 건너뛴다
         r3 = l2 - GAP
-        n3 = 3 if nz >= 2 else 2
+        n3 = max(len(r3a) + (1 if band_z0 else 0), (tee_i + len(r3b)) if tee_i is not None else 0)
         x3 = [r3 - PAD - W_ - PITCH * i for i in range(n3)]                   # WF 4-2 · T · E호스밸브 (구역 1개면 WF 4-2 · E호스밸브)
         l3 = min(x3[-1] - PAD, r3 - 2.35)                                      # 묶음 이름표(「③ 매니폴드(구역 밸브 N)」)가 들어가는 폭
 
@@ -819,21 +907,29 @@ class Renderer:
         hose = lambda xa, ya, xb, yb: DS._rect(s, MSO_SHAPE.RECTANGLE, min(xa, xb), min(ya, yb), abs(xb - xa) or BAR, abs(yb - ya) or BAR,
                                                fill=ov.PIPE_MAIN)
         hose(x3[-1] + W_ / 2, ycA - BAR / 2, PX, ycA + BAR / 2)
-        if nz >= 2:
-            tcx = x3[1] + W_ / 2
+        if nz >= 2 and tee_i is not None and r3b:
+            tcx = x3[tee_i] + W_ / 2
             hose(tcx - BAR / 2, ycA, tcx + BAR / 2, ycB)                       # T 에서 아래로 — 2구역 쪽
-            hose(x3[2] + W_ / 2, ycB - BAR / 2, tcx, ycB + BAR / 2)
-        # 펌프·여과기 — 고객 보유(사진 없음 · 이름 박스)
+            hose(x3[tee_i + len(r3b) - 1] + W_ / 2, ycB - BAR / 2, tcx, ycB + BAR / 2)
+        # 펌프·여과기 — 고객 보유(사진 없음 · 이름 박스). 여과기 = 줄 위(①의 오른쪽) · 펌프 = 그 아래(물탱크에서 흡입)
         pump_nm = str((self.site.get("pump") or {}).get("model") or "").strip()
         pump_nm = "" if (pump_nm in ("없음", "미정", "[미확정]") or len(pump_nm) > 14) else pump_nm     # 긴 설명문은 박스에 안 넣는다
-        for (bx, by, bw, bh, t1, t2) in ((PX, ycA - 0.45, 1.59, 0.90, "펌프", "(고객 보유)" + (" · %s" % pump_nm if pump_nm else "")),
-                                         (PX + 0.20, ycA - 0.45 - 0.78, 1.19, 0.52, "여과기", "(급수원 쪽)")):
+        py_ = ycA + 0.45 + 0.62
+        _boxes = (((PX, ycA - 0.45, FW, 0.90, _src_t1, _src_t2),) if no_pump else
+                  ((PX, ycA - 0.45, FW, 0.90, "여과기", "(고객 보유 · 펌프 다음)"),
+                   (PX, py_, FW, 0.90, "펌프", "(고객 보유" + (" · %s" % pump_nm if pump_nm else "") + ")\n← 물탱크에서 흡입")))
+        for (bx, by, bw, bh, t1, t2) in _boxes:
             DS._rect(s, MSO_SHAPE.ROUNDED_RECTANGLE, bx, by, bw, bh, fill=RGBColor(0xF4, 0xF4, 0xF0), line=DS.C.CARD_LINE, line_pt=1.0)
             DS.text(s, bx, by + 0.07, t1, size=11, font=DS.T.HEAD, color=DS.C.INK, w=bw, h=0.22, bold=True, align=PP_ALIGN.CENTER)
-            DS.text(s, bx, by + 0.30, t2, size=9, font=DS.T.CAPTION, color=DS.C.INK500, w=bw, h=0.40, align=PP_ALIGN.CENTER)
-        DS._rect(s, MSO_SHAPE.RECTANGLE, PX + 0.20 + 1.19 / 2 - 0.02, ycA - 0.45 - 0.26, 0.04, 0.26, fill=DS.C.BURIED)
-        # 호스 이름표 — 칸 사이 틈
-        for gx, tx_ in ((r1, "송수호스"), (r2, "인입관"), (r3, "인입관")):
+            DS.text(s, bx, by + 0.32, t2, size=8.5, font=DS.T.CAPTION, color=DS.C.INK500, w=bw, h=0.50, align=PP_ALIGN.CENTER)
+        if not no_pump:
+            DS._rect(s, MSO_SHAPE.RECTANGLE, PX + FW / 2 - 0.03, ycA + 0.45, 0.06, py_ - ycA - 0.45, fill=DS.C.BURIED)   # 펌프 → 여과기
+            DS.text(s, PX + FW / 2 + 0.07, ycA + 0.45 + 0.17, "↑ 펌프 → 여과기", size=8.5, font=DS.T.CAPTION, color=DS.C.INK500,
+                    w=1.05, h=0.2)
+        # 호스 이름표 — 칸 사이 틈 (② 없으면 ①과 ③ 사이 하나 · 농수관에 바로 물리는 ① 이면 오른쪽 이름은 「농수관」)
+        _gaps = [(r1, "농수관" if str(JL["N2"].get("id", "")).startswith("N2-PIPE") else "송수호스")]
+        _gaps += [(r2, "인입관"), (r3, "인입관")] if r2c else [(r3, "인입관")]
+        for gx, tx_ in _gaps:
             DS.text(s, gx, ycA - BAR / 2 - 0.27, tx_, size=9, font=DS.T.CAPTION, color=DS.C.INK500,
                     w=GAP if tx_ != "송수호스" else PX - r1, h=0.2, align=PP_ALIGN.CENTER)
 
@@ -843,11 +939,10 @@ class Renderer:
             if png is None:                                     # 빈칸 금지 — 사진이 없으면 그 자리에 이유를 적는다
                 DS.text(s, x, y + H_ * 0.34, "사진 없음", size=8.5, font=DS.T.CAPTION, color=DS.C.INK500, w=W_, h=0.3, align=PP_ALIGN.CENTER)
 
-        part(x1[0], yA, K["wf41"])
-        part(x1[1], yA, K["band"])
-        part(x1[2], yA, K["wf42"])
-        part(x2[0], yA, K["h20"])
-        part(x2[1], yA, K["gauge"])
+        for i, c in enumerate(r1c):
+            part(x1[i], yA, c)
+        for i, c in enumerate(r2c):
+            part(x2[i], yA, c)
         zc = lambda i: (self.zone_color.get(zn[i]) if self.zone_color.get(zn[i]) else (ov.PIPE_MAIN, LINE2)[min(i, 1)])
 
         def ztag(x, y, i):
@@ -857,21 +952,22 @@ class Renderer:
             sh = DS._rect(s, MSO_SHAPE.ROUNDED_RECTANGLE, x, y, W_, 0.24, fill=col)
             DS.text(s, x, y + 0.035, nm + " 밸브", size=9, font=DS.T.HEAD, color=(DS.C.WHITE if lum < 140 else DS.C.INK),
                     w=W_, h=0.2, bold=True, align=PP_ALIGN.CENTER)
-        part(x3[0], yA, K["wf42"])                                     # 인입관 → 매니폴드 입구
-        if nz >= 2:
-            part(x3[1], yA, K["ccct"], spec="01201 · T")
-            part(x3[2], yA, K["e_valve"])
-            ztag(x3[2], yA - 0.30, 0)
-            part(x3[1], yB, K["elbow"])
-            part(x3[2], yB, K["e_valve"])
-            ztag(x3[2], yB - 0.30, 1)
-        else:
-            part(x3[1], yA, K["e_valve"])
-            ztag(x3[1], yA - 0.30, 0)
+        for i, c in enumerate(r3a):                                    # 인입관 → 매니폴드 입구 → (T) → 1구역 밸브
+            part(x3[i], yA, c, spec="%s · T" % c if i == tee_i else None)
+        if K["e_valve"] in r3a:                                        # [2026-10-08] ③ 이 꺾임만(N4-ELBOW)이면 밸브 표지 없음
+            ztag(x3[len(r3a) - 1], yA - 0.30, 0)
+        if nz >= 2 and band_z0:                                        # 1구역 밸브 자리 호스밴드(대표 지정 수)
+            part(x3[len(r3a)], yA, K["band"], spec="×%d · %s 밸브" % (band_z0, zn[0] if zn[0].endswith("구역") else zn[0] + "구역"))
+        if nz >= 2 and tee_i is not None and r3b:
+            _bend = _JN.option(self.site, "N4.elbow_deg")              # [2026-10-08] 변형엘보 꺾임(0·45·90) — 고른 현장만 표기
+            for i, c in enumerate(r3b):
+                part(x3[tee_i + i], yB, c, spec=("%s · 꺾임 %d°" % (c, _bend)) if (c == K["elbow"] and _bend is not None) else None)
+            ztag(x3[tee_i + len(r3b) - 1], yB - 0.30, 1)
         # 빨간 둥근 테두리 + 번호·이름 라벨 — ① ② ③ 묶음
         top = yA - 0.31
-        for (lx, rx, bot, nm) in ((l1, r1, yA + CH + 0.16, "① 첫 연결부(일자연결 세트)"), (l2, r2, yA + CH + 0.16, "② 압력계 설치"),
-                                  (l3, r3, (yB + CH + 0.16) if nz >= 2 else (yA + CH + 0.16), "③ 매니폴드(구역 밸브 %d)" % nz)):
+        _groups = [(l1, r1, yA + CH + 0.16, JL["N2"]["label"])] + ([(l2, r2, yA + CH + 0.16, JL["N3"]["label"])] if r2c else [])
+        _groups += [(l3, r3, (yB + CH + 0.16) if nz >= 2 else (yA + CH + 0.16), JL["N4"]["label"])]
+        for (lx, rx, bot, nm) in _groups:
             sh = DS._rect(s, MSO_SHAPE.ROUNDED_RECTANGLE, lx, top, rx - lx, bot - top, fill=None, line=RED, line_pt=2.25)
             try:
                 sh.adjustments[0] = 0.07
@@ -879,18 +975,168 @@ class Renderer:
                 pass
             DS.text(s, lx, top - 0.38, nm, size=13, font=DS.T.HEAD, color=RED, w=max(rx - lx, 2.4), h=0.28, bold=True, wrap=False)
         # 한 줄 설명 + 각주
-        yb = (yB + CH + 0.36) if nz >= 2 else (yA + CH + 0.55)
+        yb = (yB + CH + 0.24) if nz >= 2 else (yA + CH + 0.55)
         DS._rect(s, MSO_SHAPE.ROUNDED_RECTANGLE, DS.G.MARGIN_L, yb, DS.SLIDE_W - DS.G.MARGIN_L - DS.G.MARGIN_R, 0.50, fill=RGBColor(0xF4, 0xF4, 0xF0))
-        DS.text(s, DS.G.MARGIN_L + 0.2, yb + 0.12, "첫 연결부 → 매니폴드 사이가 인입관 · 압력계는 인입관 위에 · 구역 전환은 매니폴드 밸브로",
+        _line = ("첫 연결부 → 밭 시작 사이가 인입관 · 물은 ① E호스밸브로 열고 닫습니다" if no_pump and K["e_valve"] not in r3a else
+                 "첫 연결부 → %s 사이가 인입관" % ("구역 밸브" if no_pump and nz < 2 else "매니폴드") + (" · 압력계는 인입관 위에" if r2c and r2c[0] == K["h20"] else "")
+                 + (" · 밸브로 열고 닫습니다" if no_pump and nz < 2 else " · 구역 전환은 매니폴드 밸브로"))
+        DS.text(s, DS.G.MARGIN_L + 0.2, yb + 0.12, _line,
                 size=13, font=DS.T.HEAD, color=DS.C.INK, w=DS.SLIDE_W - 2 * DS.G.MARGIN_L - 0.4, h=0.3, bold=True)
-        notes = ["노란 선 = 송수호스·인입관 · 부속 코드는 주배관 %d mm 기준 — 지도의 초록 선이 이 인입관입니다" % mm]
+        notes = [("여과기·압력계는 이 견적에 넣지 않았습니다 — 「상호 확인사항」 참조" if no_pump else
+                  "여과기는 펌프 다음(토출 쪽)에 둡니다 — 펌프 앞(흡입 쪽)에 두면 물을 빨아올리기 어렵습니다"),
+                 "노란 선 = 송수호스·인입관 · 부속 코드는 주배관 %d mm 기준 — 지도의 초록 선이 이 인입관입니다" % mm]
+        if no_pump:                                                    # [2026-10-08] 호스 끝마다 밴드 2(WF 4-1·4-2·E호스밸브 호스 쪽)
+            _hb = lambda rows: 2 * sum(1 for c in rows if c in (K["wf41"], K["wf42"], K["e_valve"]))
+            _bn = [("①", _hb(r1c))] + ([("②", _hb(r2c))] if r2c else []) + [("③", _hb(r3a))]
+            notes.insert(0, "호스밴드 — " + " · ".join("%s %d개" % (k, n) for k, n in _bn if n))
         if nz >= 3:
             notes[0] += " · 구역 %d개 — 3구역째부터의 매니폴드 구성은 [미확정](그림은 2구역 기준)" % nz
         for i, t in enumerate(notes):
-            DS.text(s, DS.G.MARGIN_L + 0.2, yb + 0.62 + i * 0.24, t, size=10, font=DS.T.CAPTION, color=DS.C.INK500,
+            DS.text(s, DS.G.MARGIN_L + 0.2, yb + 0.56 + i * 0.22, t, size=10, font=DS.T.CAPTION, color=DS.C.INK500,
                     w=DS.SLIDE_W - 2 * DS.G.MARGIN_L - 0.4, h=0.22)
         self.log.append("물 공급 계통도 면 추가(코드 작도 · %d mm · %d구역)" % (mm, nz))
         return s
+
+    # ── [2026-10-07 대표 교정] 주배관 면 매니폴드 확대도 ──
+    @staticmethod
+    def _zname(z):
+        z = str(z)
+        return z if z.endswith("구역") else z + "구역"
+
+    @staticmethod
+    def _clip(pts, box):
+        """폴리라인(m) → 사각 box(x0,y0,x1,y1) 안 조각들(Liang–Barsky)."""
+        x0, y0, x1, y1 = box
+        out, cur = [], []
+        for a, b in zip(pts, pts[1:]):
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            t0, t1, ok = 0.0, 1.0, True
+            for p_, q_ in ((-dx, a[0] - x0), (dx, x1 - a[0]), (-dy, a[1] - y0), (dy, y1 - a[1])):
+                if abs(p_) < 1e-12:
+                    if q_ < 0:
+                        ok = False
+                        break
+                    continue
+                r_ = q_ / p_
+                if p_ < 0:
+                    t0 = max(t0, r_)
+                else:
+                    t1 = min(t1, r_)
+                if t0 > t1:
+                    ok = False
+                    break
+            if not ok:
+                if len(cur) >= 2:
+                    out.append(cur)
+                cur = []
+                continue
+            pa = (a[0] + dx * t0, a[1] + dy * t0)
+            pb = (a[0] + dx * t1, a[1] + dy * t1)
+            if not cur or G.dist(cur[-1], pa) > 1e-6:
+                if len(cur) >= 2:
+                    out.append(cur)
+                cur = [pa]
+            cur.append(pb)
+            if t1 < 1.0:
+                out.append(cur)
+                cur = []
+        if len(cur) >= 2:
+            out.append(cur)
+        return out
+
+    def _manifold_inset(self, s, fr, box_in, lead=False):
+        """인입관 → 분배점(매니폴드) → 구역별 주배관 갈림을 크게 그린다. 위성은 이 축척에서 뭉개지므로 바탕은 밝은 회색.
+        값은 만들지 않는다 — 설계 좌표(경로·분배점)를 그대로 확대할 뿐이다. → 그렸으면 True."""
+        from .site import route_role
+        hd = [h for h in (self.S.get("headers") or []) if h.get("pt") is not None and len(h.get("zones") or []) >= 2]
+        if not hd:
+            return False
+        M = tuple(hd[0]["pt"])
+        bx, by, bw, bh = box_in
+        TH = 0.30
+        # 확대 범위 — 분배점 기준 서쪽 넓게(주배관이 뻗는 쪽) · 급수 지점 쪽 조금. 종횡비 = 그림 칸.
+        g = self.feed_geom(fr)
+        src = g["dot"] or M
+        mw = max(26.0, abs(src[0] - M[0]) + 22.0)
+        mh = mw * (bh - TH - 0.10) / (bw - 0.10)
+        sx = 1.0 if src[0] >= M[0] else -1.0
+        x0 = M[0] - mw * 0.70 if sx > 0 else M[0] - mw * 0.30
+        y0 = (M[1] + src[1]) / 2 - mh / 2
+        box = (x0, y0, x0 + mw, y0 + mh)
+        DS._rect(s, MSO_SHAPE.RECTANGLE, bx, by, bw, bh, fill=DS.C.WHITE, line=ov.DIM, line_pt=1.5)
+        DS._rect(s, MSO_SHAPE.RECTANGLE, bx + 0.05, by + TH, bw - 0.10, bh - TH - 0.05, fill=RGBColor(0xE6, 0xE6, 0xE2))
+        _leads = [l for l in self.lats if l.get("lead_m") and l.get("tap")] if lead else []
+        _ttl = ("확대 — %s 주배관에서 가지관이 갈립니다 (H25)" % self._zname(_leads[0].get("zone"))) if _leads else             "확대 — 매니폴드에서 1구역 · 2구역이 갈립니다"
+        DS.text(s, bx + 0.08, by + 0.05, _ttl, size=9.5, font=DS.T.HEAD,
+                color=DS.C.INK, w=bw - 0.16, h=0.22, bold=True)
+        ifr = MapFrame(bx + 0.05, by + TH, bw - 0.10, bh - TH - 0.05, *box)
+        for poly in self.polys:
+            for seg in self._clip(poly + [poly[0]], box):
+                pipe(s, ifr, seg, color=ov.DIM, weight=1.25, dash=MSO_LINE_DASH_STYLE.DASH)
+        for pts in g["lines"]:
+            for seg in self._clip(pts, box):
+                pipe(s, ifr, seg, color=FEED, weight=W_MAIN + 1.0)
+        ends = []
+        for r in self.routes:
+            if route_role(r) == "feeder" or r.get("zone") is None:
+                continue
+            z = str(r["zone"])
+            segs = self._clip(r["pts"], box)
+            for seg in segs:
+                pipe(s, ifr, seg, color=self.zone_color.get(z, ov.PIPE_MAIN), weight=W_MAIN + 1.5)
+            if segs:
+                far = max((q for sg in segs for q in sg), key=lambda q: G.dist(q, M))
+                ends.append((z, far))
+        for l in _leads:                                    # 경계 따라 잇는 가지관 — 탭(H25) 자리와 경로
+            for seg in self._clip([tuple(q) for q in (l.get("path") or [l["p0"], l["p1"]])], box):
+                pipe(s, ifr, seg, color=ov.PIPE_SUB, weight=W_LAT + 1.5)
+        if g["dot"] is not None and box[0] <= g["dot"][0] <= box[2] and box[1] <= g["dot"][1] <= box[3]:
+            head_dot(s, ifr, g["dot"][0], g["dot"][1], r_in=0.07, color=GRN)
+        for l in _leads:
+            head_dot(s, ifr, l["tap"][0], l["tap"][1], r_in=0.075, color=ov.INK)
+            tx_, ty_ = ifr.xy(*l["tap"])
+            lx_, ly_ = bx + bw * 0.36, by + bh - 0.30                 # 확대 칸 아래쪽 가운데 — 지시선으로 탭을 가리킨다
+            cn = s.shapes.add_connector(1, Inches(lx_ + 0.85), Inches(ly_ + 0.02), tx_, ty_)
+            cn.line.color.rgb = ov.INK
+            cn.line.width = Pt(1.0)
+            tb = label(s, lx_, ly_, "H25 분기 → 가지관 %s열" % l["id"], size=8.5, color=DS.C.INK, w=1.70, bold=True,
+                       align=PP_ALIGN.CENTER)
+            tb.fill.solid()
+            tb.fill.fore_color.rgb = DS.C.WHITE
+        head_dot(s, ifr, M[0], M[1], r_in=0.07, color=ov.INK)
+        mx, my = ifr.xy(*M)
+        vv = self.valves[0]["names"] if self.valves else "구역 밸브"
+        label(s, Emu(mx).inches + (0.30 if _leads else -0.55), Emu(my).inches + (-0.12 if _leads else -0.42), "매니폴드 — %s" % vv.split(" (")[0],
+              size=8.5, color=DS.C.INK, w=1.6, bold=True)
+        # 구역 이름 — 각 관이 확대 칸을 나가는 쪽 끝 근처(겹치지 않게 위·아래로 벌린다)
+        ends.sort(key=lambda e: e[1][1])
+        for k, (z, q) in enumerate(ends):
+            qx, qy = ifr.xy(*q)
+            nm = z if z.endswith("구역") else z + "구역"
+            label(s, Emu(qx).inches + (0.05 if sx > 0 else -1.25), Emu(qy).inches + (-0.27 if k == 0 else 0.06),
+                  "%s 주배관 (%s)" % (nm, self.zone_cname.get(z, "")), size=8.5, color=DS.C.INK, w=1.3, bold=True)
+        if g["lines"]:
+            q = g["lines"][0][0] if g["dot"] is None else g["dot"]
+            qx, qy = ifr.xy(q[0], min(max(q[1], box[1]), box[3]))
+            label(s, min(Emu(qx).inches - 0.50, bx + bw - 1.20), Emu(qy).inches + 0.09, "인입관 (초록)", size=8.5,
+                  color=FEED, w=1.1, bold=True)
+        # 큰 지도에 확대 범위 표시 + 잇는 선
+        rx0, ry0 = fr.xy(box[0], box[1])
+        rx1, ry1 = fr.xy(box[2], box[3])
+        rr = s.shapes.add_shape(MSO_SHAPE.RECTANGLE, rx0, ry0, rx1 - rx0, ry1 - ry0)
+        rr.fill.background()
+        rr.line.color.rgb = DS.C.WHITE
+        rr.line.width = Pt(1.5)
+        rr.line.dash_style = MSO_LINE_DASH_STYLE.DASH
+        rr.shadow.inherit = False
+        if bx >= Emu(rx1).inches:                          # 확대 칸이 지도 오른쪽(본문 아래) — 오른쪽 변끼리 잇는다
+            cn = s.shapes.add_connector(1, rx1, Emu((ry0 + ry1) // 2), Inches(bx), Inches(by + bh / 2))
+        else:
+            cn = s.shapes.add_connector(1, rx0, ry0, Inches(bx + bw), Inches(by + bh))
+        cn.line.color.rgb = DS.C.WHITE
+        cn.line.width = Pt(1.0)
+        cn.line.dash_style = MSO_LINE_DASH_STYLE.DASH
+        return True
 
     # ── 지면 ──
     def build(self) -> str:
@@ -999,7 +1245,7 @@ class Renderer:
             tx.get("wide_note", ("회색 점선 = 기설 매설 배관 %.0f m (농가)" % self.water["buried_len_m"])
                    if self.water.get("buried") else SC.get("buried", "매설·기설 배관 — 입력 없음 [현장 확인]")),
             "초록 점 = %s" % self.water.get("start_kind", SC.get("start_kind", "급수 시작점")),
-        ] + (["초록 선 = 인입관 · P = 압력계 세트"] if _fg["lines"] else []), title_color=ov.DIM)
+        ] + (["초록 선 = 인입관" + (" · P = 압력계 세트" if self._has_gauge() else "")] if _fg["lines"] else []), title_color=ov.DIM)
 
         # 05-a 현장 사진(당사 현장답사 · V116) — 실제 파일만. 자리가 있으면 대상지 지도에 같은 번호를 단다.
         self._photo_pages(prs, P["주배관"], s, fr)
@@ -1027,7 +1273,8 @@ class Renderer:
         # 06 주배관 연결
         s = P["주배관"]
         clear_slide(s)
-        fr = self.map.place(s, meta["map"]["crop_m"], "주배관")
+        # [2026-10-07 대표 교정] 지시선 기둥이 오른쪽 본문과 겹치지 않게 지도 폭을 줄인다(지시선 칸 확보)
+        fr = self.map.place(s, meta["map"]["crop_m"], "주배관", max_w=CAP_X - 0.9 - 0.80)
         self.draw_field(s, fr)
         self.draw_buried(s, fr)
         self.draw_main(s, fr, gauge=True)
@@ -1045,10 +1292,15 @@ class Renderer:
         on_map = len(self.valves) > 3
         for v in ([] if on_map else self.valves):
             marks.append((tuple(v["pt"]), "V", "구역 밸브 %s" % v["names"]))
+        if getattr(self, "bend3_pt", None):
+            marks.append((tuple(self.bend3_pt), "③", "밭 시작 꺾임"))
         if len(marks) > 10:          # 너무 많으면 말단·롤 이음 지시선은 빼고 캡션 수치로만 둔다(겹침 방지)
             marks = [m for m in marks if m[1] not in ("b", "c")]
             self.log.append("주배관 면: 지시선 과다 — 말단·롤 이음 표지는 캡션 수치로만")
-        place_leaders(s, fr, marks)
+        place_leaders(s, fr, marks, names=False)            # 기호 뜻은 오른쪽 본문에 — 좁은 칸에 이름을 겹쳐 쓰지 않는다
+        # [2026-10-07 대표 교정] 인입관에서 구역이 갈리는 자리를 확대 — 위성 축척에서는 두 구역 관이 겹쳐 안 보였다
+        _L, _T, _W, _H = fr.rect
+        _inset = self._manifold_inset(s, fr, (_L + 0.10, _T + 0.10, min(3.6, _W * 0.52), min(2.05, _H * 0.46)))
         if on_map:
             for v in self.valves:
                 vx, vy = fr.xy(*v["pt"])
@@ -1060,7 +1312,7 @@ class Renderer:
         if not cap:
             cap = ["a  %s" % self.water.get("start_kind", "급수 시작점")]
             if _fd["lines"]:
-                cap.append("초록 선 = 인입관 · P = 압력계 세트" + (" · 급수 지점 표시만 띄움" if _fd["displaced"] else ""))
+                cap.append("초록 선 = 인입관" + (" · P = 압력계 세트" if self._has_gauge() else "") + (" · 급수 지점 표시만 띄움" if _fd["displaced"] else ""))
             _zl = [(z["zone"], sum(r["len_m"] for r in self.design["mainline"]["routes"] if r["name"] in z["routes"]), z["n_heads"])
                    for z in S["zones"]]
             if len(_zl) <= 4:
@@ -1085,6 +1337,10 @@ class Renderer:
                 cap.append("주배관 유속 %.2f m/s(권장 2.0 초과) — 급수·정지는 밸브를 천천히(수격 방지)" % v)
             if self.valves:
                 cap.append("V = 구역 밸브 — 번호는 뒤의 「구역별 운전·확인표」와 같습니다")
+            if getattr(self, "bend3_pt", None):
+                cap.append("③ = 밭 시작 꺾임 — 변형엘보로 꺾어 주배관에 잇습니다 · 밸브 없음(「물 공급 계통도」 ③)")
+            if S.get("n_manifold_tees"):
+                cap.append("인입관 끝 매니폴드에서 1구역·2구역으로 갈립니다(왼쪽 위 확대) — 부속은 「물 공급 계통도」 ③")
         # [V114 · F01] 관경은 엔진이 확정한 호칭(summary.main_mm = BOM 과 같은 출처)
         caption(s, CAP_X, CAP_Y, CAP_W, "주배관 %d mm · %d줄 · %d m" % (S.get("main_mm", 50), n_line, S["main_total_m"]), cap)
 
@@ -1167,14 +1423,27 @@ class Renderer:
                          "WF 4-1 %d · WF 4-2 %d · 밴드 %d" % (S["n_joints"], S["n_joints"], 4 * S["n_joints"])])
         rows.append(["c  말단 마감", S["sets"]["end50"], str(S["n_ends"]), "E호스밸브 1 + 호스밴드 2",
                      "E호스밸브 %d · 밴드 %d" % (S["n_ends"], 2 * S["n_ends"])])
+        if S.get("n_manifold_tees"):                    # [2026-10-07] 분배점 T = 매니폴드(계통도 ③) — T분기 세트가 아니다
+            _mb = sum(int(v) for v in (self.site.get("manifold_bands") or {}).values())
+            rows.append(["매니폴드", "「물 공급 계통도」 ③", str(S["n_manifold_tees"]),
+                         "CCCT 中 1 → 구역 밸브(E호스밸브) 직결 · 2구역은 변형 L보 경유",
+                         "CCCT %d%s" % (S["n_manifold_tees"], (" · 밴드 %d" % _mb) if _mb else "")])
         if S["n_tees"]:
             rows.append(["d  T분기", S["sets"]["tee50"], str(S["n_tees"]), _tee_row,
                          "CCCT %d · WF 4-2 %d · 밴드 %d" % (S["n_tees"], 2 * S["n_tees"], 4 * S["n_tees"])])
         rows.append(["가지관 분기 · 말단", "%s / %s" % (S["sets"]["branch25"], S["sets"]["end25"]), str(S["n_lats"]),
                      "루퍼젯 H25 1 + 지관 밸브 1 + 25 mm 마감 1 (열마다)",
                      "H25 %d · 밸브 %d · 마감 %d" % (S["n_lats"], S["n_lats"], S["n_lats"])])
+        _fa = self.design.get("fountain") or {}
+        if _fa.get("lines"):                                  # [2026-10-08] 분수 라인 — 주배관에서 H25 로 딴다
+            _n = len(_fa["lines"])
+            rows.append(["분수 라인 분기 · 말단", "「분수호스 연결」 면", str(_n),
+                         "루퍼젯 H25 → 분수숫싱글밸브 → 분수호스 → 회전마감꽂이 (줄마다)",
+                         "H25 %d · 밸브 %d · 마감꽂이 %d · 호스 %s롤" % (_n, _n, _n, "·".join(str(v) for v in _fa["rolls"].values()))])
         self._table(s, DS.G.MARGIN_L, y_tab + 0.32, [1.55, 2.05, 0.7, 4.3, 3.5], rows, head_h=0.26, row_h=0.22, size=9.5)
 
+        if _fa.get("lines"):
+            self._fountain_page(prs, P["가지관"], _fa)
         # 08 부속 설치 영상 QR — 대표 지시 2026-09-04 (연결부 상세 바로 뒤)
         self.video_page(prs, P["가지관"], [b["code"] for b in S["bom"]])
 
@@ -1186,6 +1455,12 @@ class Renderer:
         self.draw_main(s, fr)
         self.draw_lats(s, fr)
         self._dims(s, fr, heads=False)
+        # [2026-10-07 대표 교정] 경계 따라 잇는 열 — **어느 구역 주배관에서 따는지** 탭 자리를 찍고, 본문 아래에 확대도
+        _leads = [l for l in self.lats if l.get("lead_m") and l.get("tap")]
+        for l in _leads:
+            head_dot(s, fr, l["tap"][0], l["tap"][1], r_in=0.06, color=ov.INK)
+        if _leads:
+            self._manifold_inset(s, fr, (CAP_X, 5.22, DS.SLIDE_W - CAP_X - 0.45, 1.60), lead=True)
         _LL = sorted(l["len_m"] for l in self.lats)
         _LN = sorted(l["n_heads"] for l in self.lats)
         lat_cap = ["두둑(재배 열)과 평행 · 열 간격 %s m (직각)" % S["lat_gap"],
@@ -1194,10 +1469,19 @@ class Renderer:
                    "열마다 밸브 1개 — 부분 관수·수리 시 개별 차단 · 분기 세트 %s" % S["sets"]["branch25"],
                    "한 열 최대 %d두 (25 mm 한계 7두)" % S["lat_max_heads"],
                    "말단 %s 마감 %d개소" % (S["sets"]["end25"], S["n_lats"])]
+        for l in _leads:
+            _z = str(l.get("zone"))
+            lat_cap.append("동쪽 끝 열 — %s 주배관(구역 밸브 뒤)에서 H25로 따서 25 mm를 그 열까지 곧장 %.0f m 올려 잇습니다"
+                           % (_z if _z.endswith("구역") else _z + "구역", l["lead_m"]))
         if S["curved_n"]:
             lat_cap.append("사선 분기 %d열 — 주배관에서 직각으로 뺀 뒤 둥글게 돌립니다(분기 부속 H25 목 보호 · 직각 이탈 최대 %.0f°)" % (S["curved_n"], S["dev_max"]))
         lat_cap.append("흰 치수선 = 블록마다 한 줄 — 열 사이 간격과 **밭 경계까지의 이격**을 모두 적었습니다"
                        .replace("**", ""))
+        _fa = self.design.get("fountain") or {}
+        if _fa.get("lines"):                              # [2026-10-08 · 정창주 남해 765] 분수 라인 — 수량만 · 운전 조건
+            lat_cap.append("파랑 점선 = 분수호스 %d줄 · %.0f m — 송수호스에 루퍼젯 H25 → 분수숫싱글밸브 → 분수호스 → 끝 회전마감꽂이"
+                           % (len(_fa["lines"]), _fa["total_m"]))
+            lat_cap += _fa["operating"][1:]
         caption(s, CAP_X, CAP_Y, CAP_W, "가지관 25 mm · %d열 · %d m" % (S["n_lats"], S["lat_total_m"]), lat_cap)
 
         # 11 스프링클러 연결
@@ -1239,7 +1523,7 @@ class Renderer:
         caption(s, 9.1, 6.30, 4.0, "본 설계 살수 원 (R 반경 · Ø 지름)",
                 ["바깥 R %s m · Ø %s m — 말단 %.1f bar" % (RD["r_out"], RD["d_out"], SP["p_bar"]),
                  "안쪽 R %s m · Ø %s m — 귀환 살수" % (RD["r_in"], RD["d_in"])]
-                + (["필요 공급조건은 급수 부록 참조 · 실제 말단압은 현장 확인"] if S.get("supply") else
+                + (["공급조건 = 급수 부록 · 말단압은 현장 확인"] if S.get("supply") else
                    (["말단 압력 %s bar — 현장 압력계로 확인" % " · ".join("%.2f" % h["p_end"] for h in S["hydro"])] if S["hydro"] else [])),
                 title_size=12, size=10, title_color=GRN)
 
@@ -1325,6 +1609,10 @@ class Renderer:
                     sh._element.getparent().remove(sh._element)   # 안내 자체를 뺀다(마스터 원문은 무수정)
             elif t.strip() == "※ 영세율 적용 금액" and not vat0:
                 set_paragraphs(sh, [VAT_PLAIN])
+        # [2026-10-08 대표] 표 「금액」 열 = 공급가 + 부가세 — 제목 줄 오른쪽에 뜻과 합을 적는다(합계 칸은 공급가 그대로)
+        _vt = sum(self._vat_amount(b) for b in S["bom"] if b.get("price") is not None)
+        label(s, 6.85, 0.62, "표의 금액 = 공급가 + 부가세%s · 합 %s원" % (" 0(영세율)" if vat0 else "", fmt_n(_vt)),
+              size=10.5, color=DS.C.INK500, w=5.9, bold=False, align=PP_ALIGN.RIGHT)
         tot = grand or 0
         if vat0 and tot < VAT_ZERO_MIN_TOTAL:
             self.log.append("영세율 안내 ON인데 합계 %s원 < 기준 %s원 — 대표 판단 확인 요"
@@ -1410,6 +1698,12 @@ class Renderer:
         for i, old, new in FIXED_TEXT_FIX:
             if i < len(sl) and replace_text(sl[i], old, new):
                 self.log.append("고정면%d 교정: 「%s」" % (i + 1, old[:18]))
+        # [2026-10-07] 고정면2 오른쪽 열 본문(x 9.44 in) — 3.12 in 폭에서 「루퍼젯으로 유연한 관수 배치」가 두 줄로 접혀
+        #    상자가 위로 넘쳐 제목(「지형 맞춤형 배관·살수 배치」)을 덮었다. 지면 오른쪽 여백 안에서 폭만 넓힌다.
+        if 1 < len(sl):
+            for sh in sl[1].shapes:
+                if sh.has_text_frame and abs(Emu(sh.left or 0).inches - 9.44) < 0.05 and Emu(sh.width or 0).inches < 3.5:
+                    sh.width = Inches(min(3.62, DS.SLIDE_W - 0.25 - Emu(sh.left).inches))
         for i, t in FIXED_DROP:
             for sh in list(sl[i].shapes) if i < len(sl) else []:
                 if sh.has_text_frame and sh.text_frame.text.strip() == t:
@@ -1497,7 +1791,9 @@ class Renderer:
             ("대상지", "%s · %s ㎡(약 %s평) · 밭 %d개%s" % (S["name"], fmt(S["area_m2"]), fmt(S["area_py"]),
                                                  len(self.polys), (" · " + "·".join(crops)) if crops else "")),
             ("목적", "노지 스프링클러 관수 — 427B 헤드 %d두 · %s" % (
-                S["n_heads"], ("%d구역 순차 운전" % len(S["zones"])) if len(S["zones"]) > 1 else "한 번에 전체 운전")),
+                S["n_heads"], ("%d구역 순차 운전" % len(S["zones"])) if len(S["zones"]) > 1 else "한 번에 전체 운전")
+                + ((" + 분수호스 %d줄 %.0f m(따로 운전)" % (len(self.design["fountain"]["lines"]), self.design["fountain"]["total_m"]))
+                   if (self.design.get("fountain") or {}).get("lines") else "")),   # [2026-10-08] 분수 라인
             ("제안 범위", SC.get("start_line", "[확인 필요]")),
             ("기설·매설", SC.get("buried", "[현장 확인]")),
             ("여과기·계측", SC.get("filter", "[확인 필요]")),
@@ -1554,7 +1850,8 @@ class Renderer:
             return None
         s = new_slide_before(prs, anchor)
         clear_slide(s, keep_top_in=0.0)
-        DS.title(s, "구역별 운전·확인표", "한 번에 한 구역만 엽니다 — 밸브 번호는 「주배관 연결」 지도의 V 번호와 같습니다")
+        DS.title(s, "구역별 운전·확인표", "한 구역 — 관정 쪽 ① E호스밸브로 열고 닫습니다" if self.no_zone_valve
+                 else "한 번에 한 구역만 엽니다 — 밸브 번호는 「주배관 연결」 지도의 V 번호와 같습니다")
         sup = {str(z.get("zone")): z for z in (S.get("supply") or {}).get("zones") or []}
         from .supply_docs import STATUS
         rows = [["구역", "밸브", "열 것 / 닫을 것", "두수 · 열", "필요 유량", "필요 압력(양정)", "판정 · 기준"]]
@@ -1564,13 +1861,15 @@ class Renderer:
             v = v if (v and v.get("pt")) else None
             others = [self.valve_of[str(o["zone"])]["id"] for o in zs
                       if str(o["zone"]) != zk and (self.valve_of.get(str(o["zone"])) or {}).get("pt")]
-            if v:
+            if self.no_zone_valve:
+                how = "관정 쪽 ① 첫 연결부 E호스밸브로 열고 닫습니다(구역 밸브 없음)"
+            elif v:
                 how = "%s 열기%s" % (v["id"], (" / %s 닫기" % "·".join(others)) if others else "")
             else:
                 how = "밸브 위치 [미확정] — 운전 순서를 정하지 않았습니다"
             d = sup.get(zk) or {}
             q, p, hm = d.get("required_flow_lpm"), d.get("required_pressure_bar"), d.get("required_head_m")
-            rows.append([zk, v["id"] if v else "[미확정]", how, "%d두 · %d열" % (z["n_heads"], len(z["lat_ids"])),
+            rows.append([zk, "① E호스밸브" if self.no_zone_valve else (v["id"] if v else "[미확정]"), how, "%d두 · %d열" % (z["n_heads"], len(z["lat_ids"])),
                          ("%.0f L/분" % q) if q is not None else "[미확정]",
                          ("%.2f bar (%.1f m)" % (p, hm)) if p is not None else "[미확정]",
                          ("급수 불가 — 관이 급수원에 닿지 않음" if (zk in set(S.get("dead_zones") or []) or not z["n_heads"])
@@ -1877,8 +2176,8 @@ class Renderer:
             return rh
         q = "%s %s" % (r.get("qty", ""), r.get("unit", ""))           # 수량 칸(0.62 in)은 글자 폭 약 4.2 em(실측: 「17 미확정」 4.4 em 이 접힘) — 「17 미확정」은 두 줄로 접힌다
         q_em = sum(1.0 if ord(c) > 0x2000 else (0.30 if c == " " else 0.55) for c in q)
-        lines = max(-(-len(str(r["name"])) // 17), -(-len(str(r["spec"])) // 9), -(-len(str(r["note"])) // 15),
-                    int(-(-q_em // 4.2)), 1)
+        lines = max(-(-len(str(r["name"])) // 15), -(-len(str(r["spec"])) // 8), -(-len(str(r["note"])) // 12),
+                    int(-(-q_em // 3.7)), 1)
         return max(rmin, 0.10 + 0.105 * lines)
 
     @staticmethod
@@ -1981,6 +2280,11 @@ class Renderer:
         tcPr.append(parse_xml('<a:blipFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
                               'xmlns:r="%s"><a:blip r:embed="%s"/><a:stretch><a:fillRect/></a:stretch></a:blipFill>' % (R_NS, rid)))
 
+    def _vat_amount(self, row):
+        vat0 = bool(self.meta.get("quote", {}).get("vat_zero"))
+        sup = int(row["qty"]) * int(row["price"])
+        return sup if vat0 else sup + int(round(sup * 0.1))
+
     def _bom_tables(self, slide, bom, pair=None):
         PANEL = RGBColor(0xF4, 0xF4, 0xF0)
         GROUP_BG = RGBColor(0xFB, 0xF4, 0xC6)
@@ -1990,7 +2294,7 @@ class Renderer:
             if not part:
                 continue
             heights = [0.24] + [self._bom_row_h(r) for r in part]
-            gf = slide.shapes.add_table(len(part) + 1, 6, Inches(0.6 + pi * 6.25), Inches(1.1),
+            gf = slide.shapes.add_table(len(part) + 1, 7, Inches(0.6 + pi * 6.25), Inches(1.1),
                                         Inches(6.05), Inches(sum(heights)))
             t = gf.table
             t.first_row = False
@@ -2012,7 +2316,7 @@ class Renderer:
                 r.font.bold = bold
                 r.font.color.rgb = color
                 p._p.get_or_add_endParaRPr().set("sz", str(int(size * 100)))   # 빈 칸(규격 없음 등)이 기본 18 pt 로 행을 키우지 않게
-            for c, tt in enumerate(["사진", "품목", "규격", "수량", "단가", "비고"]):
+            for c, tt in enumerate(["사진", "품목", "규격", "수량", "단가", "금액", "비고"]):
                 cell = t.cell(0, c)
                 cell.fill.solid()
                 cell.fill.fore_color.rgb = DS.C.INK
@@ -2021,12 +2325,12 @@ class Renderer:
                 rh = heights[ri]
                 if "_group" in row:
                     cell = t.cell(ri, 0)
-                    cell.merge(t.cell(ri, 5))
+                    cell.merge(t.cell(ri, 6))
                     cell.fill.solid()
                     cell.fill.fore_color.rgb = GROUP_BG
                     put(cell, row["_group"], size=8, bold=True)
                     continue
-                for c in range(6):
+                for c in range(7):
                     cell = t.cell(ri, c)
                     cell.fill.solid()
                     cell.fill.fore_color.rgb = DS.C.WHITE if ri % 2 else PANEL
@@ -2050,7 +2354,10 @@ class Renderer:
                 # [V114 · F08] 단가 없음 = 「미확정」(0원으로 보이지 않게)
                 put(t.cell(ri, 4), format(row["price"], ",") if row["price"] is not None else "미확정",
                     size=8, align=PP_ALIGN.RIGHT)
-                put(t.cell(ri, 5), row["note"], size=7, color=DS.C.INK500, wrap=True)
+                # [2026-10-08 대표] 금액 = 공급가 + 부가세(영세율이면 부가세 0)
+                put(t.cell(ri, 5), format(self._vat_amount(row), ",") if row["price"] is not None else "미확정",
+                    size=8, align=PP_ALIGN.RIGHT)
+                put(t.cell(ri, 6), row["note"], size=7, color=DS.C.INK500, wrap=True)
             for r_, hh in zip(t.rows, heights):
                 r_.height = Inches(hh)
 

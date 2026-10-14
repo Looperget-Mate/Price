@@ -157,6 +157,8 @@ def validate(site: Dict) -> Dict:
     for w in site.get("water_items", []):
         if not w.get("code") or int(w.get("qty", 0)) <= 0:
             errs.append(f"water_items 항목 불량: {w}")
+    from . import fountain as _fountain           # [2026-10-08] 분수 라인(스프링클러에 덧붙임 · 수량만)
+    errs += _fountain.validate(site)
     if errs:
         raise ValueError("site 입력 오류: " + " / ".join(errs))
     # zones None = 대표가 적지 않았다 → 분배점에서 나가는 주배관의 구역 수로 엔진이 센다(규칙 21 · #79).

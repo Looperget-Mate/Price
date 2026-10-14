@@ -323,3 +323,95 @@ def draw_bridge(draw, handle_features, role="main", drafts=None, head_features=N
 {% endmacro %}
 """.replace("__PAYLOAD__", payload))
     return bridge
+
+
+# ── [2026-10-07 봉소리 97 · 대표] 좌표를 숫자로 그리기 — 사람이 화면에 **같은 값**을 넣어 같은 산출물을 낸다.
+#    클릭으로는 0.01 m 까지 같은 자리를 찍을 수 없다. 숫자 도형은 지도 그림(drafts)과 **같은 형식**으로 만들어
+#    「✅ 그린 것을 목록에 넣기」와 같은 길을 탄다 — 목록·표·엔진 쪽 규칙은 그대로다.
+COORD_KINDS = {"밭": "Polygon", "급수원": "Point", "주배관": "main", "인입관": "feeder"}
+HEAD_KINDS = {"헤드 빼기": "drop_heads", "헤드 더하기": "add_heads"}
+
+
+def _xy_list(body):
+    out = []
+    for tok in body.replace(";", " ").replace("(", " ").replace(")", " ").replace("[", " ").replace("]", " ").split():
+        tok = tok.strip().strip(",")
+        if not tok:
+            continue
+        a, sep, b = tok.partition(",")
+        if not sep:
+            raise ValueError("「%s」 — 점 하나는 「x,y」(쉼표 · 띄어쓰기 없이)로 적습니다" % tok)
+        out.append([round(float(a), 2), round(float(b), 2)])
+    return out
+
+
+def parse_coord_text(text):
+    """줄마다 「종류 [이름]: x,y x,y …」(m · 원점 기준 · x 동쪽 · y 북쪽).
+
+    종류 = 밭 · 급수원 · 주배관 · 인입관 · 헤드 빼기 · 헤드 더하기. 빈 줄과 # 로 시작하는 줄은 건너뛴다.
+    돌려주는 것 = (도형 목록[(종류, 점들)], 헤드 {"drop_heads": [...], "add_heads": [...]}).
+    """
+    shapes, heads = [], {}
+    for n, line in enumerate((text or "").splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        head, sep, body = line.partition(":")
+        if not sep:
+            raise ValueError("%d번째 줄 — 「종류: x,y x,y」 형식이 아닙니다(쌍점 : 이 없음)" % n)
+        head = " ".join(head.split())
+        hk = next((k for k in HEAD_KINDS if head.startswith(k)), None)
+        kind = None if hk else next((k for k in COORD_KINDS if head.startswith(k)), None)
+        if not (hk or kind):
+            raise ValueError("%d번째 줄 — 종류 「%s」를 모릅니다(밭·급수원·주배관·인입관·헤드 빼기·헤드 더하기)" % (n, head))
+        try:
+            pts = _xy_list(body)
+        except ValueError as exc:
+            raise ValueError("%d번째 줄 — %s" % (n, exc))
+        if hk:
+            heads.setdefault(HEAD_KINDS[hk], []).extend(pts)
+            continue
+        need = {"밭": 3, "급수원": 1, "주배관": 2, "인입관": 2}[kind]
+        if len(pts) < need or (kind == "급수원" and len(pts) != 1):
+            raise ValueError("%d번째 줄 — %s 은(는) 점 %s개가 필요합니다(지금 %d개)"
+                             % (n, kind, "1" if kind == "급수원" else "%d개 이상" % need, len(pts)))
+        shapes.append((kind, pts))
+    return shapes, heads
+
+
+def coord_features(shapes, origin, stamp="num"):
+    """숫자 도형 → 지도 그림(GeoJSON Feature) — 지도에서 그린 것과 같은 모양(역할 · draw_id)."""
+    feats = []
+    for i, (kind, pts) in enumerate(shapes):
+        ll = mapsrc.from_local_m(pts, origin)
+        if kind == "밭":
+            geom = {"type": "Polygon", "coordinates": [ll + [ll[0]]]}
+            prop = {}
+        elif kind == "급수원":
+            geom = {"type": "Point", "coordinates": ll[0]}
+            prop = {}
+        else:
+            geom = {"type": "LineString", "coordinates": ll}
+            prop = {"role": COORD_KINDS[kind]}
+        prop["draw_id"] = "%s-%d" % (stamp, i + 1)
+        feats.append({"type": "Feature", "geometry": geom, "properties": prop})
+    return feats
+
+
+def coord_text(pins):
+    """지금 목록(pins)을 같은 형식의 글로 — 적어 둔 값과 화면 값이 같은지 눈으로 대조한다."""
+    fmt = lambda pts: " ".join("%g,%g" % (round(q[0], 2), round(q[1], 2)) for q in pts)
+    lines = []
+    for b in (pins or {}).get("blocks") or []:
+        lines.append("밭 %s: %s" % (b.get("name") or "", fmt(b.get("polygon_raw") or b.get("polygon") or [])))
+    for s in (pins or {}).get("sources") or []:
+        lines.append("급수원 %s: %s" % (s.get("name") or "", fmt([s["pt"]])))
+    for r in (pins or {}).get("routes") or []:
+        kind = "인입관" if r.get("role") == "feeder" else "주배관"
+        lines.append("%s %s: %s" % (kind, r.get("name") or "", fmt(r.get("pts") or [])))
+    for b in (pins or {}).get("blocks") or []:
+        pol = b.get("policy") or {}
+        for key, label in (("drop_heads", "헤드 빼기"), ("add_heads", "헤드 더하기")):
+            if pol.get(key):
+                lines.append("%s: %s" % (label, fmt(pol[key])))
+    return "\n".join(lines)

@@ -234,7 +234,10 @@ def to_site(answers: Dict, drawn: Optional[Dict] = None, name: Optional[str] = N
         site["head_kit"] = d["head_kit"]
     # V110: structured inputs survive site/job round trips, without inventing defaults.
     import copy
-    for key in ("chains", "supply", "row_kits", "tool_items", "p_end", "connection_compatibility", "link_intent", "photos", "connection_examples", "contact"):
+    # [2026-10-07] manifold_tee · head_spare · manifold_bands — 봉소리 97 대표 교정(분배점 T = 매니폴드 · 헤드 여분 개수 · 구역 밸브 밴드)
+    for key in ("chains", "supply", "row_kits", "tool_items", "p_end", "connection_compatibility", "link_intent", "photos", "connection_examples", "contact",
+                "manifold_tee", "head_spare", "manifold_bands", "junctions",   # [2026-10-08] junctions = 연결부 묶음 선택(결정 #102)
+                "fountain_lines"):   # [2026-10-08] 분수 라인(정창주 남해 765 · A안)
         if key in d:
             site[key] = copy.deepcopy(d[key])
     c = check(answers, waived)

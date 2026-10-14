@@ -110,7 +110,12 @@ def flip_y(site: Dict, design: Dict):
         if r.get("bends"):
             r["bends"] = [[_fy(q), d] for q, d in r["bends"]]
     m["tee_pts"] = [[_fy(q), tag] for q, tag in (m.get("tee_pts") or [])]
+    m["manifold_tee_pts"] = [[_fy(q), tag] for q, tag in (m.get("manifold_tee_pts") or [])]   # [2026-10-07] 매니폴드 T
     m["end_pts"] = _fpts(m.get("end_pts"))
+    for f in site.get("fountain_lines") or []:          # [2026-10-08] 분수 라인(입력 · 결과 둘 다)
+        f["pts"] = _fpts(f.get("pts"))
+    for f in (design.get("fountain") or {}).get("lines") or []:
+        f["pts"] = _fpts(f.get("pts"))
     return site, design
 
 

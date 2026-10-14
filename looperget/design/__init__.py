@@ -96,6 +96,19 @@ def design(site: Dict, price_db: Optional[Dict] = None, tier: str = "소비자�
                         "**나사·조임식 파이프면 엘보**입니다(규칙 2 단서 · 규칙 7). 부속은 [미확정]입니다."
                         % (len(_elb), " · ".join("%s(%.0f°)" % ("·".join(j["routes"]), j["dev_deg"] or 0)
                                                  for j in _elb)))
+    # [2026-10-07 봉소리 97 · 대표 교정] 분배점(구역 밸브 자리)의 T 는 **매니폴드 T**다 — CCCT 출구에 구역 밸브가
+    #    바로 물린다(계통도 ③). `site["manifold_tee"]` 면 그 T 는 T분기 세트(나가는 쪽 WF 4-2 ×2 · 밴드 4)로 세지 않고
+    #    CCCT 1개만 매니폴드 품목으로 센다. 「d T분기」 표지·카드도 그 자리에는 붙지 않는다.
+    main["manifold_tees"], main["manifold_tee_pts"] = 0, []
+    if site.get("manifold_tee"):
+        _hp = [tuple(h["pt"]) for h in main.get("headers") or [] if h.get("pt") is not None]
+        _at = [any(geom.dist(tuple(t[0]), q) <= mainline.HEADER_NEAR for q in _hp) for t in main["tee_pts"]]
+        _mt = [t for t, a in zip(main["tee_pts"], _at) if a]
+        if _mt:
+            main["manifold_tee_pts"] = _mt
+            main["manifold_tees"] = len(_mt)
+            main["tee_pts"] = [t for t, a in zip(main["tee_pts"], _at) if not a]
+            main["tees"] = max(0, int(main["tees"]) - len(_mt))
     _tr = [t for t in main["transitions"] if t["kind"] == "material"]
     if _tr:
         warnings.append("재질이 바뀌는 자리 %d 곳 — %s. **연결 부속은 [미확정]** 입니다: "
@@ -132,6 +145,11 @@ def design(site: Dict, price_db: Optional[Dict] = None, tier: str = "소비자�
         site_mm["_head_groups"] = _head_groups
 
     bom_main = _cb.main_for_bom(main, site_mm) if site.get("chains") else main
+    from . import fountain as _fountain        # [2026-10-08] 분수 라인 — 수량만 · 물 계산 없음(불변 원칙 1)
+    _fa = _fountain.analyze(site) if site.get("fountain_lines") else None
+    if _fa:
+        site_mm["_fountain"] = _fa
+        warnings += _fa["warnings"]
     bom = _bom.build(n_heads, [l["len_m"] for l in laterals], bom_main, site_mm)
     _excluded = []
     if _extra or "tool_items" in site:
@@ -164,6 +182,8 @@ def design(site: Dict, price_db: Optional[Dict] = None, tier: str = "소비자�
                 zone["status"] = "미확정"
     if _head_groups:
         answer["head_groups"] = _head_groups
+    if _fa:
+        answer["fountain"] = _fa
     answer["excluded_tools"] = _excluded
     return answer
 
